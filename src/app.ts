@@ -23,11 +23,11 @@ export type AppEnv = {
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
-  // Global middleware
   app.use(requestId());
   app.use(
     cors({
-      origin: config.corsOrigins === '*' ? '*' : config.corsOrigins.split(',').map((s) => s.trim()),
+      origin:
+        config.corsOrigins === '*' ? '*' : config.corsOrigins.split(',').map((s) => s.trim()),
       allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
       allowHeaders: ['Authorization', 'Content-Type'],
       exposeHeaders: ['X-Request-Id'],
@@ -36,15 +36,13 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.use(errorMiddleware(logger));
   app.use(authMiddleware(config.tokens));
 
-  // Routes
   app.route('/.well-known', wellknownRoutes(ctx));
   app.route('/health', healthRoutes());
   app.route('/records', recordRoutes(ctx));
   app.route('/types', typeRoutes(ctx));
-  app.route('/attachments', attachmentRoutes(ctx));
+  app.route('/attachments', attachmentRoutes(ctx, config.dbPath));
   app.route('/entity', entityRoutes(ctx));
 
-  // 404 fallback
   app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
   return app;

@@ -12,7 +12,7 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
   const ownerEntityId = stack.ownerEntityId;
 
   // Directory where the SQLite adapter stores attachment files.
-  // Mirrors the adapter's internal convention: attachments/ next to the .db file.
+  // Mirrors the adapter's convention: attachments/ next to the .db file.
   const attachmentsDir = join(dirname(dbPath), 'attachments');
 
   // ----------------------------------------------------------------
@@ -21,8 +21,7 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
   // ----------------------------------------------------------------
   app.post('/', requireAuth(), async (c) => {
     const mimeType = c.req.header('Content-Type') ?? 'application/octet-stream';
-    const arrayBuffer = await c.req.arrayBuffer();
-    const data = new Uint8Array(arrayBuffer);
+    const data = new Uint8Array(await c.req.arrayBuffer());
     const fileId = await adapter.putAttachment(data, mimeType);
     return c.json({ fileId }, 201);
   });
@@ -35,13 +34,10 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     const auth = c.get('auth');
 
     if (!auth) {
-      // Unauthenticated: allow only if the attachment is referenced by a public record.
+      // Unauthenticated: allow only if referenced by a public record.
       const accessible = await isAttachmentPublic(fileId, ctx);
       if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
     }
-    // Authenticated: valid token = authorised entity; allow.
-    // Full per-record permission checking on individual attachment access is
-    // deferred until an attachment metadata endpoint exists in the adapter.
 
     let data: Uint8Array;
     try {
@@ -50,9 +46,7 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    // Recover MIME type from the filename stored on disk
     const mimeType = detectMimeType(attachmentsDir, fileId);
-
     return c.newResponse(data, 200, {
       'Content-Type': mimeType,
       'Content-Length': String(data.byteLength),
@@ -66,13 +60,11 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     const fileId = c.req.param('fileId');
     const auth = c.get('auth')!;
 
-    // Only the owner can delete attachments directly.
-    if (auth.entityId !== ownerEntityId) {
+    if (!ownerEntityId || auth.entityId !== ownerEntityId) {
       return c.json({ error: 'Forbidden' }, 403);
     }
 
-    // Remove the DB row then the file on disk.
-    // The adapter only removes the row, so we clean up the file ourselves.
+    // Adapter removes the DB row; we clean up the file ourselves.
     await adapter.deleteAttachment(fileId);
     deleteAttachmentFile(attachmentsDir, fileId);
 
@@ -82,27 +74,18 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
   return app;
 }
 
-/**
- * Scan the attachments directory for a file matching fileId.{ext} and return
- * its MIME type based on the extension, falling back to application/octet-stream.
- * This mirrors the naming convention used by SQLiteAdapter.putAttachment().
- */
 function detectMimeType(attachmentsDir: string, fileId: string): string {
   try {
     const entries = readdirSync(attachmentsDir) as string[];
     const file = entries.find((f) => f.startsWith(fileId + '.'));
     if (!file) return 'application/octet-stream';
-    const ext = file.split('.').pop();
-    return extToMime[ext ?? ''] ?? 'application/octet-stream';
+    const ext = file.split('.').pop() ?? '';
+    return extToMime[ext] ?? 'application/octet-stream';
   } catch {
     return 'application/octet-stream';
   }
 }
 
-/**
- * Delete the attachment file from disk. The SQLiteAdapter removes the DB row
- * but does not clean up the file, so we handle it here.
- */
 function deleteAttachmentFile(attachmentsDir: string, fileId: string): void {
   try {
     const entries = readdirSync(attachmentsDir) as string[];
@@ -113,21 +96,13 @@ function deleteAttachmentFile(attachmentsDir: string, fileId: string): void {
       }
     }
   } catch {
-    // Best-effort; the row is already gone so this is non-fatal.
+    // Best-effort; row is already removed so this is non-fatal.
   }
 }
 
-/**
- * Check whether an attachment is referenced by at least one publicly readable record.
- * Used for unauthenticated attachment access.
- */
-async function isAttachmentPublic(
-  fileId: string,
-  ctx: StackContext,
-): Promise<boolean> {
+async function isAttachmentPublic(fileId: string, ctx: StackContext): Promise<boolean> {
   const { adapter, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
-  // Scan all records (personal stack; typically small)
   let cursor: string | undefined;
   do {
     const result = await adapter.queryRecords({ limit: 200, ...(cursor && { cursor }) });
