@@ -1,8 +1,8 @@
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { unlink, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { mkdirSync } from 'node:fs';
 import { SQLiteAdapter } from '@haverstack/adapter-sqlite';
 import { Stack } from '@haverstack/core';
 import pino from 'pino';
@@ -19,8 +19,14 @@ export const OTHER_ENTITY_ID = 'other-entity-id-00000002';
 
 export const logger = pino({ level: 'silent' });
 
+/**
+ * Each test gets its own isolated temp directory so the SQLiteAdapter's
+ * sibling `attachments/` folder never collides between parallel test runs.
+ */
 export function tempDbPath(): string {
-  return join(tmpdir(), `haverstack-test-${randomBytes(8).toString('hex')}.db`);
+  const dir = join(tmpdir(), `haverstack-test-${randomBytes(8).toString('hex')}`);
+  mkdirSync(dir, { recursive: true });
+  return join(dir, 'stack.db');
 }
 
 export async function createTestContext(dbPath: string): Promise<StackContext> {
@@ -64,27 +70,24 @@ export async function buildTestApp(): Promise<TestApp> {
 
   const cleanup = async () => {
     await ctx.stack.close();
-    if (existsSync(dbPath)) await unlink(dbPath);
-    const attachmentsDir = join(dirname(dbPath), 'attachments');
-    await rm(attachmentsDir, { recursive: true, force: true }).catch(() => {});
+    // Remove the whole temp directory (includes the .db file and attachments/).
+    await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
   };
 
   return { app, ctx, dbPath, cleanup };
 }
 
 export type ReqOpts = {
+  /** Adds Authorization: Bearer <token> header. */
   token?: string;
+  /** JSON-serialised as the request body with Content-Type: application/json. */
   body?: unknown;
+  /** Additional headers merged after auth/content-type. */
   headers?: Record<string, string>;
-  /** Set Content-Type to this MIME type and send body as raw string. Used for binary uploads. */
-  rawBody?: { data: string; contentType: string };
 };
 
 /**
- * Fire a request at the Hono test app and return the status code + parsed response.
- *
- * Pass `token` to add an Authorization header.
- * Pass `body` to JSON-encode and send as application/json.
+ * Fire a request at the Hono test app and return status + parsed JSON body.
  */
 export async function req(
   app: Hono<AppEnv>,
@@ -92,19 +95,17 @@ export async function req(
   path: string,
   opts: ReqOpts = {},
 ): Promise<{ status: number; data: unknown }> {
-  const headers: Record<string, string> = { ...opts.headers };
+  const headers: Record<string, string> = {};
   if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  Object.assign(headers, opts.headers);
 
-  let body: BodyInit | undefined;
-  if (opts.body !== undefined) {
-    headers['Content-Type'] = 'application/json';
-    body = JSON.stringify(opts.body);
-  } else if (opts.rawBody) {
-    headers['Content-Type'] = opts.rawBody.contentType;
-    body = opts.rawBody.data;
-  }
+  const res = await app.request(path, {
+    method,
+    headers,
+    ...(opts.body !== undefined && { body: JSON.stringify(opts.body) }),
+  });
 
-  const res = await app.request(path, { method, headers, body });
   const text = await res.text();
   let data: unknown;
   try {
