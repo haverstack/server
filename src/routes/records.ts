@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { AppEnv } from '../app.js';
+import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkAccess } from '../lib/access.js';
@@ -79,7 +79,7 @@ function parseQueryBody(raw: unknown): StackQuery {
   return query;
 }
 
-/** Build a StackQuery from GET /records URL params. */
+/** Build a StackQuery from GET /records URL search params. */
 function parseQueryParams(url: URL): StackQuery {
   const filter: RecordFilter = {};
 
@@ -103,8 +103,8 @@ function parseQueryParams(url: URL): StackQuery {
 
   const relatedTo = getOne(url, 'relatedTo');
   if (relatedTo) {
-    const relatedLabel = getOne(url, 'relatedLabel');
-    filter.relatedTo = { recordId: relatedTo, ...(relatedLabel && { label: relatedLabel }) };
+    const label = getOne(url, 'relatedLabel');
+    filter.relatedTo = { recordId: relatedTo, ...(label && { label }) };
   }
 
   const search = getOne(url, 'search');
@@ -155,13 +155,10 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   const { adapter, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
 
-  // ------------------------------------------------------------------
-  // POST /records/query — full query including content field filters
-  // Must be registered before /:id to avoid param capture
-  // ------------------------------------------------------------------
+  // POST /records/query — full query with content-field filters
+  // Registered before /:id patterns to avoid param capture on the literal "query" segment.
   app.post('/query', requireAuth(), async (c) => {
-    const body = await c.req.json();
-    const query = parseQueryBody(body);
+    const query = parseQueryBody(await c.req.json());
     const result = await adapter.queryRecords(query);
     return c.json({
       records: result.records.map(serializeRecord),
@@ -170,12 +167,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     });
   });
 
-  // ------------------------------------------------------------------
-  // GET /records — query by native fields via query params
-  // ------------------------------------------------------------------
+  // GET /records — query by native fields via URL params
   app.get('/', requireAuth(), async (c) => {
-    const url = new URL(c.req.url);
-    const query = parseQueryParams(url);
+    const query = parseQueryParams(new URL(c.req.url));
     const result = await adapter.queryRecords(query);
     return c.json({
       records: result.records.map(serializeRecord),
@@ -184,12 +178,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     });
   });
 
-  // ------------------------------------------------------------------
-  // POST /records — create a record
-  // ------------------------------------------------------------------
+  // POST /records — create
   app.post('/', requireAuth(), async (c) => {
     const body = await c.req.json<Record<string, unknown>>();
-
     if (!body.id || typeof body.id !== 'string') return c.json({ error: 'id is required' }, 400);
     if (!body.typeId || typeof body.typeId !== 'string')
       return c.json({ error: 'typeId is required' }, 400);
@@ -215,36 +206,29 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeRecord(created), 201);
   });
 
-  // ------------------------------------------------------------------
-  // GET /records/:id — get one record
-  // ------------------------------------------------------------------
+  // GET /records/:id
   app.get('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const record = await adapter.getRecord(id);
     if (!record) return c.json({ error: 'Record not found' }, 404);
-
     const canRead = await checkAccess(record, auth.entityId, ownerEntityId, 'read', adapter);
     if (!canRead) return c.json({ error: 'Forbidden' }, 403);
-
     return c.json(serializeRecord(record));
   });
 
-  // ------------------------------------------------------------------
-  // PATCH /records/:id — update record (partial merge)
-  // ------------------------------------------------------------------
+  // PATCH /records/:id
   app.patch('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const existing = await adapter.getRecord(id);
     if (!existing) return c.json({ error: 'Record not found' }, 404);
-
     const canWrite = await checkAccess(existing, auth.entityId, ownerEntityId, 'write', adapter);
     if (!canWrite) return c.json({ error: 'Forbidden' }, 403);
 
     const body = await c.req.json<Record<string, unknown>>();
 
-    // Snapshot current state before overwriting (server-side versioning)
+    // Snapshot current state before writing (server-side version history)
     await adapter.saveVersion(id, {
       version: existing.version,
       content: existing.content,
@@ -262,18 +246,14 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeRecord(updated));
   });
 
-  // ------------------------------------------------------------------
-  // DELETE /records/:id — soft or hard delete
-  // ------------------------------------------------------------------
+  // DELETE /records/:id  (?hard=true for permanent)
   app.delete('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const existing = await adapter.getRecord(id);
     if (!existing) return c.json({ error: 'Record not found' }, 404);
-
     const canWrite = await checkAccess(existing, auth.entityId, ownerEntityId, 'write', adapter);
     if (!canWrite) return c.json({ error: 'Forbidden' }, 403);
-
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
     await adapter.deleteRecord(id, { hard });
     return c.body(null, 204);
@@ -288,10 +268,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const record = await adapter.getRecord(id);
     if (!record) return c.json({ error: 'Record not found' }, 404);
-
     const canRead = await checkAccess(record, auth.entityId, ownerEntityId, 'read', adapter);
     if (!canRead) return c.json({ error: 'Forbidden' }, 403);
-
     return c.json({ permissions: record.permissions ?? [] });
   });
 
@@ -300,15 +278,11 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const existing = await adapter.getRecord(id);
     if (!existing) return c.json({ error: 'Record not found' }, 404);
-
     const canWrite = await checkAccess(existing, auth.entityId, ownerEntityId, 'write', adapter);
     if (!canWrite) return c.json({ error: 'Forbidden' }, 403);
-
     const body = await c.req.json<{ permissions: Permission[] }>();
-    if (!Array.isArray(body.permissions)) {
+    if (!Array.isArray(body.permissions))
       return c.json({ error: 'permissions must be an array' }, 400);
-    }
-
     await adapter.updateRecord(id, { permissions: body.permissions });
     return c.json({ permissions: body.permissions });
   });
@@ -322,18 +296,13 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const record = await adapter.getRecord(id);
     if (!record) return c.json({ error: 'Record not found' }, 404);
-
     const canRead = await checkAccess(record, auth.entityId, ownerEntityId, 'read', adapter);
     if (!canRead) return c.json({ error: 'Forbidden' }, 403);
-
     let assocs = record.associations ?? [];
-
     const kind = c.req.query('kind');
     if (kind) assocs = assocs.filter((a) => a.kind === kind);
-
     const label = c.req.query('label');
     if (label) assocs = assocs.filter((a) => a.label === label);
-
     return c.json({ associations: assocs });
   });
 
@@ -342,15 +311,10 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const existing = await adapter.getRecord(id);
     if (!existing) return c.json({ error: 'Record not found' }, 404);
-
     const canWrite = await checkAccess(existing, auth.entityId, ownerEntityId, 'write', adapter);
     if (!canWrite) return c.json({ error: 'Forbidden' }, 403);
-
     const body = await c.req.json<Association>();
-    if (!body.kind || !body.label) {
-      return c.json({ error: 'kind and label are required' }, 400);
-    }
-
+    if (!body.kind || !body.label) return c.json({ error: 'kind and label are required' }, 400);
     await adapter.associate(id, body);
     return c.body(null, 204);
   });
@@ -360,10 +324,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const existing = await adapter.getRecord(id);
     if (!existing) return c.json({ error: 'Record not found' }, 404);
-
     const canWrite = await checkAccess(existing, auth.entityId, ownerEntityId, 'write', adapter);
     if (!canWrite) return c.json({ error: 'Forbidden' }, 403);
-
     const body = await c.req.json<Association>();
     await adapter.dissociate(id, body);
     return c.body(null, 204);
@@ -378,10 +340,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const record = await adapter.getRecord(id);
     if (!record) return c.json({ error: 'Record not found' }, 404);
-
     const canRead = await checkAccess(record, auth.entityId, ownerEntityId, 'read', adapter);
     if (!canRead) return c.json({ error: 'Forbidden' }, 403);
-
     const versions = await adapter.getVersions(id);
     return c.json(versions.map(serializeVersion));
   });
@@ -389,36 +349,29 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/:id/versions/:version', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const vNum = parseInt(c.req.param('version'), 10);
+    if (isNaN(vNum)) return c.json({ error: 'Invalid version number' }, 400);
     const auth = c.get('auth')!;
     const record = await adapter.getRecord(id);
     if (!record) return c.json({ error: 'Record not found' }, 404);
-
     const canRead = await checkAccess(record, auth.entityId, ownerEntityId, 'read', adapter);
     if (!canRead) return c.json({ error: 'Forbidden' }, 403);
-
-    if (isNaN(vNum)) return c.json({ error: 'Invalid version number' }, 400);
     const version = await adapter.getVersion(id, vNum);
     if (!version) return c.json({ error: 'Version not found' }, 404);
     return c.json(serializeVersion(version));
   });
 
-  // Restore a version — creates a new version, does not rewrite history
+  // POST /records/:id/restore/:version — creates new version, does not rewrite history
   app.post('/:id/restore/:version', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const vNum = parseInt(c.req.param('version'), 10);
-    const auth = c.get('auth')!;
-
     if (isNaN(vNum)) return c.json({ error: 'Invalid version number' }, 400);
-
+    const auth = c.get('auth')!;
     const existing = await adapter.getRecord(id);
     if (!existing) return c.json({ error: 'Record not found' }, 404);
-
     const canWrite = await checkAccess(existing, auth.entityId, ownerEntityId, 'write', adapter);
     if (!canWrite) return c.json({ error: 'Forbidden' }, 403);
-
     const target = await adapter.getVersion(id, vNum);
     if (!target) return c.json({ error: 'Version not found' }, 404);
-
     // Snapshot current state before restoring
     await adapter.saveVersion(id, {
       version: existing.version,
@@ -426,13 +379,11 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
       updatedAt: existing.updatedAt,
       ...(existing.entityId && { entityId: existing.entityId }),
     });
-
     const restored = await adapter.updateRecord(id, {
       content: target.content,
       updatedAt: new Date(),
       version: existing.version + 1,
     });
-
     return c.json(serializeRecord(restored));
   });
 

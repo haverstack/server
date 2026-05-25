@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { requestId } from 'hono/request-id';
 import type { Logger } from 'pino';
 import type { StackContext } from './stack.js';
 import type { Config } from './config.js';
+import type { AppEnv } from './types.js';
 import { authMiddleware } from './middleware/auth.js';
 import { errorMiddleware } from './middleware/errors.js';
 import { wellknownRoutes } from './routes/wellknown.js';
@@ -13,17 +13,17 @@ import { typeRoutes } from './routes/types.js';
 import { attachmentRoutes } from './routes/attachments.js';
 import { entityRoutes } from './routes/entity.js';
 
-export type AppEnv = {
-  Variables: {
-    auth: { entityId: string } | null;
-    requestId: string;
-  };
-};
+export type { AppEnv };
 
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
-  app.use(requestId());
+  // Assign a unique request ID to every request for log correlation.
+  app.use(async (c, next) => {
+    c.set('requestId', crypto.randomUUID());
+    await next();
+  });
+
   app.use(
     cors({
       origin:

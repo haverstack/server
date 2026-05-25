@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { AppEnv } from '../app.js';
+import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 
 export function wellknownRoutes(ctx: StackContext): Hono<AppEnv> {

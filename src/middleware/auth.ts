@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import type { TokenConfig } from '../config.js';
-import type { AppEnv } from '../app.js';
+import type { AppEnv } from '../types.js';
 
 export function authMiddleware(tokens: TokenConfig[]): MiddlewareHandler<AppEnv> {
   const tokenMap = new Map<string, string>(tokens.map((t) => [t.token, t.entityId]));
@@ -20,9 +20,7 @@ export function authMiddleware(tokens: TokenConfig[]): MiddlewareHandler<AppEnv>
 
 export function requireAuth(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    if (!c.get('auth')) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
+    if (!c.get('auth')) return c.json({ error: 'Unauthorized' }, 401);
     await next();
   };
 }

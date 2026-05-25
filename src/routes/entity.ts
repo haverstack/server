@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { AppEnv } from '../app.js';
+import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkAccess } from '../lib/access.js';
@@ -10,7 +10,6 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
   const { adapter, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
 
-  // Get the stack owner's entity record
   app.get('/', requireAuth(), async (c) => {
     if (!ownerEntityId) return c.json({ error: 'No owner entity configured' }, 404);
     const record = await adapter.getRecord(ownerEntityId);
@@ -18,19 +17,16 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeRecord(record));
   });
 
-  // Update the entity record's content
   app.patch('/', requireAuth(), async (c) => {
     if (!ownerEntityId) return c.json({ error: 'No owner entity configured' }, 404);
     const auth = c.get('auth')!;
     const existing = await adapter.getRecord(ownerEntityId);
     if (!existing) return c.json({ error: 'Entity record not found' }, 404);
-
     const canWrite = await checkAccess(existing, auth.entityId, ownerEntityId, 'write', adapter);
     if (!canWrite) return c.json({ error: 'Forbidden' }, 403);
 
     const body = await c.req.json<Record<string, unknown>>();
 
-    // Snapshot current state before updating
     await adapter.saveVersion(ownerEntityId, {
       version: existing.version,
       content: existing.content,

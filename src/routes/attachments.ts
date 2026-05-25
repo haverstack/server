@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { readdirSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { AppEnv } from '../app.js';
+import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkAccess } from '../lib/access.js';
@@ -10,15 +10,9 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
   const app = new Hono<AppEnv>();
   const { adapter, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
-
-  // Directory where the SQLite adapter stores attachment files.
-  // Mirrors the adapter's convention: attachments/ next to the .db file.
   const attachmentsDir = join(dirname(dbPath), 'attachments');
 
-  // ----------------------------------------------------------------
-  // POST /attachments — upload a file
-  // Body: raw binary, Content-Type: the file's MIME type
-  // ----------------------------------------------------------------
+  // POST /attachments — upload raw binary, Content-Type = MIME type
   app.post('/', requireAuth(), async (c) => {
     const mimeType = c.req.header('Content-Type') ?? 'application/octet-stream';
     const data = new Uint8Array(await c.req.arrayBuffer());
@@ -26,15 +20,12 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     return c.json({ fileId }, 201);
   });
 
-  // ----------------------------------------------------------------
-  // GET /attachments/:fileId — download a file
-  // ----------------------------------------------------------------
+  // GET /attachments/:fileId — download
   app.get('/:fileId', async (c) => {
     const fileId = c.req.param('fileId');
     const auth = c.get('auth');
 
     if (!auth) {
-      // Unauthenticated: allow only if referenced by a public record.
       const accessible = await isAttachmentPublic(fileId, ctx);
       if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
     }
@@ -53,21 +44,14 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     });
   });
 
-  // ----------------------------------------------------------------
   // DELETE /attachments/:fileId
-  // ----------------------------------------------------------------
   app.delete('/:fileId', requireAuth(), async (c) => {
     const fileId = c.req.param('fileId');
     const auth = c.get('auth')!;
-
-    if (!ownerEntityId || auth.entityId !== ownerEntityId) {
+    if (!ownerEntityId || auth.entityId !== ownerEntityId)
       return c.json({ error: 'Forbidden' }, 403);
-    }
-
-    // Adapter removes the DB row; we clean up the file ourselves.
     await adapter.deleteAttachment(fileId);
     deleteAttachmentFile(attachmentsDir, fileId);
-
     return c.body(null, 204);
   });
 
@@ -96,7 +80,7 @@ function deleteAttachmentFile(attachmentsDir: string, fileId: string): void {
       }
     }
   } catch {
-    // Best-effort; row is already removed so this is non-fatal.
+    // Non-fatal — DB row is already removed.
   }
 }
 
