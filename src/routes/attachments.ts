@@ -30,6 +30,14 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
       if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
     }
 
+    // Use getAttachmentMeta for accurate MIME type and early-404 before reading binary.
+    let mimeType = 'application/octet-stream';
+    if (adapter.getAttachmentMeta) {
+      const meta = await adapter.getAttachmentMeta(fileId);
+      if (!meta) return c.json({ error: 'Attachment not found' }, 404);
+      mimeType = meta.mimeType;
+    }
+
     let data: Uint8Array;
     try {
       data = await adapter.getAttachment(fileId);
@@ -37,7 +45,6 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    const mimeType = detectMimeType(attachmentsDir, fileId);
     return c.newResponse(data, 200, {
       'Content-Type': mimeType,
       'Content-Length': String(data.byteLength),
@@ -50,24 +57,18 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     const auth = c.get('auth')!;
     if (!ownerEntityId || auth.entityId !== ownerEntityId)
       return c.json({ error: 'Forbidden' }, 403);
+
+    if (adapter.getAttachmentMeta) {
+      const meta = await adapter.getAttachmentMeta(fileId);
+      if (!meta) return c.json({ error: 'Attachment not found' }, 404);
+    }
+
     await adapter.deleteAttachment(fileId);
     deleteAttachmentFile(attachmentsDir, fileId);
     return c.body(null, 204);
   });
 
   return app;
-}
-
-function detectMimeType(attachmentsDir: string, fileId: string): string {
-  try {
-    const entries = readdirSync(attachmentsDir) as string[];
-    const file = entries.find((f) => f.startsWith(fileId + '.'));
-    if (!file) return 'application/octet-stream';
-    const ext = file.split('.').pop() ?? '';
-    return extToMime[ext] ?? 'application/octet-stream';
-  } catch {
-    return 'application/octet-stream';
-  }
 }
 
 function deleteAttachmentFile(attachmentsDir: string, fileId: string): void {
@@ -103,22 +104,3 @@ async function isAttachmentPublic(fileId: string, ctx: StackContext): Promise<bo
   } while (cursor);
   return false;
 }
-
-const extToMime: Record<string, string> = {
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  svg: 'image/svg+xml',
-  pdf: 'application/pdf',
-  mp4: 'video/mp4',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  json: 'application/json',
-  txt: 'text/plain',
-  html: 'text/html',
-  css: 'text/css',
-  js: 'application/javascript',
-  bin: 'application/octet-stream',
-};
