@@ -1,5 +1,5 @@
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { unlink, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -65,38 +65,52 @@ export async function buildTestApp(): Promise<TestApp> {
   const cleanup = async () => {
     await ctx.stack.close();
     if (existsSync(dbPath)) await unlink(dbPath);
-    const attachmentsDir = dbPath.replace(/\.db$/, '') + '-attachments';
-    const dir = join(require('path').dirname(dbPath), 'attachments');
-    try { await rm(dir, { recursive: true, force: true }); } catch { /* ok */ }
+    const attachmentsDir = join(dirname(dbPath), 'attachments');
+    await rm(attachmentsDir, { recursive: true, force: true }).catch(() => {});
   };
 
   return { app, ctx, dbPath, cleanup };
 }
 
-export function auth(token = TEST_TOKEN): Record<string, string> {
-  return { Authorization: `Bearer ${token}` };
-}
+export type ReqOpts = {
+  token?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+  /** Set Content-Type to this MIME type and send body as raw string. Used for binary uploads. */
+  rawBody?: { data: string; contentType: string };
+};
 
-export function json(body: unknown): { body: string; headers: Record<string, string> } {
-  return {
-    body: JSON.stringify(body),
-    headers: { 'Content-Type': 'application/json' },
-  };
-}
-
+/**
+ * Fire a request at the Hono test app and return the status code + parsed response.
+ *
+ * Pass `token` to add an Authorization header.
+ * Pass `body` to JSON-encode and send as application/json.
+ */
 export async function req(
   app: Hono<AppEnv>,
   method: string,
   path: string,
-  opts: { headers?: Record<string, string>; body?: string } = {},
-) {
-  const res = await app.request(path, {
-    method,
-    headers: opts.headers ?? {},
-    ...(opts.body !== undefined && { body: opts.body }),
-  });
+  opts: ReqOpts = {},
+): Promise<{ status: number; data: unknown }> {
+  const headers: Record<string, string> = { ...opts.headers };
+  if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
+
+  let body: BodyInit | undefined;
+  if (opts.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify(opts.body);
+  } else if (opts.rawBody) {
+    headers['Content-Type'] = opts.rawBody.contentType;
+    body = opts.rawBody.data;
+  }
+
+  const res = await app.request(path, { method, headers, body });
   const text = await res.text();
   let data: unknown;
-  try { data = JSON.parse(text); } catch { data = text; }
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = text;
+  }
   return { status: res.status, data };
 }
