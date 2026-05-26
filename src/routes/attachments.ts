@@ -1,22 +1,30 @@
 import { Hono } from 'hono';
-import { readdirSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
 import { checkAccess } from '../lib/access.js';
 
-export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv> {
+export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { adapter, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
-  const attachmentsDir = join(dirname(dbPath), 'attachments');
 
   // POST /attachments — upload raw binary, Content-Type = MIME type
   app.post('/', requireAuth(), async (c) => {
-    const mimeType = c.req.header('Content-Type') ?? 'application/octet-stream';
+    const contentLength = Number(c.req.header('Content-Length') ?? 0);
+    if (contentLength > maxAttachmentBytes) {
+      return c.json({ error: 'Attachment too large' }, 413);
+    }
+
     const data = new Uint8Array(await c.req.arrayBuffer());
-    const fileId = await adapter.putAttachment(data, mimeType);
+    if (data.byteLength > maxAttachmentBytes) {
+      return c.json({ error: 'Attachment too large' }, 413);
+    }
+
+    const mimeType = c.req.header('Content-Type') ?? 'application/octet-stream';
+    const filename = parseFilename(c.req.header('Content-Disposition'));
+
+    const fileId = await adapter.putAttachment(data, mimeType, filename);
     return c.json({ fileId }, 201);
   });
 
@@ -40,10 +48,15 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    return c.newResponse(data, 200, {
+    const headers: Record<string, string> = {
       'Content-Type': meta.mimeType,
-      'Content-Length': String(data.byteLength),
-    });
+      'Content-Length': String(meta.size),
+    };
+    if (meta.filename) {
+      headers['Content-Disposition'] = `attachment; filename="${meta.filename}"`;
+    }
+
+    return c.newResponse(data, 200, headers);
   });
 
   // DELETE /attachments/:fileId
@@ -57,25 +70,16 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     if (!meta) return c.json({ error: 'Attachment not found' }, 404);
 
     await adapter.deleteAttachment(fileId);
-    deleteAttachmentFile(attachmentsDir, fileId);
     return c.body(null, 204);
   });
 
   return app;
 }
 
-function deleteAttachmentFile(attachmentsDir: string, fileId: string): void {
-  try {
-    const entries = readdirSync(attachmentsDir) as string[];
-    for (const f of entries) {
-      if (f.startsWith(fileId + '.')) {
-        unlinkSync(join(attachmentsDir, f));
-        break;
-      }
-    }
-  } catch {
-    // Non-fatal — DB row is already removed.
-  }
+function parseFilename(disposition: string | undefined): string | undefined {
+  if (!disposition) return undefined;
+  const match = disposition.match(/filename="([^"]+)"/);
+  return match?.[1];
 }
 
 async function isAttachmentPublic(fileId: string, ctx: StackContext): Promise<boolean> {

@@ -41,6 +41,7 @@ export type Config = {
   corsOrigins: string;
   baseUrl: string | null;
   isNewDb: boolean;
+  maxAttachmentBytes: number;
 };
 
 export function loadConfig(): Config {
@@ -68,5 +69,9 @@ export function loadConfig(): Config {
     corsOrigins: optional('CORS_ORIGINS', '*'),
     baseUrl: process.env['BASE_URL'] ?? null,
     isNewDb,
+    maxAttachmentBytes: parseInt(
+      optional('MAX_ATTACHMENT_BYTES', String(50 * 1024 * 1024)),
+      10,
+    ),
   };
 }

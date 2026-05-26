@@ -29,8 +29,8 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
       origin:
         config.corsOrigins === '*' ? '*' : config.corsOrigins.split(',').map((s) => s.trim()),
       allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
-      allowHeaders: ['Authorization', 'Content-Type'],
-      exposeHeaders: ['X-Request-Id'],
+      allowHeaders: ['Authorization', 'Content-Type', 'Content-Disposition'],
+      exposeHeaders: ['X-Request-Id', 'Content-Disposition'],
     }),
   );
   app.use(errorMiddleware(logger));
@@ -40,7 +40,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/health', healthRoutes());
   app.route('/records', recordRoutes(ctx));
   app.route('/types', typeRoutes(ctx));
-  app.route('/attachments', attachmentRoutes(ctx, config.dbPath));
+  app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
   app.route('/entity', entityRoutes(ctx));
 
   app.notFound((c) => c.json({ error: 'Not found' }, 404));
