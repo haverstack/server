@@ -30,13 +30,8 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
       if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    // Use getAttachmentMeta for accurate MIME type and early-404 before reading binary.
-    let mimeType = 'application/octet-stream';
-    if (adapter.getAttachmentMeta) {
-      const meta = await adapter.getAttachmentMeta(fileId);
-      if (!meta) return c.json({ error: 'Attachment not found' }, 404);
-      mimeType = meta.mimeType;
-    }
+    const meta = await adapter.getAttachmentMeta(fileId);
+    if (!meta) return c.json({ error: 'Attachment not found' }, 404);
 
     let data: Uint8Array;
     try {
@@ -46,7 +41,7 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     }
 
     return c.newResponse(data, 200, {
-      'Content-Type': mimeType,
+      'Content-Type': meta.mimeType,
       'Content-Length': String(data.byteLength),
     });
   });
@@ -58,10 +53,8 @@ export function attachmentRoutes(ctx: StackContext, dbPath: string): Hono<AppEnv
     if (!ownerEntityId || auth.entityId !== ownerEntityId)
       return c.json({ error: 'Forbidden' }, 403);
 
-    if (adapter.getAttachmentMeta) {
-      const meta = await adapter.getAttachmentMeta(fileId);
-      if (!meta) return c.json({ error: 'Attachment not found' }, 404);
-    }
+    const meta = await adapter.getAttachmentMeta(fileId);
+    if (!meta) return c.json({ error: 'Attachment not found' }, 404);
 
     await adapter.deleteAttachment(fileId);
     deleteAttachmentFile(attachmentsDir, fileId);
