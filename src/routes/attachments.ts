@@ -85,19 +85,13 @@ function parseFilename(disposition: string | undefined): string | undefined {
 async function isAttachmentPublic(fileId: string, ctx: StackContext): Promise<boolean> {
   const { adapter, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
-  let cursor: string | undefined;
-  do {
-    const result = await adapter.queryRecords({ limit: 200, ...(cursor && { cursor }) });
-    for (const record of result.records) {
-      const hasRef = record.associations?.some(
-        (a) => a.kind === 'attachment' && a.fileId === fileId,
-      );
-      if (hasRef) {
-        const readable = await checkAccess(record, null, ownerEntityId, 'read', adapter);
-        if (readable) return true;
-      }
-    }
-    cursor = result.cursor ?? undefined;
-  } while (cursor);
+  const result = await adapter.queryRecords({
+    filter: { attachmentFileId: fileId },
+    limit: 1,
+  });
+  for (const record of result.records) {
+    const readable = await checkAccess(record, null, ownerEntityId, 'read', adapter);
+    if (readable) return true;
+  }
   return false;
 }

@@ -41,6 +41,7 @@ function parseQueryBody(raw: unknown): StackQuery {
     if (f.entityId !== undefined) filter.entityId = f.entityId as string | string[];
     if (f.tags !== undefined) filter.tags = f.tags as string[];
     if (f.hasAttachment !== undefined) filter.hasAttachment = f.hasAttachment as string;
+    if (f.attachmentFileId !== undefined) filter.attachmentFileId = f.attachmentFileId as string;
     if (f.relatedTo !== undefined)
       filter.relatedTo = f.relatedTo as { recordId: string; label?: string };
     if (f.content !== undefined) filter.content = f.content as Record<string, unknown>;
@@ -100,6 +101,9 @@ function parseQueryParams(url: URL): StackQuery {
 
   const hasAttachment = getOne(url, 'hasAttachment');
   if (hasAttachment) filter.hasAttachment = hasAttachment;
+
+  const attachmentFileId = getOne(url, 'attachmentFileId');
+  if (attachmentFileId) filter.attachmentFileId = attachmentFileId;
 
   const relatedTo = getOne(url, 'relatedTo');
   if (relatedTo) {
