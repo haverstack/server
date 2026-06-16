@@ -21,8 +21,11 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       return c.json({ error: 'Attachment too large' }, 413);
     }
 
-    const mimeType = c.req.header('Content-Type') ?? 'application/octet-stream';
     const filename = parseFilename(c.req.header('Content-Disposition'));
+    const mimeType = resolveMimeType(
+      c.req.header('Content-Type') ?? 'application/octet-stream',
+      filename,
+    );
 
     const fileId = await adapter.putAttachment(data, mimeType, filename);
     return c.json({ fileId }, 201);
@@ -80,6 +83,50 @@ function parseFilename(disposition: string | undefined): string | undefined {
   if (!disposition) return undefined;
   const match = disposition.match(/filename="([^"]+)"/);
   return match?.[1];
+}
+
+// Map of common file extensions to MIME types. Used to upgrade
+// application/octet-stream when the client omits a specific Content-Type
+// but provided a filename with a recognisable extension.
+const EXTENSION_MIME: Record<string, string> = {
+  // Images
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+  // Documents
+  pdf: 'application/pdf',
+  // Text
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  html: 'text/html',
+  htm: 'text/html',
+  css: 'text/css',
+  js: 'text/javascript',
+  json: 'application/json',
+  xml: 'application/xml',
+  // Video
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  // Audio
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  m4a: 'audio/mp4',
+  // Archives
+  zip: 'application/zip',
+  gz: 'application/gzip',
+};
+
+function resolveMimeType(declared: string, filename: string | undefined): string {
+  if (declared !== 'application/octet-stream' || !filename) return declared;
+  const ext = filename.split('.').pop()?.toLowerCase();
+  return (ext && EXTENSION_MIME[ext]) || declared;
 }
 
 async function isAttachmentPublic(fileId: string, ctx: StackContext): Promise<boolean> {
