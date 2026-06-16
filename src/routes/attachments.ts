@@ -36,10 +36,8 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const fileId = c.req.param('fileId');
     const auth = c.get('auth');
 
-    if (!auth) {
-      const accessible = await isAttachmentPublic(fileId, ctx);
-      if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
-    }
+    const accessible = await isAttachmentAccessible(fileId, auth?.entityId ?? null, ctx);
+    if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
 
     const meta = await adapter.getAttachmentMeta(fileId);
     if (!meta) return c.json({ error: 'Attachment not found' }, 404);
@@ -129,16 +127,33 @@ function resolveMimeType(declared: string, filename: string | undefined): string
   return (ext && EXTENSION_MIME[ext]) || declared;
 }
 
-async function isAttachmentPublic(fileId: string, ctx: StackContext): Promise<boolean> {
+/**
+ * An attachment is accessible if the requester can read at least one of the
+ * Records that reference it (per spec: permissions are governed by the
+ * referencing Record(s), not the attachment itself). Owners always pass,
+ * even for attachments not yet referenced by any Record (e.g. just uploaded).
+ */
+async function isAttachmentAccessible(
+  fileId: string,
+  requesterEntityId: string | null,
+  ctx: StackContext,
+): Promise<boolean> {
   const { adapter, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
-  const result = await adapter.queryRecords({
-    filter: { attachmentFileId: fileId },
-    limit: 1,
-  });
-  for (const record of result.records) {
-    const readable = await checkAccess(record, null, ownerEntityId, 'read', adapter);
-    if (readable) return true;
-  }
+  if (requesterEntityId && requesterEntityId === ownerEntityId) return true;
+
+  let cursor: string | undefined;
+  do {
+    const result = await adapter.queryRecords({
+      filter: { attachmentFileId: fileId },
+      ...(cursor && { cursor }),
+    });
+    for (const record of result.records) {
+      const readable = await checkAccess(record, requesterEntityId, ownerEntityId, 'read', adapter);
+      if (readable) return true;
+    }
+    cursor = result.cursor ?? undefined;
+  } while (cursor);
+
   return false;
 }

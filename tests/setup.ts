@@ -14,7 +14,6 @@ import type { AppEnv } from '../src/app.js';
 
 export const TEST_ENTITY_ID = 'test-entity-id-00000001';
 export const TEST_TOKEN = 'test-bearer-token';
-export const OTHER_TOKEN = 'other-bearer-token';
 export const OTHER_ENTITY_ID = 'other-entity-id-00000002';
 
 export const logger = pino({ level: 'silent' });
@@ -45,13 +44,11 @@ export function testConfig(dbPath: string): Config {
     dbPath,
     entityId: TEST_ENTITY_ID,
     timezone: 'UTC',
-    tokens: [
-      { token: TEST_TOKEN, entityId: TEST_ENTITY_ID },
-      { token: OTHER_TOKEN, entityId: OTHER_ENTITY_ID },
-    ],
+    ownerToken: TEST_TOKEN,
     corsOrigins: '*',
     baseUrl: null,
     isNewDb: true,
+    maxAttachmentBytes: 50 * 1024 * 1024,
   };
 }
 
