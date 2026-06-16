@@ -12,6 +12,7 @@ import { recordRoutes } from './routes/records.js';
 import { typeRoutes } from './routes/types.js';
 import { attachmentRoutes } from './routes/attachments.js';
 import { entityRoutes } from './routes/entity.js';
+import { tokenRoutes } from './routes/tokens.js';
 
 export type { AppEnv };
 
@@ -34,7 +35,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
     }),
   );
   app.use(errorMiddleware(logger));
-  app.use(authMiddleware(config.tokens));
+  app.use(authMiddleware(config.ownerToken, ctx));
 
   app.route('/.well-known', wellknownRoutes(ctx));
   app.route('/health', healthRoutes());
@@ -42,6 +43,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/types', typeRoutes(ctx));
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
   app.route('/entity', entityRoutes(ctx));
+  app.route('/tokens', tokenRoutes(ctx));
 
   app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
