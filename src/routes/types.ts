@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireOwner } from '../middleware/auth.js';
 import { serializeType } from '../lib/serialize.js';
 import type { StackType, TypeSchema } from '@haverstack/core';
 
@@ -21,11 +21,7 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeType(type));
   });
 
-  app.post('/', requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
-    if (auth.entityId !== stack.ownerEntityId)
-      return c.json({ error: 'Forbidden' }, 403);
-
+  app.post('/', requireOwner(stack.ownerEntityId), async (c) => {
     const body = await c.req.json<Record<string, unknown>>();
     if (!body.id || typeof body.id !== 'string') return c.json({ error: 'id is required' }, 400);
     if (!body.baseId || typeof body.baseId !== 'string')

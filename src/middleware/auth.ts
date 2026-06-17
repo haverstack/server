@@ -28,3 +28,13 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
     await next();
   };
 }
+
+export function requireOwner(ownerEntityId: string | null): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const auth = c.get('auth');
+    if (!auth) return c.json({ error: 'Unauthorized' }, 401);
+    if (!ownerEntityId || auth.entityId !== ownerEntityId)
+      return c.json({ error: 'Forbidden' }, 403);
+    await next();
+  };
+}

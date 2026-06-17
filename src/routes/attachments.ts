@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireOwner } from '../middleware/auth.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -60,11 +60,8 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   });
 
   // DELETE /attachments/:fileId
-  app.delete('/:fileId', requireAuth(), async (c) => {
+  app.delete('/:fileId', requireOwner(ownerEntityId), async (c) => {
     const fileId = c.req.param('fileId');
-    const auth = c.get('auth')!;
-    if (!ownerEntityId || auth.entityId !== ownerEntityId)
-      return c.json({ error: 'Forbidden' }, 403);
 
     const meta = await adapter.getAttachmentMeta(fileId);
     if (!meta) return c.json({ error: 'Attachment not found' }, 404);
