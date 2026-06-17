@@ -226,6 +226,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
+    if (hard && auth.entityId !== stack.ownerEntityId)
+      return c.json({ error: 'Forbidden' }, 403);
     try {
       await stack.asEntity(auth.entityId).delete(id, { hard });
     } catch (err) {

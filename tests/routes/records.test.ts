@@ -194,11 +194,32 @@ describe('Records', () => {
       expect(after?.deletedAt).toBeDefined();
     });
 
-    it('hard-deletes with ?hard=true', async () => {
+    it('hard-deletes with ?hard=true (owner)', async () => {
       const record = await seedRecord(t.ctx);
       const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token: TEST_TOKEN });
       expect(status).toBe(204);
       expect(await t.ctx.adapter.getRecord(record.id)).toBeNull();
+    });
+
+    it('non-owner with write access can soft-delete', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'shared' }, {
+        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+      });
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status } = await req(t.app, 'DELETE', `/records/${record.id}`, { token });
+      expect(status).toBe(204);
+      const after = await t.ctx.adapter.getRecord(record.id);
+      expect(after?.deletedAt).toBeDefined();
+    });
+
+    it('non-owner gets 403 on hard delete even with write access', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'shared' }, {
+        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+      });
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token });
+      expect(status).toBe(403);
+      expect(await t.ctx.adapter.getRecord(record.id)).not.toBeNull();
     });
   });
 });
