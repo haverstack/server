@@ -162,7 +162,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
 
   // POST /records/query — full query with content-field filters
   // Registered before /:id patterns to avoid param capture on the literal "query" segment.
-  app.post('/query', async (c) => {
+  app.post('/query', requireAuth(), async (c) => {
     const auth = c.get('auth');
     const query = parseQueryBody(await c.req.json());
     const result = await stack.asEntity(auth?.entityId ?? null).query(query);
