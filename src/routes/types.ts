@@ -7,14 +7,14 @@ import type { StackType, TypeSchema } from '@haverstack/core';
 
 export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { adapter } = ctx;
+  const { adapter, stack } = ctx;
 
-  app.get('/', requireAuth(), async (c) => {
+  app.get('/', async (c) => {
     const types = await adapter.listTypes();
     return c.json(types.map(serializeType));
   });
 
-  app.get('/:id', requireAuth(), async (c) => {
+  app.get('/:id', async (c) => {
     const id = decodeURIComponent(c.req.param('id'));
     const type = await adapter.getType(id);
     if (!type) return c.json({ error: 'Type not found' }, 404);
@@ -22,6 +22,10 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
   });
 
   app.post('/', requireAuth(), async (c) => {
+    const auth = c.get('auth')!;
+    if (auth.entityId !== stack.ownerEntityId)
+      return c.json({ error: 'Forbidden' }, 403);
+
     const body = await c.req.json<Record<string, unknown>>();
     if (!body.id || typeof body.id !== 'string') return c.json({ error: 'id is required' }, 400);
     if (!body.baseId || typeof body.baseId !== 'string')
