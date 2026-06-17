@@ -34,7 +34,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
       exposeHeaders: ['X-Request-Id', 'Content-Disposition'],
     }),
   );
-  app.use(errorMiddleware(logger));
+  app.onError(errorMiddleware(logger));
   app.use(authMiddleware(config.ownerToken, ctx));
 
   app.route('/.well-known', wellknownRoutes(ctx));

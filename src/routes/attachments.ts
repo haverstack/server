@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
-import { checkAccess } from '../lib/access.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -57,7 +56,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       headers['Content-Disposition'] = `attachment; filename="${meta.filename}"`;
     }
 
-    return c.newResponse(data, 200, headers);
+    return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, headers);
   });
 
   // DELETE /attachments/:fileId
@@ -138,22 +137,13 @@ async function isAttachmentAccessible(
   requesterEntityId: string | null,
   ctx: StackContext,
 ): Promise<boolean> {
-  const { adapter, stack } = ctx;
-  const ownerEntityId = stack.ownerEntityId;
-  if (requesterEntityId && requesterEntityId === ownerEntityId) return true;
+  const { stack } = ctx;
+  // Owner bypass: always accessible even if no record references it yet.
+  if (requesterEntityId && requesterEntityId === stack.ownerEntityId) return true;
 
-  let cursor: string | undefined;
-  do {
-    const result = await adapter.queryRecords({
-      filter: { attachmentFileId: fileId },
-      ...(cursor && { cursor }),
-    });
-    for (const record of result.records) {
-      const readable = await checkAccess(record, requesterEntityId, ownerEntityId, 'read', adapter);
-      if (readable) return true;
-    }
-    cursor = result.cursor ?? undefined;
-  } while (cursor);
-
-  return false;
+  const result = await stack.asEntity(requesterEntityId).query({
+    filter: { attachmentFileId: fileId },
+    limit: 1,
+  });
+  return result.records.length > 0;
 }

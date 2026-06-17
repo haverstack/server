@@ -41,7 +41,7 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
       schema: body.schema as TypeSchema,
       schemaHash: body.schemaHash,
       createdAt: body.createdAt ? new Date(body.createdAt as string) : new Date(),
-      ...(body.migratesFrom && { migratesFrom: body.migratesFrom as string }),
+      ...(body.migratesFrom ? { migratesFrom: body.migratesFrom as string } : {}),
     };
 
     await adapter.saveType(type);

@@ -10,7 +10,7 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
     if (header?.startsWith('Bearer ')) {
       const token = header.slice(7);
       if (token === ownerToken) {
-        c.set('auth', { entityId: ownerEntityId });
+        c.set('auth', ownerEntityId ? { entityId: ownerEntityId } : null);
       } else {
         const result = await ctx.adapter.lookupToken(token);
         c.set('auth', result ? { entityId: result.entityId } : null);
