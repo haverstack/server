@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireOwner } from '../middleware/auth.js';
 import type { TokenInfo } from '@haverstack/adapter-sqlite';
 
 export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
@@ -10,12 +10,9 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   const ownerEntityId = stack.ownerEntityId;
 
   // POST /tokens — issue a new token (owner only)
-  app.post('/', requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
-    if (auth.entityId !== ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
-
+  app.post('/', requireOwner(ownerEntityId), async (c) => {
     const body = await c.req.json<{ entityId?: string; label?: string; expiresAt?: string }>();
-    const entityId = body.entityId ?? ownerEntityId;
+    const entityId = body.entityId ?? ownerEntityId!;
     const expiresAt = body.expiresAt ? new Date(body.expiresAt) : undefined;
 
     const { id, token } = await adapter.createToken(entityId, { label: body.label, expiresAt });
@@ -34,19 +31,13 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   });
 
   // GET /tokens — list all DB-managed tokens; never returns token values
-  app.get('/', requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
-    if (auth.entityId !== ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
-
+  app.get('/', requireOwner(ownerEntityId), async (c) => {
     const tokens = await adapter.listTokens();
     return c.json({ tokens: tokens.map(serializeToken) });
   });
 
   // DELETE /tokens/:id — revoke a token by its ID
-  app.delete('/:id', requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
-    if (auth.entityId !== ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
-
+  app.delete('/:id', requireOwner(ownerEntityId), async (c) => {
     await adapter.revokeToken(c.req.param('id'));
     return c.body(null, 204);
   });

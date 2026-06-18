@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildTestApp, req, TEST_TOKEN, OTHER_ENTITY_ID, type TestApp } from '../setup.js';
+import { buildTestApp, req, testConfig, logger, TEST_TOKEN, OTHER_ENTITY_ID, type TestApp } from '../setup.js';
+import { createApp } from '../../src/app.js';
 
 const NOTE_TYPE_ID = 'com.example.test/note@1';
 
@@ -127,6 +128,69 @@ describe('GET /attachments/:fileId', () => {
 
     const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     expect(status).toBe(401);
+  });
+});
+
+describe('POST /attachments', () => {
+  let t: TestApp;
+  beforeEach(async () => {
+    t = await buildTestApp();
+  });
+  afterEach(async () => {
+    await t.cleanup();
+  });
+
+  it('preserves filename from Content-Disposition on upload and returns it on download', async () => {
+    const content = new TextEncoder().encode('PDF content');
+    const uploadRes = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${TEST_TOKEN}`,
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': 'attachment; filename="test.pdf"',
+      },
+      body: content,
+    });
+    expect(uploadRes.status).toBe(201);
+    const { fileId } = (await uploadRes.json()) as { fileId: string };
+
+    const downloadRes = await t.app.request(`/attachments/${fileId}`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(downloadRes.status).toBe(200);
+    expect(downloadRes.headers.get('Content-Disposition')).toBe('attachment; filename="test.pdf"');
+  });
+
+  it('returns 413 when Content-Length exceeds the limit (pre-check)', async () => {
+    const smallConfig = { ...testConfig(t.dbPath), maxAttachmentBytes: 10 };
+    const smallApp = createApp(t.ctx, smallConfig, logger);
+
+    const res = await smallApp.request('/attachments', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${TEST_TOKEN}`,
+        'Content-Type': 'text/plain',
+        'Content-Length': '100',
+      },
+      body: 'x'.repeat(11),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('returns 413 when body byte length exceeds the limit (body check)', async () => {
+    const smallConfig = { ...testConfig(t.dbPath), maxAttachmentBytes: 10 };
+    const smallApp = createApp(t.ctx, smallConfig, logger);
+
+    const oversized = new Uint8Array(11).fill(65);
+    const res = await smallApp.request('/attachments', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${TEST_TOKEN}`,
+        'Content-Type': 'text/plain',
+      },
+      body: oversized,
+    });
+    expect(res.status).toBe(413);
   });
 });
 

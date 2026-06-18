@@ -62,6 +62,18 @@ describe('Records', () => {
       });
       expect(status).toBe(401);
     });
+
+    it('returns 422 when a required content field is missing', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: {} },
+      });
+      expect(status).toBe(422);
+      const d = data as { error: string; details: unknown[] };
+      expect(typeof d.error).toBe('string');
+      expect(Array.isArray(d.details)).toBe(true);
+      expect(d.details.length).toBeGreaterThan(0);
+    });
   });
 
   describe('GET /records/:id', () => {
@@ -139,6 +151,36 @@ describe('Records', () => {
         { token: TEST_TOKEN },
       );
       expect((data as { records: unknown[] }).records).toHaveLength(1);
+    });
+
+    it('filters by createdBefore/createdAfter query params', async () => {
+      await seedRecord(t.ctx);
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const past = new Date(0).toISOString();
+
+      const { data: before } = await req(
+        t.app,
+        'GET',
+        `/records?createdBefore=${encodeURIComponent(future)}`,
+        { token: TEST_TOKEN },
+      );
+      expect((before as { records: unknown[] }).records).toHaveLength(1);
+
+      const { data: after } = await req(
+        t.app,
+        'GET',
+        `/records?createdAfter=${encodeURIComponent(future)}`,
+        { token: TEST_TOKEN },
+      );
+      expect((after as { records: unknown[] }).records).toHaveLength(0);
+
+      const { data: narrow } = await req(
+        t.app,
+        'GET',
+        `/records?createdAfter=${encodeURIComponent(past)}&createdBefore=${encodeURIComponent(future)}`,
+        { token: TEST_TOKEN },
+      );
+      expect((narrow as { records: unknown[] }).records).toHaveLength(1);
     });
 
     it('anonymous query returns only public records', async () => {
