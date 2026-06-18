@@ -4,8 +4,12 @@ import { buildTestApp, req, TEST_TOKEN, OTHER_ENTITY_ID, type TestApp } from '..
 
 describe('Types', () => {
   let t: TestApp;
-  beforeEach(async () => { t = await buildTestApp(); });
-  afterEach(async () => { await t.cleanup(); });
+  beforeEach(async () => {
+    t = await buildTestApp();
+  });
+  afterEach(async () => {
+    await t.cleanup();
+  });
 
   const typeId = 'com.example.test/item@1';
   const schema = { name: { kind: 'string' as const, required: true as const } };

@@ -157,7 +157,11 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth');
     const query = parseQueryBody(await c.req.json());
     const result = await stack.asEntity(auth?.entityId ?? null).query(query);
-    return c.json({ records: result.records.map(serializeRecord), cursor: result.cursor, total: result.total });
+    return c.json({
+      records: result.records.map(serializeRecord),
+      cursor: result.cursor,
+      total: result.total,
+    });
   });
 
   // GET /records — query by native fields via URL params
@@ -165,7 +169,11 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth');
     const query = parseQueryParams(new URL(c.req.url));
     const result = await stack.asEntity(auth?.entityId ?? null).query(query);
-    return c.json({ records: result.records.map(serializeRecord), cursor: result.cursor, total: result.total });
+    return c.json({
+      records: result.records.map(serializeRecord),
+      cursor: result.cursor,
+      total: result.total,
+    });
   });
 
   // POST /records — create (server generates the ID)
@@ -177,12 +185,18 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     if (!body.content || typeof body.content !== 'object')
       return c.json({ error: 'content is required' }, 400);
 
-    const created = await stack.asEntity(auth.entityId).create(body.typeId as TypeId, body.content as Record<string, unknown>, {
-      parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
-      appId: typeof body.appId === 'string' ? body.appId : undefined,
-      permissions: Array.isArray(body.permissions) ? (body.permissions as Permission[]) : undefined,
-      associations: Array.isArray(body.associations) ? (body.associations as Association[]) : undefined,
-    });
+    const created = await stack
+      .asEntity(auth.entityId)
+      .create(body.typeId as TypeId, body.content as Record<string, unknown>, {
+        parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
+        appId: typeof body.appId === 'string' ? body.appId : undefined,
+        permissions: Array.isArray(body.permissions)
+          ? (body.permissions as Permission[])
+          : undefined,
+        associations: Array.isArray(body.associations)
+          ? (body.associations as Association[])
+          : undefined,
+      });
     return c.json(serializeRecord(created), 201);
   });
 
@@ -200,10 +214,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
-    const updated = await stack.asEntity(auth.entityId).update(
-      id,
-      (body.content ?? {}) as Record<string, unknown>,
-    );
+    const updated = await stack
+      .asEntity(auth.entityId)
+      .update(id, (body.content ?? {}) as Record<string, unknown>);
     return c.json(serializeRecord(updated));
   });
 
@@ -212,8 +225,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
-    if (hard && auth.entityId !== stack.ownerEntityId)
-      return c.json({ error: 'Forbidden' }, 403);
+    if (hard && auth.entityId !== stack.ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
     await stack.asEntity(auth.entityId).delete(id, { hard });
     return c.body(null, 204);
   });

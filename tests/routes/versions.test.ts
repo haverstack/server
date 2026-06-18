@@ -11,7 +11,9 @@ describe('Versions', () => {
       body: { kind: 'text' as const, required: true as const },
     });
   });
-  afterEach(async () => { await t.cleanup(); });
+  afterEach(async () => {
+    await t.cleanup();
+  });
 
   async function createAndPatch() {
     const record = await t.ctx.stack.create(TYPE_ID, { body: 'v1' });
@@ -24,27 +26,27 @@ describe('Versions', () => {
 
   it('GET /records/:id/versions returns history', async () => {
     const record = await createAndPatch();
-    const { status, data } = await req(
-      t.app, 'GET', `/records/${record.id}/versions`, { token: TEST_TOKEN },
-    );
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/versions`, {
+      token: TEST_TOKEN,
+    });
     expect(status).toBe(200);
     expect((data as unknown[]).length).toBe(1);
   });
 
   it('GET /records/:id/versions/:version returns one version', async () => {
     const record = await createAndPatch();
-    const { status, data } = await req(
-      t.app, 'GET', `/records/${record.id}/versions/1`, { token: TEST_TOKEN },
-    );
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/versions/1`, {
+      token: TEST_TOKEN,
+    });
     expect(status).toBe(200);
     expect((data as Record<string, unknown>).version).toBe(1);
   });
 
   it('POST /records/:id/restore/:version restores content without rewriting history', async () => {
     const record = await createAndPatch();
-    const { status, data } = await req(
-      t.app, 'POST', `/records/${record.id}/restore/1`, { token: TEST_TOKEN },
-    );
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/restore/1`, {
+      token: TEST_TOKEN,
+    });
     expect(status).toBe(200);
     const d = data as Record<string, unknown>;
     expect((d.content as Record<string, unknown>).body).toBe('v1');
