@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@haverstack/adapter-sqlite": "file:../core/packages/adapter-sqlite",
-    "@haverstack/core": "file:../core/packages/core",
+    "@haverstack/core": "^0.2.0",
     "@hono/node-server": "^1.13.7",
     "hono": "^4.6.0",
     "pino": "^9.5.0",
