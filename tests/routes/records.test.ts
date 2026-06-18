@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildTestApp, req, TEST_TOKEN, TEST_ENTITY_ID, OTHER_ENTITY_ID, type TestApp } from '../setup.js';
+import {
+  buildTestApp,
+  req,
+  TEST_TOKEN,
+  TEST_ENTITY_ID,
+  OTHER_ENTITY_ID,
+  type TestApp,
+} from '../setup.js';
 
 const NOTE_TYPE_ID = 'com.example.test/note@1';
 
@@ -20,7 +27,9 @@ describe('Records', () => {
     t = await buildTestApp();
     await seedType(t.ctx);
   });
-  afterEach(async () => { await t.cleanup(); });
+  afterEach(async () => {
+    await t.cleanup();
+  });
 
   describe('POST /records', () => {
     it('creates a record and returns a server-generated id', async () => {
@@ -58,7 +67,9 @@ describe('Records', () => {
   describe('GET /records/:id', () => {
     it('returns a record by id', async () => {
       const record = await seedRecord(t.ctx);
-      const { status, data } = await req(t.app, 'GET', `/records/${record.id}`, { token: TEST_TOKEN });
+      const { status, data } = await req(t.app, 'GET', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+      });
       expect(status).toBe(200);
       expect((data as Record<string, unknown>).id).toBe(record.id);
     });
@@ -75,18 +86,26 @@ describe('Records', () => {
     });
 
     it('anonymous can read a public record', async () => {
-      const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'public content' }, {
-        permissions: [{ access: 'public' }],
-      });
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'public content' },
+        {
+          permissions: [{ access: 'public' }],
+        },
+      );
       const { status, data } = await req(t.app, 'GET', `/records/${record.id}`);
       expect(status).toBe(200);
       expect((data as Record<string, unknown>).id).toBe(record.id);
     });
 
     it('entity with a read grant can read the record', async () => {
-      const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'shared content' }, {
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
-      });
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'shared content' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        },
+      );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status } = await req(t.app, 'GET', `/records/${record.id}`, { token });
       expect(status).toBe(200);
@@ -113,13 +132,22 @@ describe('Records', () => {
 
     it('filters by typeId query param', async () => {
       await seedRecord(t.ctx);
-      const { data } = await req(t.app, 'GET', `/records?typeId=${encodeURIComponent(NOTE_TYPE_ID)}`, { token: TEST_TOKEN });
+      const { data } = await req(
+        t.app,
+        'GET',
+        `/records?typeId=${encodeURIComponent(NOTE_TYPE_ID)}`,
+        { token: TEST_TOKEN },
+      );
       expect((data as { records: unknown[] }).records).toHaveLength(1);
     });
 
     it('anonymous query returns only public records', async () => {
       await seedRecord(t.ctx, { body: 'private' });
-      await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'public' }, { permissions: [{ access: 'public' }] });
+      await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'public' },
+        { permissions: [{ access: 'public' }] },
+      );
       const { data } = await req(t.app, 'GET', '/records');
       const d = data as { records: Array<{ content: { body: string } }>; total: null };
       expect(d.total).toBeNull();
@@ -173,9 +201,13 @@ describe('Records', () => {
     });
 
     it('returns 403 when requester lacks write access', async () => {
-      const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'hi' }, {
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
-      });
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'hi' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        },
+      );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
@@ -196,15 +228,21 @@ describe('Records', () => {
 
     it('hard-deletes with ?hard=true (owner)', async () => {
       const record = await seedRecord(t.ctx);
-      const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token: TEST_TOKEN });
+      const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, {
+        token: TEST_TOKEN,
+      });
       expect(status).toBe(204);
       expect(await t.ctx.adapter.getRecord(record.id)).toBeNull();
     });
 
     it('non-owner with write access can soft-delete', async () => {
-      const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'shared' }, {
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
-      });
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'shared' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        },
+      );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status } = await req(t.app, 'DELETE', `/records/${record.id}`, { token });
       expect(status).toBe(204);
@@ -213,9 +251,13 @@ describe('Records', () => {
     });
 
     it('non-owner gets 403 on hard delete even with write access', async () => {
-      const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'shared' }, {
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
-      });
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'shared' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        },
+      );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token });
       expect(status).toBe(403);

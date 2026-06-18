@@ -12,11 +12,13 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src tests"
+    "lint": "eslint src tests",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@haverstack/adapter-sqlite": "^0.1.0",
-    "@haverstack/core": "file:../core/packages/core",
+    "@haverstack/adapter-sqlite": "^0.2.1",
+    "@haverstack/core": "^0.2.0",
     "@hono/node-server": "^1.13.7",
     "hono": "^4.6.0",
     "pino": "^9.5.0",

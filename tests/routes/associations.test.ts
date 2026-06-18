@@ -11,7 +11,9 @@ describe('Associations', () => {
       text: { kind: 'text' as const, required: true as const },
     });
   });
-  afterEach(async () => { await t.cleanup(); });
+  afterEach(async () => {
+    await t.cleanup();
+  });
 
   async function seedRecord() {
     return t.ctx.stack.create(TYPE_ID, { text: 'Hello' });
@@ -30,9 +32,9 @@ describe('Associations', () => {
     const record = await seedRecord();
     await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
     await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'archived' });
-    const { status, data } = await req(
-      t.app, 'GET', `/records/${record.id}/associations`, { token: TEST_TOKEN },
-    );
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+    });
     expect(status).toBe(200);
     expect((data as { associations: unknown[] }).associations).toHaveLength(2);
   });
@@ -41,7 +43,10 @@ describe('Associations', () => {
     const record = await seedRecord();
     await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
     const { status, data } = await req(
-      t.app, 'GET', `/records/${record.id}/associations?kind=tag`, { token: TEST_TOKEN },
+      t.app,
+      'GET',
+      `/records/${record.id}/associations?kind=tag`,
+      { token: TEST_TOKEN },
     );
     expect(status).toBe(200);
     const assocs = (data as { associations: Array<{ kind: string }> }).associations;

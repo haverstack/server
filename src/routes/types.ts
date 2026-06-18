@@ -27,7 +27,8 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
     if (!body.baseId || typeof body.baseId !== 'string')
       return c.json({ error: 'baseId is required' }, 400);
     if (typeof body.version !== 'number') return c.json({ error: 'version must be a number' }, 400);
-    if (!body.name || typeof body.name !== 'string') return c.json({ error: 'name is required' }, 400);
+    if (!body.name || typeof body.name !== 'string')
+      return c.json({ error: 'name is required' }, 400);
     if (!body.schema || typeof body.schema !== 'object')
       return c.json({ error: 'schema is required' }, 400);
     if (!body.schemaHash || typeof body.schemaHash !== 'string')

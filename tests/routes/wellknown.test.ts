@@ -3,8 +3,12 @@ import { buildTestApp, req, TEST_ENTITY_ID, type TestApp } from '../setup.js';
 
 describe('GET /.well-known/stack', () => {
   let t: TestApp;
-  beforeEach(async () => { t = await buildTestApp(); });
-  afterEach(async () => { await t.cleanup(); });
+  beforeEach(async () => {
+    t = await buildTestApp();
+  });
+  afterEach(async () => {
+    await t.cleanup();
+  });
 
   it('returns the discovery document', async () => {
     const { status, data } = await req(t.app, 'GET', '/.well-known/stack');

@@ -1,4 +1,10 @@
-import type { StackRecord, StackType, RecordVersion, Association, Permission } from '@haverstack/core';
+import type {
+  StackRecord,
+  StackType,
+  RecordVersion,
+  Association,
+  Permission,
+} from '@haverstack/core';
 
 export type WireRecord = {
   id: string;

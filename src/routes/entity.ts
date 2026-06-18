@@ -22,10 +22,9 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
     try {
-      const updated = await stack.asEntity(auth.entityId).update(
-        ownerEntityId,
-        (body.content ?? {}) as Record<string, unknown>,
-      );
+      const updated = await stack
+        .asEntity(auth.entityId)
+        .update(ownerEntityId, (body.content ?? {}) as Record<string, unknown>);
       return c.json(serializeRecord(updated));
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Record not found'))

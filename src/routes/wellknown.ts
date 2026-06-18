@@ -10,7 +10,7 @@ export function wellknownRoutes(ctx: StackContext): Hono<AppEnv> {
       version: '1.0',
       entityId: ctx.stack.ownerEntityId ?? '',
       timezone: ctx.stack.timezone,
-      capabilities: ctx.stack.capabilities,
+      capabilities: ctx.stack.features,
     });
   });
 
