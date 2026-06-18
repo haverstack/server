@@ -131,4 +131,4 @@ pnpm format:check     # Check formatting
 
 ## License
 
-[AGPL-3.0](./LICENSE)
+[CC0 1.0 Universal](./LICENSE) — public domain. No rights reserved.
