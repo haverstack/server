@@ -13,8 +13,8 @@ Exposes a Haverstack stack over a REST API so apps can read and write records re
 ```sh
 cp .env.example .env
 # Edit .env — set OWNER_TOKEN and ENTITY_ID at minimum
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 The server listens on `PORT` (default `3000`). On first run it initializes a new SQLite database at `DB_PATH`.
@@ -113,12 +113,12 @@ Non-owner entities authenticate with tokens issued via `POST /tokens` and are su
 ## Development
 
 ```sh
-npm install
-npm run dev        # Start with live reload
-npm test           # Run tests
-npm run typecheck  # Type check
-npm run lint       # Lint
-npm run format:check  # Check formatting
+pnpm install
+pnpm dev              # Start with live reload
+pnpm test             # Run tests
+pnpm typecheck        # Type check
+pnpm lint             # Lint
+pnpm format:check     # Check formatting
 ```
 
 ---
