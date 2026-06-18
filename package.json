@@ -15,7 +15,7 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@haverstack/adapter-sqlite": "^0.1.0",
+    "@haverstack/adapter-sqlite": "file:../core/packages/adapter-sqlite",
     "@haverstack/core": "file:../core/packages/core",
     "@hono/node-server": "^1.13.7",
     "hono": "^4.6.0",
