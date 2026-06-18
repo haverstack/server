@@ -144,15 +144,6 @@ function parseQueryParams(url: URL): StackQuery {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** True when ScopedStack threw because the record doesn't exist (not a permission error). */
-function isRecordNotFound(err: unknown): boolean {
-  return err instanceof Error && err.message.startsWith('Record not found');
-}
-
-// ---------------------------------------------------------------------------
 // Route factory
 // ---------------------------------------------------------------------------
 
@@ -179,15 +170,15 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
 
   // POST /records — create (server generates the ID)
   app.post('/', requireAuth(), async (c) => {
+    const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
     if (!body.typeId || typeof body.typeId !== 'string')
       return c.json({ error: 'typeId is required' }, 400);
     if (!body.content || typeof body.content !== 'object')
       return c.json({ error: 'content is required' }, 400);
 
-    const created = await stack.create(body.typeId as TypeId, body.content as Record<string, unknown>, {
+    const created = await stack.asEntity(auth.entityId).create(body.typeId as TypeId, body.content as Record<string, unknown>, {
       parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
-      entityId: typeof body.entityId === 'string' ? body.entityId : undefined,
       appId: typeof body.appId === 'string' ? body.appId : undefined,
       permissions: Array.isArray(body.permissions) ? (body.permissions as Permission[]) : undefined,
       associations: Array.isArray(body.associations) ? (body.associations as Association[]) : undefined,
@@ -209,16 +200,11 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
-    try {
-      const updated = await stack.asEntity(auth.entityId).update(
-        id,
-        (body.content ?? {}) as Record<string, unknown>,
-      );
-      return c.json(serializeRecord(updated));
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      throw err;
-    }
+    const updated = await stack.asEntity(auth.entityId).update(
+      id,
+      (body.content ?? {}) as Record<string, unknown>,
+    );
+    return c.json(serializeRecord(updated));
   });
 
   // DELETE /records/:id  (?hard=true for permanent)
@@ -228,12 +214,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
     if (hard && auth.entityId !== stack.ownerEntityId)
       return c.json({ error: 'Forbidden' }, 403);
-    try {
-      await stack.asEntity(auth.entityId).delete(id, { hard });
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      throw err;
-    }
+    await stack.asEntity(auth.entityId).delete(id, { hard });
     return c.body(null, 204);
   });
 
@@ -255,12 +236,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const body = await c.req.json<{ permissions: Permission[] }>();
     if (!Array.isArray(body.permissions))
       return c.json({ error: 'permissions must be an array' }, 400);
-    try {
-      await stack.asEntity(auth.entityId).setPermissions(id, body.permissions);
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      throw err;
-    }
+    await stack.asEntity(auth.entityId).setPermissions(id, body.permissions);
     return c.json({ permissions: body.permissions });
   });
 
@@ -286,12 +262,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
     if (!body.kind || !body.label) return c.json({ error: 'kind and label are required' }, 400);
-    try {
-      await stack.asEntity(auth.entityId).associate(id, body);
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      throw err;
-    }
+    await stack.asEntity(auth.entityId).associate(id, body);
     return c.body(null, 204);
   });
 
@@ -299,12 +270,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
-    try {
-      await stack.asEntity(auth.entityId).dissociate(id, body);
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      throw err;
-    }
+    await stack.asEntity(auth.entityId).dissociate(id, body);
     return c.body(null, 204);
   });
 
@@ -315,13 +281,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/:id/versions', async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
-    try {
-      const versions = await stack.asEntity(auth?.entityId ?? null).getVersions(id);
-      return c.json(versions.map(serializeVersion));
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      throw err;
-    }
+    const versions = await stack.asEntity(auth?.entityId ?? null).getVersions(id);
+    return c.json(versions.map(serializeVersion));
   });
 
   app.get('/:id/versions/:version', async (c) => {
@@ -329,14 +290,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const vNum = parseInt(c.req.param('version'), 10);
     if (isNaN(vNum)) return c.json({ error: 'Invalid version number' }, 400);
     const auth = c.get('auth');
-    try {
-      const version = await stack.asEntity(auth?.entityId ?? null).getVersion(id, vNum);
-      if (!version) return c.json({ error: 'Version not found' }, 404);
-      return c.json(serializeVersion(version));
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      throw err;
-    }
+    const version = await stack.asEntity(auth?.entityId ?? null).getVersion(id, vNum);
+    if (!version) return c.json({ error: 'Version not found' }, 404);
+    return c.json(serializeVersion(version));
   });
 
   // POST /records/:id/restore/:version — creates new version, does not rewrite history
@@ -345,15 +301,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const vNum = parseInt(c.req.param('version'), 10);
     if (isNaN(vNum)) return c.json({ error: 'Invalid version number' }, 400);
     const auth = c.get('auth')!;
-    try {
-      const restored = await stack.asEntity(auth.entityId).restoreVersion(id, vNum);
-      return c.json(serializeRecord(restored));
-    } catch (err) {
-      if (isRecordNotFound(err)) return c.json({ error: 'Record not found' }, 404);
-      if (err instanceof Error && err.message.startsWith('Version'))
-        return c.json({ error: 'Version not found' }, 404);
-      throw err;
-    }
+    const restored = await stack.asEntity(auth.entityId).restoreVersion(id, vNum);
+    return c.json(serializeRecord(restored));
   });
 
   return app;
