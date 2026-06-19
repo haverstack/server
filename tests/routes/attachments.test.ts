@@ -19,7 +19,7 @@ async function seedType(ctx: TestApp['ctx']) {
 }
 
 async function putFile(ctx: TestApp['ctx'], content = 'hello') {
-  return ctx.adapter.putAttachment(new TextEncoder().encode(content), 'text/plain');
+  return ctx.stack.putAttachment(new TextEncoder().encode(content), 'text/plain');
 }
 
 describe('GET /attachments/:fileId', () => {

@@ -50,7 +50,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       limit: adapter.capabilities.contentFieldQuery ? 1 : undefined,
     });
 
-    let attachmentContent: AttachmentContent | null = null;
+    let attachmentContent: AttachmentContent | null;
     if (adapter.capabilities.contentFieldQuery) {
       attachmentContent = (metaResult.records[0]?.content as AttachmentContent) ?? null;
     } else {
