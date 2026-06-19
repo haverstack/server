@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildTestApp, req, TEST_TOKEN, TEST_ENTITY_ID, OTHER_ENTITY_ID, type TestApp } from '../setup.js';
+import {
+  buildTestApp,
+  req,
+  TEST_TOKEN,
+  TEST_ENTITY_ID,
+  OTHER_ENTITY_ID,
+  type TestApp,
+} from '../setup.js';
 import type { StackRecord } from '@haverstack/core';
 
 async function seedEntityRecord(ctx: TestApp['ctx']): Promise<StackRecord> {

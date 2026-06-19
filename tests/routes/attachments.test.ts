@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildTestApp, req, testConfig, logger, TEST_TOKEN, OTHER_ENTITY_ID, type TestApp } from '../setup.js';
+import {
+  buildTestApp,
+  req,
+  testConfig,
+  logger,
+  TEST_TOKEN,
+  OTHER_ENTITY_ID,
+  type TestApp,
+} from '../setup.js';
 import { createApp } from '../../src/app.js';
 
 const NOTE_TYPE_ID = 'com.example.test/note@1';
