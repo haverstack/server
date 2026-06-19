@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: haverstack/core
-          path: ../core
+          path: core-pkg
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -22,8 +22,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Build core packages
-        working-directory: ../core
-        run: pnpm install && pnpm run -r build
+        run: |
+          ln -s $GITHUB_WORKSPACE/core-pkg $GITHUB_WORKSPACE/../core
+          cd ../core && pnpm install && pnpm run -r build
       - run: pnpm install --frozen-lockfile
       - run: pnpm run format:check
 
@@ -34,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: haverstack/core
-          path: ../core
+          path: core-pkg
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -43,8 +44,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Build core packages
-        working-directory: ../core
-        run: pnpm install && pnpm run -r build
+        run: |
+          ln -s $GITHUB_WORKSPACE/core-pkg $GITHUB_WORKSPACE/../core
+          cd ../core && pnpm install && pnpm run -r build
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
 
@@ -55,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: haverstack/core
-          path: ../core
+          path: core-pkg
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -64,8 +66,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Build core packages
-        working-directory: ../core
-        run: pnpm install && pnpm run -r build
+        run: |
+          ln -s $GITHUB_WORKSPACE/core-pkg $GITHUB_WORKSPACE/../core
+          cd ../core && pnpm install && pnpm run -r build
       - run: pnpm install --frozen-lockfile
       - run: pnpm run typecheck
 
@@ -76,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: haverstack/core
-          path: ../core
+          path: core-pkg
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -85,7 +88,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Build core packages
-        working-directory: ../core
-        run: pnpm install && pnpm run -r build
+        run: |
+          ln -s $GITHUB_WORKSPACE/core-pkg $GITHUB_WORKSPACE/../core
+          cd ../core && pnpm install && pnpm run -r build
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
