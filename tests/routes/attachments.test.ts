@@ -220,6 +220,21 @@ describe('DELETE /attachments/:fileId', () => {
     expect(status).toBe(204);
   });
 
+  it('returns 409 when the file is still referenced by a record', async () => {
+    const fileId = await putFile(t.ctx);
+    await t.ctx.stack.create(
+      NOTE_TYPE_ID,
+      { body: 'note with attachment' },
+      {
+        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+      },
+    );
+    const { status } = await req(t.app, 'DELETE', `/attachments/${fileId}`, {
+      token: TEST_TOKEN,
+    });
+    expect(status).toBe(409);
+  });
+
   it('rejects a non-owner entity even with a write grant on a referencing record', async () => {
     const fileId = await putFile(t.ctx);
     await t.ctx.stack.create(

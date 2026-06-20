@@ -72,15 +72,19 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   app.delete('/:fileId', requireOwner(ownerEntityId), async (c) => {
     const fileId = c.req.param('fileId');
 
-    // Find all _attachment@1 records tracking this file
+    // Find the _attachment@1 metadata record(s) for this file
     const metaResult = await stack.query({
       filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
     });
-    const attachmentRecords = metaResult.records;
+    if (!metaResult.records.length) return c.json({ error: 'Attachment not found' }, 404);
 
-    if (!attachmentRecords.length) return c.json({ error: 'Attachment not found' }, 404);
+    // Refuse if any record in the stack still references this file
+    const refResult = await stack.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    if (refResult.records.length > 0) {
+      return c.json({ error: 'Attachment is still referenced by one or more records' }, 409);
+    }
 
-    for (const record of attachmentRecords) {
+    for (const record of metaResult.records) {
       await stack.delete(record.id, { hard: true });
     }
 
