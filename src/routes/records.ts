@@ -3,6 +3,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
 import { serializeRecord, serializeVersion } from '../lib/serialize.js';
+import { SYSTEM_TYPES } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
 
 // ---------------------------------------------------------------------------
@@ -214,9 +215,31 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
-    const updated = await stack
-      .asEntity(auth.entityId)
-      .update(id, (body.content ?? {}) as Record<string, unknown>);
+    const patch = (body.content ?? {}) as Record<string, unknown>;
+
+    const existing = await stack.get(id);
+    if (existing) {
+      if (existing.typeId.startsWith(`${SYSTEM_TYPES.ATTACHMENT}@`)) {
+        const immutableFields = ['fileId', 'size', 'mimeType'];
+        const attempted = immutableFields.filter((f) =>
+          Object.prototype.hasOwnProperty.call(patch, f),
+        );
+        if (attempted.length > 0) {
+          return c.json(
+            { error: `Cannot modify immutable attachment fields: ${attempted.join(', ')}` },
+            422,
+          );
+        }
+      }
+      if (
+        existing.typeId.startsWith(`${SYSTEM_TYPES.GRANT}@`) &&
+        auth.entityId !== stack.ownerEntityId
+      ) {
+        return c.json({ error: 'Forbidden' }, 403);
+      }
+    }
+
+    const updated = await stack.asEntity(auth.entityId).update(id, patch);
     return c.json(serializeRecord(updated));
   });
 
@@ -226,6 +249,16 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
     if (hard && auth.entityId !== stack.ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
+
+    const existing = await stack.get(id);
+    if (
+      existing &&
+      existing.typeId.startsWith(`${SYSTEM_TYPES.GRANT}@`) &&
+      auth.entityId !== stack.ownerEntityId
+    ) {
+      return c.json({ error: 'Forbidden' }, 403);
+    }
+
     await stack.asEntity(auth.entityId).delete(id, { hard });
     return c.body(null, 204);
   });

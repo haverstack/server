@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { SYSTEM_TYPES } from '@haverstack/core';
 import {
   buildTestApp,
   req,
@@ -9,6 +10,8 @@ import {
 } from '../setup.js';
 
 const NOTE_TYPE_ID = 'com.example.test/note@1';
+const ATTACHMENT_TYPE_ID = `${SYSTEM_TYPES.ATTACHMENT}@1`;
+const GRANT_TYPE_ID = `${SYSTEM_TYPES.GRANT}@1`;
 
 async function seedType(ctx: TestApp['ctx']) {
   return ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
@@ -304,6 +307,150 @@ describe('Records', () => {
       const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token });
       expect(status).toBe(403);
       expect(await t.ctx.adapter.getRecord(record.id)).not.toBeNull();
+    });
+  });
+
+  describe('_attachment@1 immutable field protection', () => {
+    async function seedAttachment(ctx: TestApp['ctx']) {
+      const fileId = await ctx.stack.putAttachment(
+        new TextEncoder().encode('hello'),
+        'text/plain',
+        'hello.txt',
+      );
+      const { records } = await ctx.stack.query({ filter: { typeId: ATTACHMENT_TYPE_ID } });
+      return { fileId, record: records[0] };
+    }
+
+    it('returns 422 when PATCH attempts to change fileId', async () => {
+      const { record } = await seedAttachment(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { content: { fileId: 'tampered-id' } },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: string }).error).toMatch(/fileId/);
+    });
+
+    it('returns 422 when PATCH attempts to change size', async () => {
+      const { record } = await seedAttachment(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { content: { size: 9999 } },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: string }).error).toMatch(/size/);
+    });
+
+    it('returns 422 when PATCH attempts to change mimeType', async () => {
+      const { record } = await seedAttachment(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { content: { mimeType: 'text/html' } },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: string }).error).toMatch(/mimeType/);
+    });
+
+    it('reports all attempted immutable fields in the error message', async () => {
+      const { record } = await seedAttachment(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { content: { fileId: 'x', size: 0, mimeType: 'text/html' } },
+      });
+      expect(status).toBe(422);
+      const error = (data as { error: string }).error;
+      expect(error).toMatch(/fileId/);
+      expect(error).toMatch(/size/);
+      expect(error).toMatch(/mimeType/);
+    });
+
+    it('allows PATCH to change filename', async () => {
+      const { record } = await seedAttachment(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { content: { filename: 'renamed.txt' } },
+      });
+      expect(status).toBe(200);
+      const content = (data as { content: Record<string, unknown> }).content;
+      expect(content.filename).toBe('renamed.txt');
+      expect(content.fileId).toBeDefined();
+    });
+  });
+
+  describe('_grant@1 write protection', () => {
+    it('returns 403 when non-owner tries to PATCH a grant record', async () => {
+      // Give OTHER_ENTITY_ID update-own on _grant@1 — the privilege escalation vector
+      const [grantRecord] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['update-own'], typeId: GRANT_TYPE_ID },
+      ]);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const { status } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
+        token,
+        body: { content: { actions: ['read-any', 'update-any', 'delete-any'] } },
+      });
+      expect(status).toBe(403);
+    });
+
+    it('returns 403 when non-owner tries to soft-DELETE a grant record', async () => {
+      const [grantRecord] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
+      ]);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const { status } = await req(t.app, 'DELETE', `/records/${grantRecord.id}`, { token });
+      expect(status).toBe(403);
+      expect(await t.ctx.adapter.getRecord(grantRecord.id)).not.toBeNull();
+    });
+
+    it('allows the owner to PATCH a grant record', async () => {
+      const [grantRecord] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
+      ]);
+
+      const { status, data } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
+        token: TEST_TOKEN,
+        body: { content: { actions: ['read-own', 'read-any'] } },
+      });
+      expect(status).toBe(200);
+      const content = (data as { content: Record<string, unknown> }).content;
+      expect(content.actions).toEqual(['read-own', 'read-any']);
+    });
+
+    it('allows the owner to soft-DELETE a grant record', async () => {
+      const [grantRecord] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
+      ]);
+
+      const { status } = await req(t.app, 'DELETE', `/records/${grantRecord.id}`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(204);
+      const after = await t.ctx.adapter.getRecord(grantRecord.id);
+      expect(after?.deletedAt).toBeDefined();
+    });
+
+    it('blocks escalation: non-owner cannot expand their own grant actions', async () => {
+      // Step 1: give OTHER_ENTITY_ID a modest initial grant
+      const [readGrant] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
+      ]);
+      // Step 2: give OTHER_ENTITY_ID update-own on _grant@1 (the dangerous permission)
+      await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['update-own'], typeId: GRANT_TYPE_ID },
+      ]);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      // Step 3: try to escalate by rewriting the read grant to include broad actions
+      const { status } = await req(t.app, 'PATCH', `/records/${readGrant.id}`, {
+        token,
+        body: { content: { typeId: NOTE_TYPE_ID, actions: ['read-any', 'update-any', 'delete-any'] } },
+      });
+      expect(status).toBe(403);
+
+      // Confirm the grant was not modified
+      const unchanged = await t.ctx.adapter.getRecord(readGrant.id);
+      expect((unchanged?.content as { actions: string[] }).actions).toEqual(['read-own']);
     });
   });
 });
