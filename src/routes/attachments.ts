@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { SYSTEM_TYPES } from '@haverstack/core';
+import type { AttachmentContent } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
@@ -6,7 +8,7 @@ import { requireAuth, requireOwner } from '../middleware/auth.js';
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { adapter, stack } = ctx;
-  const ownerEntityId = stack.ownerEntityId;
+  const { ownerEntityId } = stack;
 
   // POST /attachments — upload raw binary, Content-Type = MIME type
   app.post('/', requireAuth(), async (c) => {
@@ -26,7 +28,8 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       filename,
     );
 
-    const fileId = await adapter.putAttachment(data, mimeType, filename);
+    const auth = c.get('auth');
+    const fileId = await stack.asEntity(auth!.entityId).putAttachment(data, mimeType, filename);
     return c.json({ fileId }, 201);
   });
 
@@ -38,8 +41,15 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const accessible = await isAttachmentAccessible(fileId, auth?.entityId ?? null, ctx);
     if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
 
-    const meta = await adapter.getAttachmentMeta(fileId);
-    if (!meta) return c.json({ error: 'Attachment not found' }, 404);
+    // Owner-level query for all _attachment@1 records for this file. MimeType and
+    // size are safe to expose at owner scope since they're inferrable from the file
+    // bytes, which the requester already has permission to access.
+    const metaResult = await stack.query({
+      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
+    });
+    const attachmentContent = (metaResult.records[0]?.content as AttachmentContent) ?? null;
+
+    if (!attachmentContent) return c.json({ error: 'Attachment not found' }, 404);
 
     let data: Uint8Array;
     try {
@@ -48,12 +58,16 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
+    // Filename is pure metadata — only expose it from the requester's own upload record.
+    const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
+    const visibleFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
+
     const headers: Record<string, string> = {
-      'Content-Type': meta.mimeType,
-      'Content-Length': String(meta.size),
+      'Content-Type': attachmentContent.mimeType,
+      'Content-Length': String(attachmentContent.size),
     };
-    if (meta.filename) {
-      headers['Content-Disposition'] = `attachment; filename="${meta.filename}"`;
+    if (visibleFilename) {
+      headers['Content-Disposition'] = `attachment; filename="${visibleFilename}"`;
     }
 
     return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, headers);
@@ -63,8 +77,21 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   app.delete('/:fileId', requireOwner(ownerEntityId), async (c) => {
     const fileId = c.req.param('fileId');
 
-    const meta = await adapter.getAttachmentMeta(fileId);
-    if (!meta) return c.json({ error: 'Attachment not found' }, 404);
+    // Find the _attachment@1 metadata record(s) for this file
+    const metaResult = await stack.query({
+      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
+    });
+    if (!metaResult.records.length) return c.json({ error: 'Attachment not found' }, 404);
+
+    // Refuse if any record in the stack still references this file
+    const refResult = await stack.query({ filter: { attachmentFileId: fileId }, limit: 1 });
+    if (refResult.records.length > 0) {
+      return c.json({ error: 'Attachment is still referenced by one or more records' }, 409);
+    }
+
+    for (const record of metaResult.records) {
+      await stack.delete(record.id, { hard: true });
+    }
 
     await adapter.deleteAttachment(fileId);
     return c.body(null, 204);
@@ -124,10 +151,11 @@ function resolveMimeType(declared: string, filename: string | undefined): string
 }
 
 /**
- * An attachment is accessible if the requester can read at least one of the
- * Records that reference it (per spec: permissions are governed by the
- * referencing Record(s), not the attachment itself). Owners always pass,
- * even for attachments not yet referenced by any Record (e.g. just uploaded).
+ * An attachment is accessible if:
+ * 1. The requester is the stack owner, OR
+ * 2. The requester can read at least one Record that references the file, OR
+ * 3. The requester uploaded the file (owns its _attachment@1 record) and it
+ *    hasn't been associated with any record yet.
  */
 async function isAttachmentAccessible(
   fileId: string,
@@ -135,12 +163,26 @@ async function isAttachmentAccessible(
   ctx: StackContext,
 ): Promise<boolean> {
   const { stack } = ctx;
-  // Owner bypass: always accessible even if no record references it yet.
   if (requesterEntityId && requesterEntityId === stack.ownerEntityId) return true;
 
   const result = await stack.asEntity(requesterEntityId).query({
     filter: { attachmentFileId: fileId },
     limit: 1,
   });
-  return result.records.length > 0;
+  if (result.records.length > 0) return true;
+
+  // Unassociated file: check if the requester uploaded it
+  if (requesterEntityId) {
+    const uploadResult = await stack.query({
+      filter: {
+        typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
+        entityId: requesterEntityId,
+        content: { fileId },
+      },
+      limit: 1,
+    });
+    if (uploadResult.records.length > 0) return true;
+  }
+
+  return false;
 }

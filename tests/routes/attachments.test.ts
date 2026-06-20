@@ -19,7 +19,7 @@ async function seedType(ctx: TestApp['ctx']) {
 }
 
 async function putFile(ctx: TestApp['ctx'], content = 'hello') {
-  return ctx.adapter.putAttachment(new TextEncoder().encode(content), 'text/plain');
+  return ctx.stack.putAttachment(new TextEncoder().encode(content), 'text/plain');
 }
 
 describe('GET /attachments/:fileId', () => {
@@ -218,6 +218,21 @@ describe('DELETE /attachments/:fileId', () => {
       token: TEST_TOKEN,
     });
     expect(status).toBe(204);
+  });
+
+  it('returns 409 when the file is still referenced by a record', async () => {
+    const fileId = await putFile(t.ctx);
+    await t.ctx.stack.create(
+      NOTE_TYPE_ID,
+      { body: 'note with attachment' },
+      {
+        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+      },
+    );
+    const { status } = await req(t.app, 'DELETE', `/attachments/${fileId}`, {
+      token: TEST_TOKEN,
+    });
+    expect(status).toBe(409);
   });
 
   it('rejects a non-owner entity even with a write grant on a referencing record', async () => {

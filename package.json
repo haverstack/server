@@ -17,8 +17,8 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@haverstack/adapter-sqlite": "^0.2.1",
-    "@haverstack/core": "^0.2.0",
+    "@haverstack/adapter-sqlite": "^0.3.0",
+    "@haverstack/core": "^0.3.0",
     "@hono/node-server": "^1.13.7",
     "hono": "^4.6.0",
     "pino": "^9.5.0",
