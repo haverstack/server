@@ -444,7 +444,9 @@ describe('Records', () => {
       // Step 3: try to escalate by rewriting the read grant to include broad actions
       const { status } = await req(t.app, 'PATCH', `/records/${readGrant.id}`, {
         token,
-        body: { content: { typeId: NOTE_TYPE_ID, actions: ['read-any', 'update-any', 'delete-any'] } },
+        body: {
+          content: { typeId: NOTE_TYPE_ID, actions: ['read-any', 'update-any', 'delete-any'] },
+        },
       });
       expect(status).toBe(403);
 
