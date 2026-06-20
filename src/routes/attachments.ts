@@ -8,7 +8,7 @@ import { requireAuth, requireOwner } from '../middleware/auth.js';
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { adapter, stack } = ctx;
-  const ownerEntityId = stack.ownerEntityId;
+  const { ownerEntityId } = stack;
 
   // POST /attachments — upload raw binary, Content-Type = MIME type
   app.post('/', requireAuth(), async (c) => {
@@ -43,22 +43,10 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     // Find the _attachment@1 record to get metadata
     const metaResult = await stack.query({
-      filter: {
-        typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-        ...(adapter.capabilities.contentFieldQuery && { content: { fileId } }),
-      },
-      limit: adapter.capabilities.contentFieldQuery ? 1 : undefined,
+      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
+      limit: 1,
     });
-
-    let attachmentContent: AttachmentContent | null;
-    if (adapter.capabilities.contentFieldQuery) {
-      attachmentContent = (metaResult.records[0]?.content as AttachmentContent) ?? null;
-    } else {
-      const record = metaResult.records.find(
-        (r) => (r.content as AttachmentContent).fileId === fileId,
-      );
-      attachmentContent = (record?.content as AttachmentContent) ?? null;
-    }
+    const attachmentContent = (metaResult.records[0]?.content as AttachmentContent) ?? null;
 
     if (!attachmentContent) return c.json({ error: 'Attachment not found' }, 404);
 
@@ -86,15 +74,9 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     // Find all _attachment@1 records tracking this file
     const metaResult = await stack.query({
-      filter: {
-        typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-        ...(adapter.capabilities.contentFieldQuery && { content: { fileId } }),
-      },
+      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
     });
-
-    const attachmentRecords = adapter.capabilities.contentFieldQuery
-      ? metaResult.records
-      : metaResult.records.filter((r) => (r.content as AttachmentContent).fileId === fileId);
+    const attachmentRecords = metaResult.records;
 
     if (!attachmentRecords.length) return c.json({ error: 'Attachment not found' }, 404);
 
@@ -171,7 +153,7 @@ async function isAttachmentAccessible(
   requesterEntityId: string | null,
   ctx: StackContext,
 ): Promise<boolean> {
-  const { stack, adapter } = ctx;
+  const { stack } = ctx;
   if (requesterEntityId && requesterEntityId === stack.ownerEntityId) return true;
 
   const result = await stack.asEntity(requesterEntityId).query({
@@ -186,13 +168,11 @@ async function isAttachmentAccessible(
       filter: {
         typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
         entityId: requesterEntityId,
-        ...(adapter.capabilities.contentFieldQuery && { content: { fileId } }),
+        content: { fileId },
       },
-      limit: adapter.capabilities.contentFieldQuery ? 1 : undefined,
+      limit: 1,
     });
-    if (uploadResult.records.some((r) => (r.content as AttachmentContent).fileId === fileId)) {
-      return true;
-    }
+    if (uploadResult.records.length > 0) return true;
   }
 
   return false;
