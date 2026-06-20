@@ -41,11 +41,11 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const accessible = await isAttachmentAccessible(fileId, auth?.entityId ?? null, ctx);
     if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
 
-    // Owner-level query for mimeType and size — safe since both are inferrable from
-    // the file bytes, which the requester already has permission to access.
+    // Owner-level query for all _attachment@1 records for this file. MimeType and
+    // size are safe to expose at owner scope since they're inferrable from the file
+    // bytes, which the requester already has permission to access.
     const metaResult = await stack.query({
       filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
-      limit: 1,
     });
     const attachmentContent = (metaResult.records[0]?.content as AttachmentContent) ?? null;
 
@@ -58,14 +58,9 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    // Filename is pure metadata — only expose it if the requester can read the
-    // _attachment@1 record through their own entity scope.
-    const scopedResult = await stack.asEntity(auth?.entityId ?? null).query({
-      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
-      limit: 1,
-    });
-    const visibleFilename = (scopedResult.records[0]?.content as AttachmentContent | undefined)
-      ?.filename;
+    // Filename is pure metadata — only expose it from the requester's own upload record.
+    const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
+    const visibleFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
 
     const headers: Record<string, string> = {
       'Content-Type': attachmentContent.mimeType,
