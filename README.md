@@ -21,6 +21,21 @@ The server listens on `PORT` (default `3000`). On first run it initializes a new
 
 ---
 
+## Docker
+
+```sh
+docker run -d \
+  -e OWNER_TOKEN=<secret> \
+  -e ENTITY_ID=<your-entity-id> \
+  -p 3000:3000 \
+  -v haverstack-data:/app/data \
+  ghcr.io/haverstack/server:latest
+```
+
+`/app/data` holds the SQLite database and attachments — mount a volume there for persistence. Set `ENTITY_ID` only on first run; it is ignored once the database exists.
+
+---
+
 ## Configuration
 
 All configuration is via environment variables. See `.env.example` for the full list.
@@ -29,84 +44,12 @@ All configuration is via environment variables. See `.env.example` for the full 
 | ---------------------- | --------- | ------------------ | -------------------------------------------------------- |
 | `OWNER_TOKEN`          | Yes       | —                  | Bearer token for the stack owner. Treat like a password. |
 | `ENTITY_ID`            | First run | —                  | Owner entity ID. Only needed when initializing a new DB. |
-| `DB_PATH`              | No        | `./stack.db`       | Path to the SQLite database file.                        |
+| `DB_PATH`              | No        | `/app/data/stack.db` (Docker) / `./stack.db` | Path to the SQLite database file. |
 | `PORT`                 | No        | `3000`             | Port to listen on.                                       |
 | `TIMEZONE`             | No        | `UTC`              | IANA timezone. Only used on first run.                   |
-| `CORS_ORIGINS`         | No        | `*`                | Allowed origins, comma-separated or `*`.                 |
+| `CORS_ORIGINS`         | No        | `` (none)          | Allowed origins, comma-separated or `*`.                 |
 | `BASE_URL`             | No        | auto-detected      | Canonical base URL of this server.                       |
 | `MAX_ATTACHMENT_BYTES` | No        | `52428800` (50 MB) | Maximum attachment upload size.                          |
-
----
-
-## API
-
-All routes are prefixed by the base URL. Requests are authenticated with a `Bearer` token in the `Authorization` header.
-
-### Discovery
-
-| Method | Path                 | Auth | Description                     |
-| ------ | -------------------- | ---- | ------------------------------- |
-| GET    | `/.well-known/stack` | None | Stack metadata and capabilities |
-| GET    | `/health`            | None | Liveness check                  |
-
-### Records
-
-| Method | Path                             | Auth     | Description                             |
-| ------ | -------------------------------- | -------- | --------------------------------------- |
-| GET    | `/records`                       | Optional | Query records via URL params            |
-| POST   | `/records/query`                 | Optional | Query records with content filters      |
-| POST   | `/records`                       | Required | Create a record                         |
-| GET    | `/records/:id`                   | Optional | Get a record by ID                      |
-| PATCH  | `/records/:id`                   | Required | Update record content (merge patch)     |
-| DELETE | `/records/:id`                   | Required | Soft-delete (or hard with `?hard=true`) |
-| GET    | `/records/:id/permissions`       | Optional | Get permissions                         |
-| PUT    | `/records/:id/permissions`       | Required | Replace permissions                     |
-| GET    | `/records/:id/associations`      | Optional | List associations                       |
-| POST   | `/records/:id/associations`      | Required | Add an association                      |
-| DELETE | `/records/:id/associations`      | Required | Remove an association                   |
-| GET    | `/records/:id/versions`          | Optional | List version history                    |
-| GET    | `/records/:id/versions/:version` | Optional | Get a specific version                  |
-| POST   | `/records/:id/restore/:version`  | Required | Restore a previous version              |
-
-### Types
-
-| Method | Path         | Auth       | Description               |
-| ------ | ------------ | ---------- | ------------------------- |
-| GET    | `/types`     | None       | List all registered types |
-| GET    | `/types/:id` | None       | Get a type by ID          |
-| POST   | `/types`     | Owner only | Register a new type       |
-
-### Attachments
-
-| Method | Path                   | Auth       | Description     |
-| ------ | ---------------------- | ---------- | --------------- |
-| POST   | `/attachments`         | Required   | Upload a file   |
-| GET    | `/attachments/:fileId` | Optional   | Download a file |
-| DELETE | `/attachments/:fileId` | Owner only | Delete a file   |
-
-### Entity & Tokens
-
-| Method | Path          | Auth       | Description                    |
-| ------ | ------------- | ---------- | ------------------------------ |
-| GET    | `/entity`     | Required   | Get the owner entity record    |
-| PATCH  | `/entity`     | Owner only | Update the owner entity record |
-| GET    | `/tokens`     | Owner only | List API tokens                |
-| POST   | `/tokens`     | Owner only | Create an API token            |
-| DELETE | `/tokens/:id` | Owner only | Revoke an API token            |
-
----
-
-## Permissions
-
-Records are private by default (readable only by the stack owner). The `permissions` field controls access:
-
-```json
-{ "access": "public" }
-{ "access": "entity", "entityId": "...", "read": true, "write": false }
-{ "access": "group",  "groupId":  "...", "read": true, "write": true  }
-```
-
-Non-owner entities authenticate with tokens issued via `POST /tokens` and are subject to both record-level permissions and create-grant checks on write.
 
 ---
 
@@ -120,6 +63,13 @@ pnpm typecheck        # Type check
 pnpm lint             # Lint
 pnpm format:check     # Check formatting
 ```
+
+---
+
+## Docs
+
+- [API reference](./docs/api.md) — routes, auth, and permissions
+- [Deployment guide](./docs/deployment.md) — TLS, CORS, and rate limiting
 
 ---
 
