@@ -41,7 +41,7 @@ export function loadConfig(): Config {
     entityId,
     timezone,
     ownerToken: required('OWNER_TOKEN'),
-    corsOrigins: optional('CORS_ORIGINS', '*'),
+    corsOrigins: optional('CORS_ORIGINS', ''),
     baseUrl: process.env['BASE_URL'] ?? null,
     isNewDb,
     maxAttachmentBytes: parseInt(optional('MAX_ATTACHMENT_BYTES', String(50 * 1024 * 1024)), 10),
