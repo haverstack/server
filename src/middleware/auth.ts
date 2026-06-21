@@ -1,6 +1,13 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
+
+function safeCompare(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
 
 export function authMiddleware(ownerToken: string, ctx: StackContext): MiddlewareHandler<AppEnv> {
   const ownerEntityId = ctx.stack.ownerEntityId;
@@ -9,8 +16,11 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
     const header = c.req.header('Authorization');
     if (header?.startsWith('Bearer ')) {
       const token = header.slice(7);
-      if (token === ownerToken) {
-        c.set('auth', ownerEntityId ? { entityId: ownerEntityId } : null);
+      if (safeCompare(token, ownerToken)) {
+        if (!ownerEntityId) {
+          return c.json({ error: 'Server misconfiguration: owner entity not set' }, 500);
+        }
+        c.set('auth', { entityId: ownerEntityId });
       } else {
         const result = await ctx.adapter.lookupToken(token);
         c.set('auth', result ? { entityId: result.entityId } : null);
