@@ -6,6 +6,8 @@ import { serializeRecord, serializeVersion } from '../lib/serialize.js';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
 
+const MAX_QUERY_LIMIT = 1000;
+
 // ---------------------------------------------------------------------------
 // Query parsing helpers
 // ---------------------------------------------------------------------------
@@ -143,8 +145,6 @@ function parseQueryParams(url: URL): StackQuery {
 
   return query;
 }
-
-const MAX_QUERY_LIMIT = 1000;
 
 // ---------------------------------------------------------------------------
 // Route factory
