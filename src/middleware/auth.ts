@@ -17,9 +17,6 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
     if (header?.startsWith('Bearer ')) {
       const token = header.slice(7);
       if (safeCompare(token, ownerToken)) {
-        if (!ownerEntityId) {
-          return c.json({ error: 'Server misconfiguration: owner entity not set' }, 500);
-        }
         c.set('auth', { entityId: ownerEntityId });
       } else {
         const result = await ctx.adapter.lookupToken(token);
@@ -39,12 +36,11 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
   };
 }
 
-export function requireOwner(ownerEntityId: string | null): MiddlewareHandler<AppEnv> {
+export function requireOwner(ownerEntityId: string): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const auth = c.get('auth');
     if (!auth) return c.json({ error: 'Unauthorized' }, 401);
-    if (!ownerEntityId || auth.entityId !== ownerEntityId)
-      return c.json({ error: 'Forbidden' }, 403);
+    if (auth.entityId !== ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
     await next();
   };
 }
