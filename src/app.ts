@@ -17,6 +17,8 @@ import { tokenRoutes } from './routes/tokens.js';
 
 export type { AppEnv };
 
+const JSON_BODY_LIMIT = 1 * 1024 * 1024; // 1 MB
+
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
@@ -40,7 +42,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   // Cap JSON body size on all routes that accept JSON. Attachment uploads are
   // excluded here — they enforce their own limit via maxAttachmentBytes.
   const jsonBodyLimit = bodyLimit({
-    maxSize: 1 * 1024 * 1024,
+    maxSize: JSON_BODY_LIMIT,
     onError: (c) => c.json({ error: 'Request body too large' }, 413),
   });
   app.use('/records/*', jsonBodyLimit);
