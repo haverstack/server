@@ -1,5 +1,7 @@
 import { existsSync } from 'node:fs';
 
+const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB
+
 function required(name: string): string {
   const val = process.env[name];
   if (!val) throw new Error(`Missing required environment variable: ${name}`);
@@ -41,7 +43,7 @@ export function loadConfig(): Config {
   }
 
   const maxAttachmentBytes = parseInt(
-    optional('MAX_ATTACHMENT_BYTES', String(50 * 1024 * 1024)),
+    optional('MAX_ATTACHMENT_BYTES', String(DEFAULT_MAX_ATTACHMENT_BYTES)),
     10,
   );
   if (isNaN(maxAttachmentBytes) || maxAttachmentBytes < 1) {
