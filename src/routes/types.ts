@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
-import { serializeType } from '../lib/serialize.js';
+import { parseDate, serializeType } from '../lib/serialize.js';
+import { hashSchema } from '@haverstack/core';
 import type { StackType, TypeSchema } from '@haverstack/core';
 
 export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
@@ -34,14 +35,18 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
     if (!body.schemaHash || typeof body.schemaHash !== 'string')
       return c.json({ error: 'schemaHash is required' }, 400);
 
+    const computedHash = await hashSchema(body.schema as TypeSchema);
+    if (body.schemaHash !== computedHash)
+      return c.json({ error: 'schemaHash does not match schema' }, 422);
+
     const type: StackType = {
       id: body.id,
       baseId: body.baseId,
       version: body.version,
       name: body.name,
       schema: body.schema as TypeSchema,
-      schemaHash: body.schemaHash,
-      createdAt: body.createdAt ? new Date(body.createdAt as string) : new Date(),
+      schemaHash: computedHash,
+      createdAt: parseDate(body.createdAt) ?? new Date(),
       ...(body.migratesFrom ? { migratesFrom: body.migratesFrom as string } : {}),
     };
 

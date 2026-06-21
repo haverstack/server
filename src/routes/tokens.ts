@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
+import { parseDate } from '../lib/serialize.js';
 import type { TokenInfo } from '@haverstack/adapter-sqlite';
 
 export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
@@ -13,7 +14,8 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   app.post('/', requireOwner(ownerEntityId), async (c) => {
     const body = await c.req.json<{ entityId?: string; label?: string; expiresAt?: string }>();
     const entityId = body.entityId ?? ownerEntityId!;
-    const expiresAt = body.expiresAt ? new Date(body.expiresAt) : undefined;
+    const expiresAt = body.expiresAt ? parseDate(body.expiresAt) : undefined;
+    if (body.expiresAt && !expiresAt) return c.json({ error: 'Invalid expiresAt date' }, 422);
 
     const { id, token } = await adapter.createToken(entityId, { label: body.label, expiresAt });
 
