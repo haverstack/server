@@ -30,7 +30,12 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
 
   app.use(
     cors({
-      origin: config.corsOrigins === '*' ? '*' : config.corsOrigins.split(',').map((s) => s.trim()),
+      origin:
+        config.corsOrigins === '*'
+          ? '*'
+          : config.corsOrigins
+            ? config.corsOrigins.split(',').map((s) => s.trim())
+            : [],
       allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
       allowHeaders: ['Authorization', 'Content-Type', 'Content-Disposition'],
       exposeHeaders: ['X-Request-Id', 'Content-Disposition'],
