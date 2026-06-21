@@ -68,7 +68,7 @@ function parseQueryBody(raw: unknown): StackQuery {
     };
   }
 
-  if (typeof body.limit === 'number') query.limit = body.limit;
+  if (typeof body.limit === 'number') query.limit = Math.min(body.limit, MAX_QUERY_LIMIT);
   if (typeof body.cursor === 'string') query.cursor = body.cursor;
 
   return query;
@@ -136,13 +136,15 @@ function parseQueryParams(url: URL): StackQuery {
   if (sort) query.sort = { field: sort, ...(direction && { direction }) };
 
   const limit = getOne(url, 'limit');
-  if (limit) query.limit = parseInt(limit, 10);
+  if (limit) query.limit = Math.min(parseInt(limit, 10), MAX_QUERY_LIMIT);
 
   const cursor = getOne(url, 'cursor');
   if (cursor) query.cursor = cursor;
 
   return query;
 }
+
+const MAX_QUERY_LIMIT = 1000;
 
 // ---------------------------------------------------------------------------
 // Route factory
