@@ -23,9 +23,8 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     }
 
     const filename = parseFilename(c.req.header('Content-Disposition'));
-    const mimeType = resolveMimeType(
-      c.req.header('Content-Type') ?? 'application/octet-stream',
-      filename,
+    const mimeType = sanitizeMimeType(
+      resolveMimeType(c.req.header('Content-Type') ?? 'application/octet-stream', filename),
     );
 
     const auth = c.get('auth');
@@ -62,13 +61,16 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
     const visibleFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
 
+    const disposition = visibleFilename
+      ? `attachment; filename*=UTF-8''${encodeURIComponent(visibleFilename)}`
+      : 'attachment';
+
     const headers: Record<string, string> = {
       'Content-Type': attachmentContent.mimeType,
       'Content-Length': String(attachmentContent.size),
+      'Content-Disposition': disposition,
+      'X-Content-Type-Options': 'nosniff',
     };
-    if (visibleFilename) {
-      headers['Content-Disposition'] = `attachment; filename="${visibleFilename}"`;
-    }
 
     return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, headers);
   });
@@ -102,13 +104,38 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
 function parseFilename(disposition: string | undefined): string | undefined {
   if (!disposition) return undefined;
-  const match = disposition.match(/filename="([^"]+)"/);
-  return match?.[1];
+  // RFC 5987 form takes priority: filename*=UTF-8''<percent-encoded>
+  const rfc5987 = disposition.match(/filename\*=UTF-8''([^\s;]+)/i);
+  if (rfc5987) return decodeURIComponent(rfc5987[1]);
+  // Plain quoted form: filename="..." (used by curl and other HTTP clients)
+  const quoted = disposition.match(/filename="([^"]+)"/);
+  return quoted?.[1];
+}
+
+// MIME types that browsers can use to execute scripts or parse as markup.
+// Uploaders supplying one of these get application/octet-stream instead.
+const BLOCKED_MIME_TYPES = new Set([
+  'text/html',
+  'text/javascript',
+  'application/javascript',
+  'application/x-javascript',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'text/xml',
+  'application/xml',
+]);
+
+function sanitizeMimeType(mimeType: string): string {
+  const base = mimeType.split(';')[0].trim().toLowerCase();
+  return BLOCKED_MIME_TYPES.has(base) ? 'application/octet-stream' : mimeType;
 }
 
 // Map of common file extensions to MIME types. Used to upgrade
 // application/octet-stream when the client omits a specific Content-Type
 // but provided a filename with a recognisable extension.
+// Omits types in BLOCKED_MIME_TYPES — those are sanitized to
+// application/octet-stream anyway, so inferring them from extension
+// serves no purpose.
 const EXTENSION_MIME: Record<string, string> = {
   // Images
   jpg: 'image/jpeg',
@@ -116,7 +143,6 @@ const EXTENSION_MIME: Record<string, string> = {
   png: 'image/png',
   gif: 'image/gif',
   webp: 'image/webp',
-  svg: 'image/svg+xml',
   ico: 'image/x-icon',
   // Documents
   pdf: 'application/pdf',
@@ -124,12 +150,7 @@ const EXTENSION_MIME: Record<string, string> = {
   txt: 'text/plain',
   md: 'text/markdown',
   csv: 'text/csv',
-  html: 'text/html',
-  htm: 'text/html',
-  css: 'text/css',
-  js: 'text/javascript',
   json: 'application/json',
-  xml: 'application/xml',
   // Video
   mp4: 'video/mp4',
   webm: 'video/webm',

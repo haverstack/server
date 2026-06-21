@@ -166,7 +166,9 @@ describe('POST /attachments', () => {
       headers: { Authorization: `Bearer ${TEST_TOKEN}` },
     });
     expect(downloadRes.status).toBe(200);
-    expect(downloadRes.headers.get('Content-Disposition')).toBe('attachment; filename="test.pdf"');
+    expect(downloadRes.headers.get('Content-Disposition')).toBe(
+      "attachment; filename*=UTF-8''test.pdf",
+    );
   });
 
   it('returns 413 when Content-Length exceeds the limit (pre-check)', async () => {
