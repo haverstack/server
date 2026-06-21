@@ -40,16 +40,16 @@ docker run -d \
 
 All configuration is via environment variables. See `.env.example` for the full list.
 
-| Variable               | Required  | Default            | Description                                              |
-| ---------------------- | --------- | ------------------ | -------------------------------------------------------- |
-| `OWNER_TOKEN`          | Yes       | —                  | Bearer token for the stack owner. Treat like a password. |
-| `ENTITY_ID`            | First run | —                  | Owner entity ID. Only needed when initializing a new DB. |
-| `DB_PATH`              | No        | `/app/data/stack.db` (Docker) / `./stack.db` | Path to the SQLite database file. |
-| `PORT`                 | No        | `3000`             | Port to listen on.                                       |
-| `TIMEZONE`             | No        | `UTC`              | IANA timezone. Only used on first run.                   |
-| `CORS_ORIGINS`         | No        | `` (none)          | Allowed origins, comma-separated or `*`.                 |
-| `BASE_URL`             | No        | auto-detected      | Canonical base URL of this server.                       |
-| `MAX_ATTACHMENT_BYTES` | No        | `52428800` (50 MB) | Maximum attachment upload size.                          |
+| Variable               | Required  | Default                                      | Description                                              |
+| ---------------------- | --------- | -------------------------------------------- | -------------------------------------------------------- |
+| `OWNER_TOKEN`          | Yes       | —                                            | Bearer token for the stack owner. Treat like a password. |
+| `ENTITY_ID`            | First run | —                                            | Owner entity ID. Only needed when initializing a new DB. |
+| `DB_PATH`              | No        | `/app/data/stack.db` (Docker) / `./stack.db` | Path to the SQLite database file.                        |
+| `PORT`                 | No        | `3000`                                       | Port to listen on.                                       |
+| `TIMEZONE`             | No        | `UTC`                                        | IANA timezone. Only used on first run.                   |
+| `CORS_ORIGINS`         | No        | `` (none)                                    | Allowed origins, comma-separated or `*`.                 |
+| `BASE_URL`             | No        | auto-detected                                | Canonical base URL of this server.                       |
+| `MAX_ATTACHMENT_BYTES` | No        | `52428800` (50 MB)                           | Maximum attachment upload size.                          |
 
 ---
 

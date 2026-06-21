@@ -24,11 +24,11 @@ All four run in CI and failures block merge.
 
 This project uses [Conventional Commits](https://www.conventionalcommits.org/). Every commit message must start with a type prefix. The release workflow reads commit messages since the last tag to determine the version bump automatically:
 
-| Commit type | Example | Version bump |
-| --- | --- | --- |
-| `feat:` | `feat: add token expiry` | minor |
-| `feat!:` or `BREAKING CHANGE` footer | `feat!: rename /entity to /owner` | major |
-| Anything else (`fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `perf:`) | `fix: return 404 on missing record` | patch |
+| Commit type                                                              | Example                             | Version bump |
+| ------------------------------------------------------------------------ | ----------------------------------- | ------------ |
+| `feat:`                                                                  | `feat: add token expiry`            | minor        |
+| `feat!:` or `BREAKING CHANGE` footer                                     | `feat!: rename /entity to /owner`   | major        |
+| Anything else (`fix:`, `chore:`, `docs:`, `refactor:`, `test:`, `perf:`) | `fix: return 404 on missing record` | patch        |
 
 A scope is optional: `fix(attachments): reject empty filename`.
 
@@ -37,6 +37,6 @@ Getting the type wrong produces the wrong version bump with no warning, so when 
 ## Pull requests
 
 - One concern per PR. Split unrelated changes.
-- The PR description should explain *why*, not just *what* — the diff already shows what changed.
+- The PR description should explain _why_, not just _what_ — the diff already shows what changed.
 - Link to any relevant issue with `Closes #N`.
 - Keep PRs small enough to review in one sitting; large refactors are fine but flag them early.

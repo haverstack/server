@@ -96,8 +96,8 @@ services:
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
     ports:
-      - "80:80"
-      - "443:443"
+      - '80:80'
+      - '443:443'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - letsencrypt:/letsencrypt
@@ -106,7 +106,7 @@ services:
     image: ghcr.io/haverstack/server:latest
     environment:
       OWNER_TOKEN: ${OWNER_TOKEN}
-      ENTITY_ID: ${ENTITY_ID}    # only needed on first run
+      ENTITY_ID: ${ENTITY_ID} # only needed on first run
     volumes:
       - data:/app/data
     labels:

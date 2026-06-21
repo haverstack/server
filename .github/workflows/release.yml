@@ -11,13 +11,13 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, 'chore: release')"
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # push version bump + tag, create release
-      packages: write   # push Docker image to ghcr.io
+      contents: write # push version bump + tag, create release
+      packages: write # push Docker image to ghcr.io
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history so we can inspect commits since last tag
+          fetch-depth: 0 # full history so we can inspect commits since last tag
 
       - uses: pnpm/action-setup@v4
         with:
