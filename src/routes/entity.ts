@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { serializeRecord } from '../lib/serialize.js';
 
 export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
@@ -17,7 +17,7 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeRecord(record));
   });
 
-  app.patch('/', requireAuth(), async (c) => {
+  app.patch('/', requireOwner(ownerEntityId), async (c) => {
     if (!ownerEntityId) return c.json({ error: 'No owner entity configured' }, 404);
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
