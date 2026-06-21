@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
-import { serializeRecord, serializeVersion } from '../lib/serialize.js';
+import { parseDate, serializeRecord, serializeVersion } from '../lib/serialize.js';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
 
@@ -47,15 +47,15 @@ function parseQueryBody(raw: unknown): StackQuery {
     if (f.createdAt) {
       const r = f.createdAt as Record<string, string>;
       filter.createdAt = {
-        ...(r.before && { before: new Date(r.before) }),
-        ...(r.after && { after: new Date(r.after) }),
+        ...(r.before && { before: parseDate(r.before) }),
+        ...(r.after && { after: parseDate(r.after) }),
       };
     }
     if (f.updatedAt) {
       const r = f.updatedAt as Record<string, string>;
       filter.updatedAt = {
-        ...(r.before && { before: new Date(r.before) }),
-        ...(r.after && { after: new Date(r.after) }),
+        ...(r.before && { before: parseDate(r.before) }),
+        ...(r.after && { after: parseDate(r.after) }),
       };
     }
 
