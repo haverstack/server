@@ -35,8 +35,21 @@ export function loadConfig(): Config {
     );
   }
 
+  const port = parseInt(optional('PORT', '3000'), 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid PORT: ${process.env['PORT']}`);
+  }
+
+  const maxAttachmentBytes = parseInt(
+    optional('MAX_ATTACHMENT_BYTES', String(50 * 1024 * 1024)),
+    10,
+  );
+  if (isNaN(maxAttachmentBytes) || maxAttachmentBytes < 1) {
+    throw new Error(`Invalid MAX_ATTACHMENT_BYTES: ${process.env['MAX_ATTACHMENT_BYTES']}`);
+  }
+
   return {
-    port: parseInt(optional('PORT', '3000'), 10),
+    port,
     dbPath,
     entityId,
     timezone,
@@ -44,6 +57,6 @@ export function loadConfig(): Config {
     corsOrigins: optional('CORS_ORIGINS', ''),
     baseUrl: process.env['BASE_URL'] ?? null,
     isNewDb,
-    maxAttachmentBytes: parseInt(optional('MAX_ATTACHMENT_BYTES', String(50 * 1024 * 1024)), 10),
+    maxAttachmentBytes,
   };
 }

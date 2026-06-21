@@ -22,10 +22,12 @@ const JSON_BODY_LIMIT = 1 * 1024 * 1024; // 1 MB
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
-  // Assign a unique request ID to every request for log correlation.
+  // Assign a unique request ID to every request and expose it on the response.
   app.use(async (c, next) => {
-    c.set('requestId', crypto.randomUUID());
+    const id = crypto.randomUUID();
+    c.set('requestId', id);
     await next();
+    c.header('X-Request-Id', id);
   });
 
   app.use(
