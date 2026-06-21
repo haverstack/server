@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { bodyLimit } from 'hono/body-limit';
 import type { Logger } from 'pino';
 import type { StackContext } from './stack.js';
 import type { Config } from './config.js';
@@ -15,6 +16,8 @@ import { entityRoutes } from './routes/entity.js';
 import { tokenRoutes } from './routes/tokens.js';
 
 export type { AppEnv };
+
+const JSON_BODY_LIMIT = 1 * 1024 * 1024; // 1 MB
 
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -35,6 +38,17 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   );
   app.onError(errorMiddleware(logger));
   app.use(authMiddleware(config.ownerToken, ctx));
+
+  // Cap JSON body size on all routes that accept JSON. Attachment uploads are
+  // excluded here — they enforce their own limit via maxAttachmentBytes.
+  const jsonBodyLimit = bodyLimit({
+    maxSize: JSON_BODY_LIMIT,
+    onError: (c) => c.json({ error: 'Request body too large' }, 413),
+  });
+  app.use('/records/*', jsonBodyLimit);
+  app.use('/types/*', jsonBodyLimit);
+  app.use('/tokens/*', jsonBodyLimit);
+  app.use('/entity/*', jsonBodyLimit);
 
   app.route('/.well-known', wellknownRoutes(ctx));
   app.route('/health', healthRoutes());
