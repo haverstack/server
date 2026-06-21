@@ -107,9 +107,9 @@ function parseFilename(disposition: string | undefined): string | undefined {
   // RFC 5987 form takes priority: filename*=UTF-8''<percent-encoded>
   const rfc5987 = disposition.match(/filename\*=UTF-8''([^\s;]+)/i);
   if (rfc5987) return decodeURIComponent(rfc5987[1]);
-  // Legacy form: filename="..."
-  const legacy = disposition.match(/filename="([^"]+)"/);
-  return legacy?.[1];
+  // Plain quoted form: filename="..." (used by curl and other HTTP clients)
+  const quoted = disposition.match(/filename="([^"]+)"/);
+  return quoted?.[1];
 }
 
 // MIME types that browsers can use to execute scripts or parse as markup.
