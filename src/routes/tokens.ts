@@ -15,7 +15,7 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
     const body = await c.req.json<{ entityId?: string; label?: string; expiresAt?: string }>();
     const entityId = body.entityId ?? ownerEntityId!;
     const expiresAt = body.expiresAt ? parseDate(body.expiresAt) : undefined;
-    if (body.expiresAt && !expiresAt) return c.json({ error: 'Invalid expiresAt date' }, 400);
+    if (body.expiresAt && !expiresAt) return c.json({ error: 'Invalid expiresAt date' }, 422);
 
     const { id, token } = await adapter.createToken(entityId, { label: body.label, expiresAt });
 

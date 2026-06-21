@@ -37,7 +37,7 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
 
     const computedHash = await hashSchema(body.schema as TypeSchema);
     if (body.schemaHash !== computedHash)
-      return c.json({ error: 'schemaHash does not match schema' }, 400);
+      return c.json({ error: 'schemaHash does not match schema' }, 422);
 
     const type: StackType = {
       id: body.id,
