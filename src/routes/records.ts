@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
 import { parseDate, serializeRecord, serializeVersion } from '../lib/serialize.js';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
@@ -153,7 +153,6 @@ function parseQueryParams(url: URL): StackQuery {
 export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack } = ctx;
-  const { ownerEntityId } = stack;
 
   // POST /records/query — full query with content-field filters
   // Registered before /:id patterns to avoid param capture on the literal "query" segment.
@@ -278,7 +277,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json({ permissions: record.permissions ?? [] });
   });
 
-  app.put('/:id/permissions', requireOwner(ownerEntityId), async (c) => {
+  app.put('/:id/permissions', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<{ permissions: Permission[] }>();
