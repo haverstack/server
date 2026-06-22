@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
-import { parseDate } from '../lib/serialize.js';
+import { parseDate } from '@haverstack/wire-types';
 import type { TokenInfo } from '@haverstack/adapter-sqlite';
 
 export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {

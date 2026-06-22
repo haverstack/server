@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
-import { parseDate, serializeRecord, serializeVersion } from '../lib/serialize.js';
+import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { SYSTEM_TYPES } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
 
