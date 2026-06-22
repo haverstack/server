@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
-import { serializeRecord } from '../lib/serialize.js';
+import { serializeRecord } from '@haverstack/wire-types';
 
 export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
