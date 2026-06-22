@@ -148,14 +148,33 @@ describe('POST /attachments', () => {
     await t.cleanup();
   });
 
-  it('preserves filename from Content-Disposition on upload and returns it on download', async () => {
-    const content = new TextEncoder().encode('PDF content');
+  it('stores bytes only — does not create an _attachment@1 record', async () => {
+    const content = new TextEncoder().encode('file content');
     const uploadRes = await t.app.request('/attachments', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${TEST_TOKEN}`,
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': 'attachment; filename="test.pdf"',
+        'Content-Type': 'text/plain',
+        'Content-Disposition': 'attachment; filename="ignored.txt"',
+      },
+      body: content,
+    });
+    expect(uploadRes.status).toBe(201);
+    const { fileId } = (await uploadRes.json()) as { fileId: string };
+
+    const metaResult = await t.ctx.stack.query({
+      filter: { typeId: '_attachment@1', content: { fileId } },
+    });
+    expect(metaResult.records).toHaveLength(0);
+  });
+
+  it('serves file with application/octet-stream fallback when no _attachment@1 record exists', async () => {
+    const content = new TextEncoder().encode('raw bytes');
+    const uploadRes = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${TEST_TOKEN}`,
+        'Content-Type': 'image/png',
       },
       body: content,
     });
@@ -166,6 +185,37 @@ describe('POST /attachments', () => {
       headers: { Authorization: `Bearer ${TEST_TOKEN}` },
     });
     expect(downloadRes.status).toBe(200);
+    expect(downloadRes.headers.get('Content-Type')).toBe('application/octet-stream');
+    expect(downloadRes.headers.get('Content-Disposition')).toBe('attachment');
+  });
+
+  it('returns mimeType and filename from _attachment@1 record created after upload', async () => {
+    const content = new TextEncoder().encode('PDF content');
+    const uploadRes = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${TEST_TOKEN}`,
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': 'attachment; filename="ignored.pdf"',
+      },
+      body: content,
+    });
+    expect(uploadRes.status).toBe(201);
+    const { fileId } = (await uploadRes.json()) as { fileId: string };
+
+    // Create the metadata record (what ScopedStack.putAttachment does via POST /records)
+    await t.ctx.stack.create('_attachment@1', {
+      fileId,
+      mimeType: 'application/pdf',
+      size: content.byteLength,
+      filename: 'test.pdf',
+    });
+
+    const downloadRes = await t.app.request(`/attachments/${fileId}`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(downloadRes.status).toBe(200);
+    expect(downloadRes.headers.get('Content-Type')).toBe('application/pdf');
     expect(downloadRes.headers.get('Content-Disposition')).toBe(
       "attachment; filename*=UTF-8''test.pdf",
     );
