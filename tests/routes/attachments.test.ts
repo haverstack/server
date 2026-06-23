@@ -221,6 +221,40 @@ describe('POST /attachments', () => {
     );
   });
 
+  it('serves blocked mimeTypes as application/octet-stream', async () => {
+    const content = new TextEncoder().encode('<script>alert(1)</script>');
+    const uploadRes = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+      body: content,
+    });
+    const { fileId } = (await uploadRes.json()) as { fileId: string };
+
+    for (const blocked of [
+      'text/html',
+      'image/svg+xml',
+      'text/javascript',
+      'application/javascript',
+    ]) {
+      await t.ctx.stack.create(
+        '_attachment@1',
+        { fileId, mimeType: blocked, size: content.byteLength },
+        { entityId: TEST_ENTITY_ID },
+      );
+      const res = await t.app.request(`/attachments/${fileId}`, {
+        headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+      });
+      expect(res.headers.get('Content-Type'), `blocked type ${blocked}`).toBe(
+        'application/octet-stream',
+      );
+      // Clean up so the next iteration gets a fresh record
+      const meta = await t.ctx.stack.query({
+        filter: { typeId: '_attachment@1', content: { fileId } },
+      });
+      for (const r of meta.records) await t.ctx.stack.delete(r.id, { hard: true });
+    }
+  });
+
   it('returns 413 when Content-Length exceeds the limit (pre-check)', async () => {
     const smallConfig = { ...testConfig(t.dbPath), maxAttachmentBytes: 10 };
     const smallApp = createApp(t.ctx, smallConfig, logger);

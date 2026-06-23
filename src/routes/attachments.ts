@@ -60,7 +60,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       : 'attachment';
 
     const headers: Record<string, string> = {
-      'Content-Type': attachmentContent?.mimeType ?? 'application/octet-stream',
+      'Content-Type': sanitizeMimeType(attachmentContent?.mimeType ?? 'application/octet-stream'),
       'Content-Length': String(attachmentContent?.size ?? data.byteLength),
       'Content-Disposition': disposition,
       'X-Content-Type-Options': 'nosniff',
@@ -102,6 +102,24 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   });
 
   return app;
+}
+
+// MIME types that browsers can use to execute scripts or parse as markup.
+// Callers requesting one of these as Content-Type receive application/octet-stream instead.
+const BLOCKED_MIME_TYPES = new Set([
+  'text/html',
+  'text/javascript',
+  'application/javascript',
+  'application/x-javascript',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'text/xml',
+  'application/xml',
+]);
+
+function sanitizeMimeType(mimeType: string): string {
+  const base = mimeType.split(';')[0].trim().toLowerCase();
+  return BLOCKED_MIME_TYPES.has(base) ? 'application/octet-stream' : mimeType;
 }
 
 /**
