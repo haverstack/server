@@ -38,11 +38,11 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 
 ## Attachments
 
-| Method | Path                   | Auth       | Description     |
-| ------ | ---------------------- | ---------- | --------------- |
-| POST   | `/attachments`         | Required   | Upload a file   |
-| GET    | `/attachments/:fileId` | Optional   | Download a file |
-| DELETE | `/attachments/:fileId` | Owner only | Delete a file   |
+| Method | Path                   | Auth       | Description                                                    |
+| ------ | ---------------------- | ---------- | -------------------------------------------------------------- |
+| POST   | `/attachments`         | Required   | Store raw file bytes (bytes only — no metadata record created) |
+| GET    | `/attachments/:fileId` | Optional   | Download a file                                                |
+| DELETE | `/attachments/:fileId` | Owner only | Delete a file                                                  |
 
 ## Entity & Tokens
 

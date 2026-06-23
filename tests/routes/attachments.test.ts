@@ -137,6 +137,42 @@ describe('GET /attachments/:fileId', () => {
     const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     expect(status).toBe(401);
   });
+
+  it('uses ?contentType param as Content-Type without a metadata record', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?contentType=image/png`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+  });
+
+  it('uses ?filename param in Content-Disposition without a metadata record', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?filename=photo.png`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Disposition')).toBe("attachment; filename*=UTF-8''photo.png");
+  });
+
+  it('infers Content-Type from ?filename extension when no ?contentType is given', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?filename=photo.png`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+  });
+
+  it('sanitizes a blocked ?contentType param to application/octet-stream', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?contentType=text/html`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/octet-stream');
+  });
 });
 
 describe('POST /attachments', () => {
@@ -148,14 +184,33 @@ describe('POST /attachments', () => {
     await t.cleanup();
   });
 
-  it('preserves filename from Content-Disposition on upload and returns it on download', async () => {
-    const content = new TextEncoder().encode('PDF content');
+  it('stores bytes only — does not create an _attachment@1 record', async () => {
+    const content = new TextEncoder().encode('file content');
     const uploadRes = await t.app.request('/attachments', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${TEST_TOKEN}`,
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': 'attachment; filename="test.pdf"',
+        'Content-Type': 'text/plain',
+        'Content-Disposition': 'attachment; filename="ignored.txt"',
+      },
+      body: content,
+    });
+    expect(uploadRes.status).toBe(201);
+    const { fileId } = (await uploadRes.json()) as { fileId: string };
+
+    const metaResult = await t.ctx.stack.query({
+      filter: { typeId: '_attachment@1', content: { fileId } },
+    });
+    expect(metaResult.records).toHaveLength(0);
+  });
+
+  it('serves file with application/octet-stream when no query params are given', async () => {
+    const content = new TextEncoder().encode('raw bytes');
+    const uploadRes = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${TEST_TOKEN}`,
+        'Content-Type': 'image/png',
       },
       body: content,
     });
@@ -166,9 +221,54 @@ describe('POST /attachments', () => {
       headers: { Authorization: `Bearer ${TEST_TOKEN}` },
     });
     expect(downloadRes.status).toBe(200);
+    expect(downloadRes.headers.get('Content-Type')).toBe('application/octet-stream');
+    expect(downloadRes.headers.get('Content-Disposition')).toBe('attachment');
+  });
+
+  it('uses ?contentType and ?filename query params for Content-Type and Content-Disposition', async () => {
+    const content = new TextEncoder().encode('PDF content');
+    const uploadRes = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+      body: content,
+    });
+    expect(uploadRes.status).toBe(201);
+    const { fileId } = (await uploadRes.json()) as { fileId: string };
+
+    const downloadRes = await t.app.request(
+      `/attachments/${fileId}?contentType=application/pdf&filename=test.pdf`,
+      { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
+    );
+    expect(downloadRes.status).toBe(200);
+    expect(downloadRes.headers.get('Content-Type')).toBe('application/pdf');
     expect(downloadRes.headers.get('Content-Disposition')).toBe(
       "attachment; filename*=UTF-8''test.pdf",
     );
+  });
+
+  it('serves blocked ?contentType values as application/octet-stream', async () => {
+    const content = new TextEncoder().encode('<script>alert(1)</script>');
+    const uploadRes = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+      body: content,
+    });
+    const { fileId } = (await uploadRes.json()) as { fileId: string };
+
+    for (const blocked of [
+      'text/html',
+      'image/svg+xml',
+      'text/javascript',
+      'application/javascript',
+    ]) {
+      const res = await t.app.request(
+        `/attachments/${fileId}?contentType=${encodeURIComponent(blocked)}`,
+        { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
+      );
+      expect(res.headers.get('Content-Type'), `blocked type ${blocked}`).toBe(
+        'application/octet-stream',
+      );
+    }
   });
 
   it('returns 413 when Content-Length exceeds the limit (pre-check)', async () => {

@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { SYSTEM_TYPES } from '@haverstack/core';
-import type { AttachmentContent } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
@@ -10,7 +9,10 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   const { adapter, stack } = ctx;
   const { ownerEntityId } = stack;
 
-  // POST /attachments — upload raw binary, Content-Type = MIME type
+  // POST /attachments — upload raw binary; stores bytes only.
+  // Callers should follow up with POST /records to create the _attachment@1
+  // metadata record (mimeType, size, filename). The SDK's ScopedStack.putAttachment()
+  // does this automatically.
   app.post('/', requireAuth(), async (c) => {
     const contentLength = Number(c.req.header('Content-Length') ?? 0);
     if (contentLength > maxAttachmentBytes) {
@@ -22,13 +24,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       return c.json({ error: 'Attachment too large' }, 413);
     }
 
-    const filename = parseFilename(c.req.header('Content-Disposition'));
-    const mimeType = sanitizeMimeType(
-      resolveMimeType(c.req.header('Content-Type') ?? 'application/octet-stream', filename),
-    );
-
-    const auth = c.get('auth');
-    const fileId = await stack.asEntity(auth!.entityId).putAttachment(data, mimeType, filename);
+    const fileId = await adapter.putAttachment(data);
     return c.json({ fileId }, 201);
   });
 
@@ -40,16 +36,6 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const accessible = await isAttachmentAccessible(fileId, auth?.entityId ?? null, ctx);
     if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
 
-    // Owner-level query for all _attachment@1 records for this file. MimeType and
-    // size are safe to expose at owner scope since they're inferrable from the file
-    // bytes, which the requester already has permission to access.
-    const metaResult = await stack.query({
-      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
-    });
-    const attachmentContent = (metaResult.records[0]?.content as AttachmentContent) ?? null;
-
-    if (!attachmentContent) return c.json({ error: 'Attachment not found' }, 404);
-
     let data: Uint8Array;
     try {
       data = await adapter.getAttachment(fileId);
@@ -57,33 +43,40 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    // Filename is pure metadata — only expose it from the requester's own upload record.
-    const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
-    const visibleFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
+    const contentTypeParam = c.req.query('contentType');
+    const filenameParam = c.req.query('filename');
 
-    const disposition = visibleFilename
-      ? `attachment; filename*=UTF-8''${encodeURIComponent(visibleFilename)}`
+    const disposition = filenameParam
+      ? `attachment; filename*=UTF-8''${encodeURIComponent(filenameParam)}`
       : 'attachment';
 
-    const headers: Record<string, string> = {
-      'Content-Type': attachmentContent.mimeType,
-      'Content-Length': String(attachmentContent.size),
+    return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, {
+      'Content-Type': sanitizeMimeType(
+        contentTypeParam ?? resolveMimeType('application/octet-stream', filenameParam),
+      ),
+      'Content-Length': String(data.byteLength),
       'Content-Disposition': disposition,
       'X-Content-Type-Options': 'nosniff',
-    };
-
-    return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, headers);
+    });
   });
 
   // DELETE /attachments/:fileId
   app.delete('/:fileId', requireOwner(ownerEntityId), async (c) => {
     const fileId = c.req.param('fileId');
 
-    // Find the _attachment@1 metadata record(s) for this file
+    // Find any _attachment@1 metadata record(s) for this file
     const metaResult = await stack.query({
       filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
     });
-    if (!metaResult.records.length) return c.json({ error: 'Attachment not found' }, 404);
+
+    // If no metadata record, verify the bytes actually exist before proceeding
+    if (!metaResult.records.length) {
+      try {
+        await adapter.getAttachment(fileId);
+      } catch {
+        return c.json({ error: 'Attachment not found' }, 404);
+      }
+    }
 
     // Refuse if any record in the stack still references this file
     const refResult = await stack.query({ filter: { attachmentFileId: fileId }, limit: 1 });
@@ -102,18 +95,8 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   return app;
 }
 
-function parseFilename(disposition: string | undefined): string | undefined {
-  if (!disposition) return undefined;
-  // RFC 5987 form takes priority: filename*=UTF-8''<percent-encoded>
-  const rfc5987 = disposition.match(/filename\*=UTF-8''([^\s;]+)/i);
-  if (rfc5987) return decodeURIComponent(rfc5987[1]);
-  // Plain quoted form: filename="..." (used by curl and other HTTP clients)
-  const quoted = disposition.match(/filename="([^"]+)"/);
-  return quoted?.[1];
-}
-
 // MIME types that browsers can use to execute scripts or parse as markup.
-// Uploaders supplying one of these get application/octet-stream instead.
+// Callers requesting one of these as Content-Type receive application/octet-stream instead.
 const BLOCKED_MIME_TYPES = new Set([
   'text/html',
   'text/javascript',
@@ -130,37 +113,27 @@ function sanitizeMimeType(mimeType: string): string {
   return BLOCKED_MIME_TYPES.has(base) ? 'application/octet-stream' : mimeType;
 }
 
-// Map of common file extensions to MIME types. Used to upgrade
-// application/octet-stream when the client omits a specific Content-Type
-// but provided a filename with a recognisable extension.
-// Omits types in BLOCKED_MIME_TYPES — those are sanitized to
-// application/octet-stream anyway, so inferring them from extension
-// serves no purpose.
+// Extension-to-MIME map used to infer Content-Type from a ?filename param.
+// Omits types in BLOCKED_MIME_TYPES — they would be sanitized away regardless.
 const EXTENSION_MIME: Record<string, string> = {
-  // Images
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   png: 'image/png',
   gif: 'image/gif',
   webp: 'image/webp',
   ico: 'image/x-icon',
-  // Documents
   pdf: 'application/pdf',
-  // Text
   txt: 'text/plain',
   md: 'text/markdown',
   csv: 'text/csv',
   json: 'application/json',
-  // Video
   mp4: 'video/mp4',
   webm: 'video/webm',
   mov: 'video/quicktime',
-  // Audio
   mp3: 'audio/mpeg',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
   m4a: 'audio/mp4',
-  // Archives
   zip: 'application/zip',
   gz: 'application/gzip',
 };
