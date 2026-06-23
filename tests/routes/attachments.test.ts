@@ -138,6 +138,33 @@ describe('GET /attachments/:fileId', () => {
     const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     expect(status).toBe(401);
   });
+
+  it('uses ?contentType param as Content-Type without a metadata record', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?contentType=image/png`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+  });
+
+  it('uses ?filename param in Content-Disposition without a metadata record', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?filename=photo.png`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Disposition')).toBe("attachment; filename*=UTF-8''photo.png");
+  });
+
+  it('sanitizes a blocked ?contentType param to application/octet-stream', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?contentType=text/html`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/octet-stream');
+  });
 });
 
 describe('POST /attachments', () => {

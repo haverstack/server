@@ -44,24 +44,33 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
-    // _attachment@1 metadata record is optional — falls back to safe defaults
-    // when absent (e.g. right after upload before the caller has created the record).
-    const metaResult = await stack.query({
-      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
-    });
-    const attachmentContent = (metaResult.records[0]?.content as AttachmentContent) ?? null;
+    const contentTypeParam = c.req.query('contentType');
+    const filenameParam = c.req.query('filename');
 
-    // Filename is pure metadata — only expose it from the requester's own record.
-    const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
-    const visibleFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
+    // Skip the _attachment@1 lookup entirely when the caller supplies both values.
+    // Otherwise query once and extract whatever is still needed.
+    let recordMimeType: string | undefined;
+    let recordFilename: string | undefined;
+    if (!contentTypeParam || !filenameParam) {
+      const metaResult = await stack.query({
+        filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
+      });
+      recordMimeType = (metaResult.records[0]?.content as AttachmentContent | undefined)?.mimeType;
+      // Filename is pure metadata — only expose it from the requester's own record.
+      const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
+      recordFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
+    }
 
-    const disposition = visibleFilename
-      ? `attachment; filename*=UTF-8''${encodeURIComponent(visibleFilename)}`
+    const resolvedFilename = filenameParam ?? recordFilename;
+    const disposition = resolvedFilename
+      ? `attachment; filename*=UTF-8''${encodeURIComponent(resolvedFilename)}`
       : 'attachment';
 
     const headers: Record<string, string> = {
-      'Content-Type': sanitizeMimeType(attachmentContent?.mimeType ?? 'application/octet-stream'),
-      'Content-Length': String(attachmentContent?.size ?? data.byteLength),
+      'Content-Type': sanitizeMimeType(
+        contentTypeParam ?? recordMimeType ?? 'application/octet-stream',
+      ),
+      'Content-Length': String(data.byteLength),
       'Content-Disposition': disposition,
       'X-Content-Type-Options': 'nosniff',
     };
