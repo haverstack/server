@@ -47,15 +47,20 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const contentTypeParam = c.req.query('contentType');
     const filenameParam = c.req.query('filename');
 
-    // Skip the _attachment@1 lookup entirely when the caller supplies both values.
-    // Otherwise query once and extract whatever is still needed.
+    // When the caller provides a filename we can infer the MIME type from its
+    // extension, so no DB lookup is needed. Without a filename we must query
+    // for the requester's own _attachment@1 record (and for mimeType if
+    // contentType was not supplied).
     let recordMimeType: string | undefined;
     let recordFilename: string | undefined;
-    if (!contentTypeParam || !filenameParam) {
+    if (filenameParam === undefined) {
       const metaResult = await stack.query({
         filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
       });
-      recordMimeType = (metaResult.records[0]?.content as AttachmentContent | undefined)?.mimeType;
+      if (!contentTypeParam) {
+        recordMimeType = (metaResult.records[0]?.content as AttachmentContent | undefined)
+          ?.mimeType;
+      }
       // Filename is pure metadata — only expose it from the requester's own record.
       const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
       recordFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
@@ -68,7 +73,8 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     const headers: Record<string, string> = {
       'Content-Type': sanitizeMimeType(
-        contentTypeParam ?? recordMimeType ?? 'application/octet-stream',
+        contentTypeParam ??
+          resolveMimeType(recordMimeType ?? 'application/octet-stream', filenameParam),
       ),
       'Content-Length': String(data.byteLength),
       'Content-Disposition': disposition,
@@ -129,6 +135,37 @@ const BLOCKED_MIME_TYPES = new Set([
 function sanitizeMimeType(mimeType: string): string {
   const base = mimeType.split(';')[0].trim().toLowerCase();
   return BLOCKED_MIME_TYPES.has(base) ? 'application/octet-stream' : mimeType;
+}
+
+// Extension-to-MIME map used to infer Content-Type from a ?filename param.
+// Omits types in BLOCKED_MIME_TYPES — they would be sanitized away regardless.
+const EXTENSION_MIME: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  ico: 'image/x-icon',
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  m4a: 'audio/mp4',
+  zip: 'application/zip',
+  gz: 'application/gzip',
+};
+
+function resolveMimeType(declared: string, filename: string | undefined): string {
+  if (declared !== 'application/octet-stream' || !filename) return declared;
+  const ext = filename.split('.').pop()?.toLowerCase();
+  return (ext && EXTENSION_MIME[ext]) || declared;
 }
 
 /**

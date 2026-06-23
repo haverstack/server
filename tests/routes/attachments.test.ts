@@ -157,6 +157,15 @@ describe('GET /attachments/:fileId', () => {
     expect(res.headers.get('Content-Disposition')).toBe("attachment; filename*=UTF-8''photo.png");
   });
 
+  it('infers Content-Type from ?filename extension when no ?contentType is given', async () => {
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?filename=photo.png`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('image/png');
+  });
+
   it('sanitizes a blocked ?contentType param to application/octet-stream', async () => {
     const fileId = await putFile(t.ctx);
     const res = await t.app.request(`/attachments/${fileId}?contentType=text/html`, {
