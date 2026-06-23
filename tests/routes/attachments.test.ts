@@ -5,6 +5,7 @@ import {
   testConfig,
   logger,
   TEST_TOKEN,
+  TEST_ENTITY_ID,
   OTHER_ENTITY_ID,
   type TestApp,
 } from '../setup.js';
@@ -204,12 +205,11 @@ describe('POST /attachments', () => {
     const { fileId } = (await uploadRes.json()) as { fileId: string };
 
     // Create the metadata record (what ScopedStack.putAttachment does via POST /records)
-    await t.ctx.stack.create('_attachment@1', {
-      fileId,
-      mimeType: 'application/pdf',
-      size: content.byteLength,
-      filename: 'test.pdf',
-    });
+    await t.ctx.stack.create(
+      '_attachment@1',
+      { fileId, mimeType: 'application/pdf', size: content.byteLength, filename: 'test.pdf' },
+      { entityId: TEST_ENTITY_ID },
+    );
 
     const downloadRes = await t.app.request(`/attachments/${fileId}`, {
       headers: { Authorization: `Bearer ${TEST_TOKEN}` },
