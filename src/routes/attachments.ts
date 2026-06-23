@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { SYSTEM_TYPES } from '@haverstack/core';
-import type { AttachmentContent } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
@@ -47,41 +46,18 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const contentTypeParam = c.req.query('contentType');
     const filenameParam = c.req.query('filename');
 
-    // When the caller provides a filename we can infer the MIME type from its
-    // extension, so no DB lookup is needed. Without a filename we must query
-    // for the requester's own _attachment@1 record (and for mimeType if
-    // contentType was not supplied).
-    let recordMimeType: string | undefined;
-    let recordFilename: string | undefined;
-    if (filenameParam === undefined) {
-      const metaResult = await stack.query({
-        filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
-      });
-      if (!contentTypeParam) {
-        recordMimeType = (metaResult.records[0]?.content as AttachmentContent | undefined)
-          ?.mimeType;
-      }
-      // Filename is pure metadata — only expose it from the requester's own record.
-      const ownRecord = metaResult.records.find((r) => r.entityId === auth?.entityId);
-      recordFilename = (ownRecord?.content as AttachmentContent | undefined)?.filename;
-    }
-
-    const resolvedFilename = filenameParam ?? recordFilename;
-    const disposition = resolvedFilename
-      ? `attachment; filename*=UTF-8''${encodeURIComponent(resolvedFilename)}`
+    const disposition = filenameParam
+      ? `attachment; filename*=UTF-8''${encodeURIComponent(filenameParam)}`
       : 'attachment';
 
-    const headers: Record<string, string> = {
+    return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, {
       'Content-Type': sanitizeMimeType(
-        contentTypeParam ??
-          resolveMimeType(recordMimeType ?? 'application/octet-stream', filenameParam),
+        contentTypeParam ?? resolveMimeType('application/octet-stream', filenameParam),
       ),
       'Content-Length': String(data.byteLength),
       'Content-Disposition': disposition,
       'X-Content-Type-Options': 'nosniff',
-    };
-
-    return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, headers);
+    });
   });
 
   // DELETE /attachments/:fileId

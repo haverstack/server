@@ -5,7 +5,6 @@ import {
   testConfig,
   logger,
   TEST_TOKEN,
-  TEST_ENTITY_ID,
   OTHER_ENTITY_ID,
   type TestApp,
 } from '../setup.js';
@@ -205,7 +204,7 @@ describe('POST /attachments', () => {
     expect(metaResult.records).toHaveLength(0);
   });
 
-  it('serves file with application/octet-stream fallback when no _attachment@1 record exists', async () => {
+  it('serves file with application/octet-stream when no query params are given', async () => {
     const content = new TextEncoder().encode('raw bytes');
     const uploadRes = await t.app.request('/attachments', {
       method: 'POST',
@@ -226,30 +225,20 @@ describe('POST /attachments', () => {
     expect(downloadRes.headers.get('Content-Disposition')).toBe('attachment');
   });
 
-  it('returns mimeType and filename from _attachment@1 record created after upload', async () => {
+  it('uses ?contentType and ?filename query params for Content-Type and Content-Disposition', async () => {
     const content = new TextEncoder().encode('PDF content');
     const uploadRes = await t.app.request('/attachments', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${TEST_TOKEN}`,
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': 'attachment; filename="ignored.pdf"',
-      },
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
       body: content,
     });
     expect(uploadRes.status).toBe(201);
     const { fileId } = (await uploadRes.json()) as { fileId: string };
 
-    // Create the metadata record (what ScopedStack.putAttachment does via POST /records)
-    await t.ctx.stack.create(
-      '_attachment@1',
-      { fileId, mimeType: 'application/pdf', size: content.byteLength, filename: 'test.pdf' },
-      { entityId: TEST_ENTITY_ID },
+    const downloadRes = await t.app.request(
+      `/attachments/${fileId}?contentType=application/pdf&filename=test.pdf`,
+      { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
     );
-
-    const downloadRes = await t.app.request(`/attachments/${fileId}`, {
-      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-    });
     expect(downloadRes.status).toBe(200);
     expect(downloadRes.headers.get('Content-Type')).toBe('application/pdf');
     expect(downloadRes.headers.get('Content-Disposition')).toBe(
@@ -257,7 +246,7 @@ describe('POST /attachments', () => {
     );
   });
 
-  it('serves blocked mimeTypes as application/octet-stream', async () => {
+  it('serves blocked ?contentType values as application/octet-stream', async () => {
     const content = new TextEncoder().encode('<script>alert(1)</script>');
     const uploadRes = await t.app.request('/attachments', {
       method: 'POST',
@@ -272,22 +261,13 @@ describe('POST /attachments', () => {
       'text/javascript',
       'application/javascript',
     ]) {
-      await t.ctx.stack.create(
-        '_attachment@1',
-        { fileId, mimeType: blocked, size: content.byteLength },
-        { entityId: TEST_ENTITY_ID },
+      const res = await t.app.request(
+        `/attachments/${fileId}?contentType=${encodeURIComponent(blocked)}`,
+        { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
       );
-      const res = await t.app.request(`/attachments/${fileId}`, {
-        headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-      });
       expect(res.headers.get('Content-Type'), `blocked type ${blocked}`).toBe(
         'application/octet-stream',
       );
-      // Clean up so the next iteration gets a fresh record
-      const meta = await t.ctx.stack.query({
-        filter: { typeId: '_attachment@1', content: { fileId } },
-      });
-      for (const r of meta.records) await t.ctx.stack.delete(r.id, { hard: true });
     }
   });
 
