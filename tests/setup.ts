@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
-import { SQLiteAdapter } from '@haverstack/adapter-sqlite';
+import { LocalAdapter } from '@haverstack/adapter-local';
 import { Stack } from '@haverstack/core';
 import pino from 'pino';
 import { createApp } from '../src/app.js';
@@ -29,7 +29,7 @@ export function tempDbPath(): string {
 }
 
 export async function createTestContext(dbPath: string): Promise<StackContext> {
-  const adapter = await SQLiteAdapter.initialize({
+  const adapter = await LocalAdapter.initialize({
     path: dbPath,
     entityId: TEST_ENTITY_ID,
     timezone: 'UTC',
