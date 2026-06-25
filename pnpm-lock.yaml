@@ -12,8 +12,8 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@haverstack/core':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.7.0
+        version: 0.7.0
       '@haverstack/wire-types':
         specifier: ^0.6.0
         version: 0.6.0
@@ -409,6 +409,9 @@ packages:
 
   '@haverstack/core@0.6.0':
     resolution: {integrity: sha512-ruv1LrOlCaCgQTfUKbQEi3hYeIxJ7fGHU2ynWPY3LjB5Cia+bbMkAnPtznEparunPNhOfdI/nf51MjMwyhFhkg==}
+
+  '@haverstack/core@0.7.0':
+    resolution: {integrity: sha512-qIvLQ3NulWR6JPSbE40aXFiNbfqiksIo8TxuDS2hwVPB4Jl2z5WdCQefk38m0DCybOrCVjREVYP9rUQ+y8ZHbg==}
 
   '@haverstack/record-adapter-sqljs@0.6.0':
     resolution: {integrity: sha512-+BHfNqW+dKg0Yy+io6cvqXjrOWugBXbPtQJWKTI9VNA6zfHngoWPpYIJ9n01dQ8LpsorXaRAG0ROO3Fev9mI6Q==}
@@ -1514,6 +1517,8 @@ snapshots:
       '@haverstack/core': 0.6.0
 
   '@haverstack/core@0.6.0': {}
+
+  '@haverstack/core@0.7.0': {}
 
   '@haverstack/record-adapter-sqljs@0.6.0':
     dependencies:
