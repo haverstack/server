@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { SYSTEM_TYPES } from '@haverstack/core';
+import { StackPermissionError } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
@@ -33,13 +33,11 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const fileId = c.req.param('fileId');
     const auth = c.get('auth');
 
-    const accessible = await isAttachmentAccessible(fileId, auth?.entityId ?? null, ctx);
-    if (!accessible) return c.json({ error: 'Unauthorized' }, 401);
-
     let data: Uint8Array;
     try {
-      data = await adapter.getAttachment(fileId);
-    } catch {
+      data = await stack.asEntity(auth?.entityId ?? null).getAttachment(fileId);
+    } catch (e) {
+      if (e instanceof StackPermissionError) return c.json({ error: 'Unauthorized' }, 401);
       return c.json({ error: 'Attachment not found' }, 404);
     }
 
@@ -63,32 +61,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   // DELETE /attachments/:fileId
   app.delete('/:fileId', requireOwner(ownerEntityId), async (c) => {
     const fileId = c.req.param('fileId');
-
-    // Find any _attachment@1 metadata record(s) for this file
-    const metaResult = await stack.query({
-      filter: { typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`, content: { fileId } },
-    });
-
-    // If no metadata record, verify the bytes actually exist before proceeding
-    if (!metaResult.records.length) {
-      try {
-        await adapter.getAttachment(fileId);
-      } catch {
-        return c.json({ error: 'Attachment not found' }, 404);
-      }
-    }
-
-    // Refuse if any record in the stack still references this file
-    const refResult = await stack.query({ filter: { attachmentFileId: fileId }, limit: 1 });
-    if (refResult.records.length > 0) {
-      return c.json({ error: 'Attachment is still referenced by one or more records' }, 409);
-    }
-
-    for (const record of metaResult.records) {
-      await stack.delete(record.id, { hard: true });
-    }
-
-    await adapter.deleteAttachment(fileId);
+    await stack.deleteAttachment(fileId);
     return c.body(null, 204);
   });
 
@@ -142,41 +115,4 @@ function resolveMimeType(declared: string, filename: string | undefined): string
   if (declared !== 'application/octet-stream' || !filename) return declared;
   const ext = filename.split('.').pop()?.toLowerCase();
   return (ext && EXTENSION_MIME[ext]) || declared;
-}
-
-/**
- * An attachment is accessible if:
- * 1. The requester is the stack owner, OR
- * 2. The requester can read at least one Record that references the file, OR
- * 3. The requester uploaded the file (owns its _attachment@1 record) and it
- *    hasn't been associated with any record yet.
- */
-async function isAttachmentAccessible(
-  fileId: string,
-  requesterEntityId: string | null,
-  ctx: StackContext,
-): Promise<boolean> {
-  const { stack } = ctx;
-  if (requesterEntityId && requesterEntityId === stack.ownerEntityId) return true;
-
-  const result = await stack.asEntity(requesterEntityId).query({
-    filter: { attachmentFileId: fileId },
-    limit: 1,
-  });
-  if (result.records.length > 0) return true;
-
-  // Unassociated file: check if the requester uploaded it
-  if (requesterEntityId) {
-    const uploadResult = await stack.query({
-      filter: {
-        typeId: `${SYSTEM_TYPES.ATTACHMENT}@1`,
-        entityId: requesterEntityId,
-        content: { fileId },
-      },
-      limit: 1,
-    });
-    if (uploadResult.records.length > 0) return true;
-  }
-
-  return false;
 }
