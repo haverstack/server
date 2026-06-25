@@ -1,23 +1,23 @@
-import { SQLiteAdapter } from '@haverstack/adapter-sqlite';
+import { LocalAdapter } from '@haverstack/adapter-local';
 import { Stack } from '@haverstack/core';
 import type { Config } from './config.js';
 
 export type StackContext = {
-  adapter: SQLiteAdapter;
+  adapter: LocalAdapter;
   stack: Stack;
 };
 
 export async function initStack(config: Config): Promise<StackContext> {
-  let adapter: SQLiteAdapter;
+  let adapter: LocalAdapter;
 
   if (config.isNewDb) {
-    adapter = await SQLiteAdapter.initialize({
+    adapter = await LocalAdapter.initialize({
       path: config.dbPath,
       entityId: config.entityId!,
       timezone: config.timezone,
     });
   } else {
-    adapter = await SQLiteAdapter.open({ path: config.dbPath });
+    adapter = await LocalAdapter.open({ path: config.dbPath });
   }
 
   const stack = await Stack.create(adapter);

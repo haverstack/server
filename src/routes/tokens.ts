@@ -3,7 +3,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
 import { parseDate } from '@haverstack/wire-types';
-import type { TokenInfo } from '@haverstack/adapter-sqlite';
+import type { TokenInfo } from '@haverstack/adapter-local';
 
 export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
