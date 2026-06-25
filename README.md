@@ -2,7 +2,7 @@
 
 Reference HTTP server implementation for [Haverstack](https://github.com/haverstack/core).
 
-Exposes a Haverstack stack over a REST API so apps can read and write records remotely. Uses SQLite for storage via `@haverstack/adapter-sqlite`.
+Exposes a Haverstack stack over a REST API so apps can read and write records remotely. Uses SQLite for storage via `@haverstack/adapter-local`.
 
 > **Status:** Early development. APIs are unstable.
 
