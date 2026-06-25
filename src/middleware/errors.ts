@@ -1,7 +1,12 @@
 import type { ErrorHandler } from 'hono';
 import type { Logger } from 'pino';
 import type { AppEnv } from '../types.js';
-import { StackPermissionError, StackValidationError, StackNotFoundError, StackConflictError } from '@haverstack/core';
+import {
+  StackPermissionError,
+  StackValidationError,
+  StackNotFoundError,
+  StackConflictError,
+} from '@haverstack/core';
 
 export function errorMiddleware(logger: Logger): ErrorHandler<AppEnv> {
   return (err, c) => {
