@@ -3,7 +3,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
 import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
-import { SYSTEM_TYPES } from '@haverstack/core';
+import { SYSTEM_TYPES, StackValidationError } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
 
 const MAX_QUERY_LIMIT = 1000;
@@ -187,6 +187,10 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
       return c.json({ error: 'typeId is required' }, 400);
     if (!body.content || typeof body.content !== 'object')
       return c.json({ error: 'content is required' }, 400);
+    if (!(await stack.getType(body.typeId as TypeId)))
+      throw new StackValidationError([
+        { path: 'typeId', message: `Unknown type: "${body.typeId}"` },
+      ]);
 
     const created = await stack
       .asEntity(auth.entityId)

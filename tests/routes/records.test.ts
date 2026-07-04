@@ -66,6 +66,17 @@ describe('Records', () => {
       expect(status).toBe(401);
     });
 
+    it('returns 422 for a typeId that has not been defined', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: 'com.example.test/article@1', content: { body: 'x' } },
+      });
+      expect(status).toBe(422);
+      expect((data as Record<string, unknown>).details).toEqual([
+        { path: 'typeId', message: 'Unknown type: "com.example.test/article@1"' },
+      ]);
+    });
+
     it('returns 422 when a required content field is missing', async () => {
       const { status, data } = await req(t.app, 'POST', '/records', {
         token: TEST_TOKEN,
