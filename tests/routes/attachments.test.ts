@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildTestApp,
@@ -18,8 +19,14 @@ async function seedType(ctx: TestApp['ctx']) {
   });
 }
 
+/** Seeds bytes via the unscoped Stack (bypasses the wire route entirely). */
 async function putFile(ctx: TestApp['ctx'], content = 'hello') {
-  return ctx.stack.putAttachment(new TextEncoder().encode(content), 'text/plain');
+  const record = await ctx.stack.putAttachment(new TextEncoder().encode(content), 'text/plain');
+  return (record.content as { fileId: string }).fileId;
+}
+
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 describe('GET /attachments/:fileId', () => {
@@ -61,7 +68,7 @@ describe('GET /attachments/:fileId', () => {
       { body: 'public note' },
       {
         permissions: [{ access: 'public' }],
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
 
@@ -75,7 +82,7 @@ describe('GET /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'private note' },
       {
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
 
@@ -90,7 +97,7 @@ describe('GET /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'private note' },
       {
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
     // ...a second, public record also references it.
@@ -99,7 +106,7 @@ describe('GET /attachments/:fileId', () => {
       { body: 'public note' },
       {
         permissions: [{ access: 'public' }],
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
 
@@ -114,7 +121,7 @@ describe('GET /attachments/:fileId', () => {
       { body: 'shared note' },
       {
         permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
@@ -129,7 +136,7 @@ describe('GET /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'private note' },
       {
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
@@ -179,96 +186,142 @@ describe('POST /attachments', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
+    await seedType(t.ctx);
   });
   afterEach(async () => {
     await t.cleanup();
   });
 
-  it('stores bytes only — does not create an _attachment@1 record', async () => {
-    const content = new TextEncoder().encode('file content');
-    const uploadRes = await t.app.request('/attachments', {
+  it('stores bytes and creates the _attachment@1 record atomically, returning it', async () => {
+    const bytes = new TextEncoder().encode('file content');
+    const res = await t.app.request('/attachments', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${TEST_TOKEN}`,
         'Content-Type': 'text/plain',
-        'Content-Disposition': 'attachment; filename="ignored.txt"',
       },
-      body: content,
+      body: bytes,
     });
-    expect(uploadRes.status).toBe(201);
-    const { fileId } = (await uploadRes.json()) as { fileId: string };
+    expect(res.status).toBe(200);
+    const record = (await res.json()) as Record<string, unknown>;
+    expect(record.typeId).toBe('_attachment@1');
+    const content = record.content as Record<string, unknown>;
+    expect(content.fileId).toBe(sha256Hex(bytes));
+    expect(content.mimeType).toBe('text/plain');
+    expect(content.size).toBe(bytes.byteLength);
 
-    const metaResult = await t.ctx.stack.query({
-      filter: { typeId: '_attachment@1', content: { fileId } },
+    const stored = await t.ctx.stack.query({
+      filter: { typeId: '_attachment@1', content: { fileId: content.fileId } },
     });
-    expect(metaResult.records).toHaveLength(0);
+    expect(stored.records).toHaveLength(1);
   });
 
-  it('serves file with application/octet-stream when no query params are given', async () => {
-    const content = new TextEncoder().encode('raw bytes');
-    const uploadRes = await t.app.request('/attachments', {
+  it('defaults mimeType to application/octet-stream when Content-Type is omitted', async () => {
+    const res = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+      body: new TextEncoder().encode('raw bytes'),
+    });
+    expect(res.status).toBe(200);
+    const record = (await res.json()) as { content: Record<string, unknown> };
+    expect(record.content.mimeType).toBe('application/octet-stream');
+  });
+
+  it('parses filename from the RFC 5987 Content-Disposition form', async () => {
+    const res = await t.app.request('/attachments', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${TEST_TOKEN}`,
-        'Content-Type': 'image/png',
+        'Content-Type': 'text/plain',
+        'Content-Disposition': "attachment; filename*=UTF-8''caf%C3%A9.txt",
       },
-      body: content,
+      body: new TextEncoder().encode('content'),
     });
-    expect(uploadRes.status).toBe(201);
-    const { fileId } = (await uploadRes.json()) as { fileId: string };
-
-    const downloadRes = await t.app.request(`/attachments/${fileId}`, {
-      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-    });
-    expect(downloadRes.status).toBe(200);
-    expect(downloadRes.headers.get('Content-Type')).toBe('application/octet-stream');
-    expect(downloadRes.headers.get('Content-Disposition')).toBe('attachment');
+    expect(res.status).toBe(200);
+    const record = (await res.json()) as { content: Record<string, unknown> };
+    expect(record.content.filename).toBe('café.txt');
   });
 
-  it('uses ?contentType and ?filename query params for Content-Type and Content-Disposition', async () => {
-    const content = new TextEncoder().encode('PDF content');
-    const uploadRes = await t.app.request('/attachments', {
+  it('passes ?appId= through to the created record', async () => {
+    const res = await t.app.request('/attachments?appId=my-app-id', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-      body: content,
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'text/plain' },
+      body: new TextEncoder().encode('content'),
     });
-    expect(uploadRes.status).toBe(201);
-    const { fileId } = (await uploadRes.json()) as { fileId: string };
-
-    const downloadRes = await t.app.request(
-      `/attachments/${fileId}?contentType=application/pdf&filename=test.pdf`,
-      { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
-    );
-    expect(downloadRes.status).toBe(200);
-    expect(downloadRes.headers.get('Content-Type')).toBe('application/pdf');
-    expect(downloadRes.headers.get('Content-Disposition')).toBe(
-      "attachment; filename*=UTF-8''test.pdf",
-    );
+    expect(res.status).toBe(200);
+    const record = (await res.json()) as Record<string, unknown>;
+    expect(record.appId).toBe('my-app-id');
   });
 
-  it('serves blocked ?contentType values as application/octet-stream', async () => {
-    const content = new TextEncoder().encode('<script>alert(1)</script>');
-    const uploadRes = await t.app.request('/attachments', {
+  it('rejects an anonymous upload with 401', async () => {
+    const res = await t.app.request('/attachments', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-      body: content,
+      headers: { 'Content-Type': 'text/plain' },
+      body: new TextEncoder().encode('content'),
     });
-    const { fileId } = (await uploadRes.json()) as { fileId: string };
+    expect(res.status).toBe(401);
+  });
 
-    for (const blocked of [
-      'text/html',
-      'image/svg+xml',
-      'text/javascript',
-      'application/javascript',
-    ]) {
-      const res = await t.app.request(
-        `/attachments/${fileId}?contentType=${encodeURIComponent(blocked)}`,
-        { headers: { Authorization: `Bearer ${TEST_TOKEN}` } },
-      );
-      expect(res.headers.get('Content-Type'), `blocked type ${blocked}`).toBe(
-        'application/octet-stream',
-      );
-    }
+  it('rejects a token holder with no create grant on _attachment@1 with 403', async () => {
+    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const res = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+      body: new TextEncoder().encode('content'),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('allows an entity with a create grant on _attachment@1 to upload', async () => {
+    await t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const res = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
+      body: new TextEncoder().encode('content'),
+    });
+    expect(res.status).toBe(200);
+    const record = (await res.json()) as Record<string, unknown>;
+    expect(record.entityId).toBe(OTHER_ENTITY_ID);
+  });
+
+  it('identical bytes uploaded twice produce the same fileId but two distinct records', async () => {
+    const bytes = new TextEncoder().encode('same content');
+    const upload = () =>
+      t.app.request('/attachments', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'text/plain' },
+        body: bytes,
+      });
+
+    const first = (await (await upload()).json()) as { id: string; content: { fileId: string } };
+    const second = (await (await upload()).json()) as { id: string; content: { fileId: string } };
+
+    expect(second.content.fileId).toBe(first.content.fileId);
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it('rejects a second upload with a conflicting mimeType with 422', async () => {
+    const bytes = new TextEncoder().encode('same content');
+    await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'text/plain' },
+      body: bytes,
+    });
+
+    const res = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'image/png' },
+      body: bytes,
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as {
+      error: { code: string; details: Array<{ path: string }> };
+    };
+    expect(body.error.code).toBe('validation');
+    expect(body.error.details.some((d) => d.path === 'mimeType')).toBe(true);
+    // Anti-oracle: the established mimeType must never be named in the error.
+    expect(JSON.stringify(body)).not.toContain('text/plain');
   });
 
   it('returns 413 when Content-Length exceeds the limit (pre-check)', async () => {
@@ -287,20 +340,30 @@ describe('POST /attachments', () => {
     expect(res.status).toBe(413);
   });
 
-  it('returns 413 when body byte length exceeds the limit (body check)', async () => {
+  it('returns 413 for a chunked upload without Content-Length, aborting before the stream drains', async () => {
     const smallConfig = { ...testConfig(t.dbPath), maxAttachmentBytes: 10 };
     const smallApp = createApp(t.ctx, smallConfig, logger);
 
-    const oversized = new Uint8Array(11).fill(65);
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls++;
+        if (pulls > 3) {
+          controller.error(new Error('body was read past where the limit should have aborted it'));
+          return;
+        }
+        controller.enqueue(new Uint8Array(20).fill(65)); // 20 bytes, already over the 10-byte limit
+      },
+    });
+
     const res = await smallApp.request('/attachments', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${TEST_TOKEN}`,
-        'Content-Type': 'text/plain',
-      },
-      body: oversized,
+      headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'text/plain' },
+      duplex: 'half',
+      body: stream,
     });
     expect(res.status).toBe(413);
+    expect(pulls).toBeLessThanOrEqual(3);
   });
 });
 
@@ -328,7 +391,7 @@ describe('DELETE /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'note with attachment' },
       {
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
     const { status } = await req(t.app, 'DELETE', `/attachments/${fileId}`, {
@@ -344,7 +407,7 @@ describe('DELETE /attachments/:fileId', () => {
       { body: 'shared note' },
       {
         permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
-        associations: [{ kind: 'attachment', label: 'file', fileId, mimeType: 'text/plain' }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);

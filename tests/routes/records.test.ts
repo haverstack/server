@@ -10,7 +10,6 @@ import {
 } from '../setup.js';
 
 const NOTE_TYPE_ID = 'com.example.test/note@1';
-const ATTACHMENT_TYPE_ID = `${SYSTEM_TYPES.ATTACHMENT}@1`;
 const GRANT_TYPE_ID = `${SYSTEM_TYPES.GRANT}@1`;
 
 async function seedType(ctx: TestApp['ctx']) {
@@ -72,7 +71,9 @@ describe('Records', () => {
         body: { typeId: 'com.example.test/article@1', content: { body: 'x' } },
       });
       expect(status).toBe(422);
-      expect((data as Record<string, unknown>).details).toEqual([
+      const d = data as { error: { code: string; details: unknown[] } };
+      expect(d.error.code).toBe('validation');
+      expect(d.error.details).toEqual([
         { path: 'typeId', message: 'Unknown type: "com.example.test/article@1"' },
       ]);
     });
@@ -83,10 +84,11 @@ describe('Records', () => {
         body: { typeId: NOTE_TYPE_ID, content: {} },
       });
       expect(status).toBe(422);
-      const d = data as { error: string; details: unknown[] };
-      expect(typeof d.error).toBe('string');
-      expect(Array.isArray(d.details)).toBe(true);
-      expect(d.details.length).toBeGreaterThan(0);
+      const d = data as { error: { code: string; message: string; details: unknown[] } };
+      expect(d.error.code).toBe('validation');
+      expect(typeof d.error.message).toBe('string');
+      expect(Array.isArray(d.error.details)).toBe(true);
+      expect(d.error.details.length).toBeGreaterThan(0);
     });
   });
 
@@ -322,14 +324,22 @@ describe('Records', () => {
   });
 
   describe('_attachment@1 immutable field protection', () => {
+    // Enforced by ScopedStack now (docs/spec/attachments.md § The _attachment
+    // record type) — putAttachment() itself returns the created record, so
+    // no separate query is needed to find it.
     async function seedAttachment(ctx: TestApp['ctx']) {
-      const fileId = await ctx.stack.putAttachment(
+      const record = await ctx.stack.putAttachment(
         new TextEncoder().encode('hello'),
         'text/plain',
         'hello.txt',
       );
-      const { records } = await ctx.stack.query({ filter: { typeId: ATTACHMENT_TYPE_ID } });
-      return { fileId, record: records[0] };
+      return { fileId: (record.content as { fileId: string }).fileId, record };
+    }
+
+    function detailPaths(data: unknown): string[] {
+      return (data as { error: { details: Array<{ path: string }> } }).error.details.map(
+        (d) => d.path,
+      );
     }
 
     it('returns 422 when PATCH attempts to change fileId', async () => {
@@ -339,7 +349,7 @@ describe('Records', () => {
         body: { content: { fileId: 'tampered-id' } },
       });
       expect(status).toBe(422);
-      expect((data as { error: string }).error).toMatch(/fileId/);
+      expect(detailPaths(data)).toContain('fileId');
     });
 
     it('returns 422 when PATCH attempts to change size', async () => {
@@ -349,7 +359,7 @@ describe('Records', () => {
         body: { content: { size: 9999 } },
       });
       expect(status).toBe(422);
-      expect((data as { error: string }).error).toMatch(/size/);
+      expect(detailPaths(data)).toContain('size');
     });
 
     it('returns 422 when PATCH attempts to change mimeType', async () => {
@@ -359,20 +369,20 @@ describe('Records', () => {
         body: { content: { mimeType: 'text/html' } },
       });
       expect(status).toBe(422);
-      expect((data as { error: string }).error).toMatch(/mimeType/);
+      expect(detailPaths(data)).toContain('mimeType');
     });
 
-    it('reports all attempted immutable fields in the error message', async () => {
+    it('reports all attempted immutable fields', async () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { content: { fileId: 'x', size: 0, mimeType: 'text/html' } },
       });
       expect(status).toBe(422);
-      const error = (data as { error: string }).error;
-      expect(error).toMatch(/fileId/);
-      expect(error).toMatch(/size/);
-      expect(error).toMatch(/mimeType/);
+      const paths = detailPaths(data);
+      expect(paths).toContain('fileId');
+      expect(paths).toContain('size');
+      expect(paths).toContain('mimeType');
     });
 
     it('allows PATCH to change filename', async () => {
@@ -389,11 +399,28 @@ describe('Records', () => {
   });
 
   describe('_grant@1 write protection', () => {
-    it('returns 403 when non-owner tries to PATCH a grant record', async () => {
-      // Give OTHER_ENTITY_ID update-own on _grant@1 — the privilege escalation vector
-      const [grantRecord] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
-        { actions: ['update-own'], typeId: GRANT_TYPE_ID },
-      ]);
+    it('refuses to grant privileges on _grant/_config/_app (privilege-escalation guard)', async () => {
+      // stack.grant() itself forecloses the escalation vector the old test
+      // below exercised via a route-level guard: it's no longer possible to
+      // hand out a grant that targets _grant, so there is nothing for a
+      // non-owner to escalate with in the first place.
+      await expect(
+        t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['update-own'], typeId: GRANT_TYPE_ID }]),
+      ).rejects.toThrow(/privilege escalation/);
+    });
+
+    it('returns 403 when non-owner tries to PATCH a grant record, even with direct write permission on it', async () => {
+      // ScopedStack refuses writes to any _grant record unconditionally,
+      // "whatever its own permissions say" — set an explicit write grant on
+      // this one record (bypassing stack.grant()'s own refusal by creating
+      // it directly) to prove the fence holds regardless.
+      const grantRecord = await t.ctx.stack.create(
+        GRANT_TYPE_ID,
+        { typeId: NOTE_TYPE_ID, actions: ['read-own'] },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        },
+      );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
 
       const { status } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
@@ -441,18 +468,20 @@ describe('Records', () => {
       expect(after?.deletedAt).toBeDefined();
     });
 
-    it('blocks escalation: non-owner cannot expand their own grant actions', async () => {
-      // Step 1: give OTHER_ENTITY_ID a modest initial grant
-      const [readGrant] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
-        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
-      ]);
-      // Step 2: give OTHER_ENTITY_ID update-own on _grant@1 (the dangerous permission)
-      await t.ctx.stack.grant(OTHER_ENTITY_ID, [
-        { actions: ['update-own'], typeId: GRANT_TYPE_ID },
-      ]);
+    it('blocks escalation: a write-holder on a grant record cannot expand its actions', async () => {
+      // stack.grant() itself now refuses to grant update-own on _grant (see
+      // the first test in this block), so the escalation vector this test
+      // guards against is reached the only way still possible: a grant
+      // record with an explicit record-level write permission on itself.
+      const readGrant = await t.ctx.stack.create(
+        GRANT_TYPE_ID,
+        { typeId: NOTE_TYPE_ID, actions: ['read-own'] },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        },
+      );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
 
-      // Step 3: try to escalate by rewriting the read grant to include broad actions
       const { status } = await req(t.app, 'PATCH', `/records/${readGrant.id}`, {
         token,
         body: {
@@ -461,9 +490,240 @@ describe('Records', () => {
       });
       expect(status).toBe(403);
 
-      // Confirm the grant was not modified
       const unchanged = await t.ctx.adapter.getRecord(readGrant.id);
       expect((unchanged?.content as { actions: string[] }).actions).toEqual(['read-own']);
+    });
+  });
+
+  // All Stack-level invariants (docs/spec.md § The _config record) —
+  // inherited for free, so the server's job is only to test them.
+  describe('_config protection', () => {
+    it('refuses to delete _config, soft or hard', async () => {
+      const { status: soft } = await req(t.app, 'DELETE', '/records/_config', {
+        token: TEST_TOKEN,
+      });
+      expect(soft).toBe(409);
+
+      const { status: hard } = await req(t.app, 'DELETE', '/records/_config?hard=true', {
+        token: TEST_TOKEN,
+      });
+      expect(hard).toBe(409);
+    });
+
+    it('refuses to change _config.entityId', async () => {
+      const { status } = await req(t.app, 'PATCH', '/records/_config', {
+        token: TEST_TOKEN,
+        body: { content: { entityId: 'someone-else' } },
+      });
+      expect(status).toBe(409);
+    });
+
+    it('is invisible to query() regardless of filter', async () => {
+      const { data } = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+      const records = (data as { records: Array<{ typeId: string }> }).records;
+      expect(records.some((r) => r.typeId.startsWith('_config'))).toBe(false);
+
+      const { data: filtered } = await req(t.app, 'GET', '/records?typeId=_config@1', {
+        token: TEST_TOKEN,
+      });
+      expect((filtered as { records: unknown[] }).records).toHaveLength(0);
+    });
+
+    it('is still addressable directly by id for the owner', async () => {
+      const { status, data } = await req(t.app, 'GET', '/records/_config', { token: TEST_TOKEN });
+      expect(status).toBe(200);
+      expect((data as { id: string }).id).toBe('_config');
+    });
+  });
+
+  describe('_app binding rules', () => {
+    const APP_TYPE_ID = `${SYSTEM_TYPES.APP}@1`;
+
+    it('refuses a non-owner create attempt (owner-only to set)', async () => {
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status } = await req(t.app, 'POST', '/records', {
+        token,
+        body: {
+          typeId: APP_TYPE_ID,
+          content: { did: 'did:key:zNonOwner', appId: 'app-x', name: 'X' },
+        },
+      });
+      expect(status).toBe(403);
+    });
+
+    it('refuses to grant create on _app (privilege-escalation guard, same as _grant/_config)', async () => {
+      await expect(
+        t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['create'], typeId: APP_TYPE_ID }]),
+      ).rejects.toThrow(/privilege escalation/);
+    });
+
+    it('refuses a second binding claiming an already-bound did', async () => {
+      await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: {
+          typeId: APP_TYPE_ID,
+          content: { did: 'did:key:zShared', appId: 'app-1', name: 'One' },
+        },
+      });
+      const { status } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: {
+          typeId: APP_TYPE_ID,
+          content: { did: 'did:key:zShared', appId: 'app-2', name: 'Two' },
+        },
+      });
+      expect(status).toBe(409);
+    });
+
+    it('refuses to change did or appId once set, but allows name', async () => {
+      const { data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: {
+          typeId: APP_TYPE_ID,
+          content: { did: 'did:key:zImmutable', appId: 'app-immutable', name: 'Original' },
+        },
+      });
+      const id = (data as { id: string }).id;
+
+      const { status: didChange } = await req(t.app, 'PATCH', `/records/${id}`, {
+        token: TEST_TOKEN,
+        body: { content: { did: 'did:key:zChanged' } },
+      });
+      expect(didChange).toBe(422);
+
+      const { status: appIdChange } = await req(t.app, 'PATCH', `/records/${id}`, {
+        token: TEST_TOKEN,
+        body: { content: { appId: 'changed' } },
+      });
+      expect(appIdChange).toBe(422);
+
+      const { status: nameChange, data: renamed } = await req(t.app, 'PATCH', `/records/${id}`, {
+        token: TEST_TOKEN,
+        body: { content: { name: 'Renamed' } },
+      });
+      expect(nameChange).toBe(200);
+      expect((renamed as { content: { name: string } }).content.name).toBe('Renamed');
+    });
+  });
+
+  describe('reserved content keys', () => {
+    // A wire body arrives as JSON text; JSON.parse (unlike a JS object
+    // literal) creates a genuine own property named "__proto__", which is
+    // exactly the shape a malicious request body would take.
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      it(`rejects "${key}" as a content field with 422`, async () => {
+        const body = JSON.parse(
+          `{"typeId":"${NOTE_TYPE_ID}","content":{"body":"x","${key}":{"evil":true}}}`,
+        );
+        const { status, data } = await req(t.app, 'POST', '/records', { token: TEST_TOKEN, body });
+        expect(status).toBe(422);
+        const details = (data as { error: { details: Array<{ path: string }> } }).error.details;
+        expect(details.some((d) => d.path === key)).toBe(true);
+      });
+    }
+  });
+
+  describe('non-owner _attachment@1 direct create', () => {
+    const ATTACHMENT_TYPE_ID = `${SYSTEM_TYPES.ATTACHMENT}@1`;
+
+    it('refuses a create-grant holder with no readable reference to the fileId', async () => {
+      const bytes = new TextEncoder().encode('unreferenced');
+      const record = await t.ctx.stack.putAttachment(bytes, 'text/plain');
+      const fileId = (record.content as { fileId: string }).fileId;
+      await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['create'], typeId: ATTACHMENT_TYPE_ID },
+      ]);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const { status } = await req(t.app, 'POST', '/records', {
+        token,
+        body: {
+          typeId: ATTACHMENT_TYPE_ID,
+          content: { fileId, mimeType: 'text/plain', size: bytes.byteLength },
+        },
+      });
+      expect(status).toBe(403);
+    });
+
+    it('allows a create-grant holder who can already read a record referencing the fileId', async () => {
+      const bytes = new TextEncoder().encode('referenced');
+      const record = await t.ctx.stack.putAttachment(bytes, 'text/plain');
+      const fileId = (record.content as { fileId: string }).fileId;
+      await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'ref' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+          associations: [{ kind: 'attachment', label: 'file', fileId }],
+        },
+      );
+      await t.ctx.stack.grant(OTHER_ENTITY_ID, [
+        { actions: ['create'], typeId: ATTACHMENT_TYPE_ID },
+      ]);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const { status } = await req(t.app, 'POST', '/records', {
+        token,
+        body: {
+          typeId: ATTACHMENT_TYPE_ID,
+          content: { fileId, mimeType: 'text/plain', size: bytes.byteLength },
+        },
+      });
+      expect(status).toBe(201);
+    });
+  });
+
+  describe('Delegation (principal/subject)', () => {
+    const APP_ID = 'app-entity-id-00000004';
+    const SUBJECT_ID = 'subject-entity-id-00000005';
+
+    it('a delegated session stamps principalId and attributes entityId to the subject', async () => {
+      // Delegated authority is the intersection of both parties' grants.
+      await t.ctx.stack.grant(SUBJECT_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      await t.ctx.stack.grant(APP_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      const { token } = await t.ctx.adapter.createToken(APP_ID, { onBehalfOf: SUBJECT_ID });
+
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'delegated note' } },
+      });
+      expect(status).toBe(201);
+      const d = data as Record<string, unknown>;
+      expect(d.entityId).toBe(SUBJECT_ID);
+      expect(d.principalId).toBe(APP_ID);
+    });
+
+    it('a delegated create is refused when only one party holds the create grant', async () => {
+      await t.ctx.stack.grant(SUBJECT_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      // APP_ID (the principal) has no grant of its own.
+      const { token } = await t.ctx.adapter.createToken(APP_ID, { onBehalfOf: SUBJECT_ID });
+
+      const { status } = await req(t.app, 'POST', '/records', {
+        token,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'should be refused' } },
+      });
+      expect(status).toBe(403);
+    });
+
+    it('filters by ?principalId=', async () => {
+      await t.ctx.stack.grant(SUBJECT_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      await t.ctx.stack.grant(APP_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      const { token } = await t.ctx.adapter.createToken(APP_ID, { onBehalfOf: SUBJECT_ID });
+      await req(t.app, 'POST', '/records', {
+        token,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'delegated note' } },
+      });
+      await seedRecord(t.ctx); // owner-authored, no principalId
+
+      const { data } = await req(
+        t.app,
+        'GET',
+        `/records?principalId=${encodeURIComponent(APP_ID)}`,
+        { token: TEST_TOKEN },
+      );
+      const records = (data as { records: Array<{ principalId?: string }> }).records;
+      expect(records).toHaveLength(1);
+      expect(records[0].principalId).toBe(APP_ID);
     });
   });
 });
