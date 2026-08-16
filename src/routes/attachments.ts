@@ -1,31 +1,42 @@
 import { Hono } from 'hono';
-import { StackPermissionError } from '@haverstack/core';
+import { bodyLimit } from 'hono/body-limit';
+import { StackPermissionError, StackPayloadTooLargeError } from '@haverstack/core';
+import { serializeRecord } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { adapter, stack } = ctx;
+  const { stack } = ctx;
   const { ownerEntityId } = stack;
 
-  // POST /attachments — upload raw binary; stores bytes only.
-  // Callers should follow up with POST /records to create the _attachment@1
-  // metadata record (mimeType, size, filename). The SDK's ScopedStack.putAttachment()
-  // does this automatically.
-  app.post('/', requireAuth(), async (c) => {
-    const contentLength = Number(c.req.header('Content-Length') ?? 0);
-    if (contentLength > maxAttachmentBytes) {
-      return c.json({ error: 'Attachment too large' }, 413);
-    }
+  // Aborts while reading the body, the moment the byte count passes the
+  // limit — no full-body buffer for an oversized upload, chunked or not.
+  const attachmentBodyLimit = bodyLimit({
+    maxSize: maxAttachmentBytes,
+    onError: () => {
+      throw new StackPayloadTooLargeError(
+        `Attachment exceeds the ${maxAttachmentBytes}-byte limit`,
+      );
+    },
+  });
+
+  // POST /attachments — stores the bytes and creates the _attachment@1
+  // metadata record in the same request, returning that record. Routed
+  // through ScopedStack.putAttachment() so the create-grant check on
+  // _attachment@1 runs before a single byte is written: an authenticated
+  // requester with no grant is refused, not merely denied a metadata
+  // record afterward. See docs/spec/wire-format.md § Upload.
+  app.post('/', attachmentBodyLimit, requireAuth(), async (c) => {
+    const auth = c.get('auth')!;
+    const mimeType = c.req.header('Content-Type') || 'application/octet-stream';
+    const filename = parseUploadFilename(c.req.header('Content-Disposition'));
+    const appId = c.req.query('appId') || undefined;
 
     const data = new Uint8Array(await c.req.arrayBuffer());
-    if (data.byteLength > maxAttachmentBytes) {
-      return c.json({ error: 'Attachment too large' }, 413);
-    }
-
-    const fileId = await adapter.putAttachment(data);
-    return c.json({ fileId }, 201);
+    const record = await stack.forSession(auth).putAttachment(data, mimeType, filename, appId);
+    return c.json(serializeRecord(record), 200);
   });
 
   // GET /attachments/:fileId — download
@@ -35,7 +46,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     let data: Uint8Array;
     try {
-      data = await stack.asEntity(auth?.entityId ?? null).getAttachment(fileId);
+      data = await (auth ? stack.forSession(auth) : stack.asEntity(null)).getAttachment(fileId);
     } catch (e) {
       if (e instanceof StackPermissionError) return c.json({ error: 'Unauthorized' }, 401);
       return c.json({ error: 'Attachment not found' }, 404);
@@ -66,6 +77,26 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   });
 
   return app;
+}
+
+/**
+ * Parse a filename from an upload's Content-Disposition header. Prefers
+ * the RFC 5987 extended form (`filename*=UTF-8''name.txt`), which is what
+ * clients that carry non-ASCII names use; falls back to the plain quoted
+ * form for everyone else.
+ */
+function parseUploadFilename(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  const extended = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(header);
+  if (extended) {
+    try {
+      return decodeURIComponent(extended[1].trim());
+    } catch {
+      // Malformed percent-encoding — fall through to the plain form.
+    }
+  }
+  const plain = /filename\s*=\s*"([^"]+)"/i.exec(header);
+  return plain ? plain[1] : undefined;
 }
 
 // MIME types that browsers can use to execute scripts or parse as markup.

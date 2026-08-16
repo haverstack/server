@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@haverstack/adapter-local':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.7.0
+        version: 0.7.0
       '@haverstack/core':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.9.0
+        version: 0.9.0
       '@haverstack/wire-types':
-        specifier: ^0.6.0
-        version: 0.6.0
+        specifier: ^0.7.0
+        version: 0.7.0
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.14(hono@4.12.26)
@@ -401,23 +401,22 @@ packages:
     resolution: {integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@haverstack/adapter-local@0.6.0':
-    resolution: {integrity: sha512-2EKcZ4xqYaVwLyZYCJ0uQNX1plJdxxnxQ6DNOgXVSRHYoQluQ0Ihs2B6LYZFzzSYVD6y0K9hNz6rA63xBmW0kA==}
+  '@haverstack/adapter-local@0.7.0':
+    resolution: {integrity: sha512-G66F3g711PIIIK5kYH7DMv93LKn0i0Za6PsBCSyYO1vlVph6Vkf8LohaessPuoKuehiSWSmtiwEk0+MZvgkkpA==}
+    engines: {node: '>=22.5.0'}
 
-  '@haverstack/blob-adapter-disk@0.6.0':
-    resolution: {integrity: sha512-Ttf/5CI17KgkQSOoxWQ0F9CuwKlNeHs6OGz81/THEg900F/+J8Mi7eIQ/6vOgPnEMS+33kyz/7gDQWhjjEIinw==}
+  '@haverstack/blob-adapter-disk@0.7.0':
+    resolution: {integrity: sha512-n2qWuZD4pIN8M5dfEIGOgTFif0NOmtl28bWkeqBrjyIXBO/1u693HZ8XJ/v7W+jIolePkt+UDsjaQhzFwdjloA==}
 
-  '@haverstack/core@0.6.0':
-    resolution: {integrity: sha512-ruv1LrOlCaCgQTfUKbQEi3hYeIxJ7fGHU2ynWPY3LjB5Cia+bbMkAnPtznEparunPNhOfdI/nf51MjMwyhFhkg==}
+  '@haverstack/core@0.9.0':
+    resolution: {integrity: sha512-5tTTM4ADR6lECCdfFg/376rjzrRgHVbRaK1c63sMPQ9y9/iPWuvAJX/hA2taJ5c29JTbSQusHsbrK0uRfFa95A==}
 
-  '@haverstack/core@0.8.0':
-    resolution: {integrity: sha512-QT4YvvpZRwHILJCUAsIA28Ed043/nTP97+njEFAr3fOb3B2kCGT14WCdobCjCy4y2uX6ziwch7/lzGlmfirI8Q==}
+  '@haverstack/record-adapter-sqlite@0.1.0':
+    resolution: {integrity: sha512-IOrFXRnRdZ99+/mZvU014UKQeDU49ZCuzIyQjpFcR02uSzkh1ItoWGl2hj53UeBXV2WlHD89knZOBFEnJ4w5pQ==}
+    engines: {node: '>=22.5.0'}
 
-  '@haverstack/record-adapter-sqljs@0.6.0':
-    resolution: {integrity: sha512-+BHfNqW+dKg0Yy+io6cvqXjrOWugBXbPtQJWKTI9VNA6zfHngoWPpYIJ9n01dQ8LpsorXaRAG0ROO3Fev9mI6Q==}
-
-  '@haverstack/wire-types@0.6.0':
-    resolution: {integrity: sha512-Ko8wm504XY3Hvlf6zJDu8NgQqxM59iefxy2O1jDYgZEHeLt/Lqh19KrgZyGbINToezqmL9EnC42qmhcO05Ur0Q==}
+  '@haverstack/wire-types@0.7.0':
+    resolution: {integrity: sha512-0pqKXc4Gkqu/lH/6u3toSI2kh84ByeHd1piPHMv/LsXKSMy9NfTFrnriz/NEMOeZXkzduYv7+wKDLTwoGXMRew==}
 
   '@hono/node-server@1.19.14':
     resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
@@ -1146,9 +1145,6 @@ packages:
     resolution: {integrity: sha512-UcjcJOWknrNkF6PLX83qcHM6KHgVKNkV62Y8a5uYDVv9ydGQVwAHMKqHdJje1VTWpljG0WYpCDhrCdAOYH4TWg==}
     engines: {node: '>= 10.x'}
 
-  sql.js@1.14.1:
-    resolution: {integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==}
-
   stackback@0.0.2:
     resolution: {integrity: sha512-1XMJE5fQo1jGH6Y/7ebnwPOBEkIEnT4QF32d5R1+VXdXveM0IBMJt8zfaxX1P3QhVwrYe+576+jkANtSS2mBbw==}
 
@@ -1506,28 +1502,25 @@ snapshots:
       '@eslint/core': 0.17.0
       levn: 0.4.1
 
-  '@haverstack/adapter-local@0.6.0':
+  '@haverstack/adapter-local@0.7.0':
     dependencies:
-      '@haverstack/blob-adapter-disk': 0.6.0
-      '@haverstack/core': 0.6.0
-      '@haverstack/record-adapter-sqljs': 0.6.0
+      '@haverstack/blob-adapter-disk': 0.7.0
+      '@haverstack/core': 0.9.0
+      '@haverstack/record-adapter-sqlite': 0.1.0
 
-  '@haverstack/blob-adapter-disk@0.6.0':
+  '@haverstack/blob-adapter-disk@0.7.0':
     dependencies:
-      '@haverstack/core': 0.6.0
+      '@haverstack/core': 0.9.0
 
-  '@haverstack/core@0.6.0': {}
+  '@haverstack/core@0.9.0': {}
 
-  '@haverstack/core@0.8.0': {}
-
-  '@haverstack/record-adapter-sqljs@0.6.0':
+  '@haverstack/record-adapter-sqlite@0.1.0':
     dependencies:
-      '@haverstack/core': 0.6.0
-      sql.js: 1.14.1
+      '@haverstack/core': 0.9.0
 
-  '@haverstack/wire-types@0.6.0':
+  '@haverstack/wire-types@0.7.0':
     dependencies:
-      '@haverstack/core': 0.6.0
+      '@haverstack/core': 0.9.0
 
   '@hono/node-server@1.19.14(hono@4.12.26)':
     dependencies:
@@ -2258,8 +2251,6 @@ snapshots:
   source-map-js@1.2.1: {}
 
   split2@4.2.0: {}
-
-  sql.js@1.14.1: {}
 
   stackback@0.0.2: {}
 

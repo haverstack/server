@@ -13,7 +13,7 @@ async function seedEntityRecord(ctx: TestApp['ctx']): Promise<StackRecord> {
   return ctx.adapter.createRecord({
     id: TEST_ENTITY_ID,
     typeId: '_entity@1',
-    content: { name: 'Test Entity' },
+    content: { did: TEST_ENTITY_ID, name: 'Test Entity' },
     createdAt: new Date(),
     updatedAt: new Date(),
     version: 1,

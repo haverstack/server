@@ -19,8 +19,24 @@ describe('POST /tokens', () => {
     const d = data as Record<string, unknown>;
     expect(typeof d.id).toBe('string');
     expect(typeof d.token).toBe('string');
-    expect(d.entityId).toBe(OTHER_ENTITY_ID);
+    expect(d.principalId).toBe(OTHER_ENTITY_ID);
+    expect(d.subjectId).toBe(OTHER_ENTITY_ID);
     expect(d.label).toBe('test-label');
+  });
+
+  it('owner can assert a delegation via onBehalfOf', async () => {
+    const subjectId = 'subject-entity-id-00000003';
+    const { status, data } = await req(t.app, 'POST', '/tokens', {
+      token: TEST_TOKEN,
+      body: { entityId: OTHER_ENTITY_ID, onBehalfOf: subjectId },
+    });
+    expect(status).toBe(201);
+    const d = data as Record<string, unknown>;
+    expect(d.principalId).toBe(OTHER_ENTITY_ID);
+    expect(d.subjectId).toBe(subjectId);
+
+    const session = await t.ctx.adapter.lookupToken(d.token as string);
+    expect(session).toEqual({ principalId: OTHER_ENTITY_ID, subjectId });
   });
 
   it('returns 403 for a non-owner authenticated entity', async () => {

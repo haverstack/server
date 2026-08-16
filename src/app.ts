@@ -14,6 +14,7 @@ import { typeRoutes } from './routes/types.js';
 import { attachmentRoutes } from './routes/attachments.js';
 import { entityRoutes } from './routes/entity.js';
 import { tokenRoutes } from './routes/tokens.js';
+import { wireError } from './wireError.js';
 
 export type { AppEnv };
 
@@ -50,7 +51,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   // excluded here — they enforce their own limit via maxAttachmentBytes.
   const jsonBodyLimit = bodyLimit({
     maxSize: JSON_BODY_LIMIT,
-    onError: (c) => c.json({ error: 'Request body too large' }, 413),
+    onError: (c) => wireError(c, 413, 'payload_too_large', 'Request body too large'),
   });
   app.use('/records/*', jsonBodyLimit);
   app.use('/types/*', jsonBodyLimit);
@@ -65,7 +66,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/entity', entityRoutes(ctx));
   app.route('/tokens', tokenRoutes(ctx));
 
-  app.notFound((c) => c.json({ error: 'Not found' }, 404));
+  app.notFound((c) => wireError(c, 404, 'not_found', 'Not found'));
 
   return app;
 }

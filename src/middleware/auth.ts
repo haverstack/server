@@ -1,7 +1,9 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
+import { StackPermissionError } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
+import { wireError } from '../wireError.js';
 
 function safeCompare(a: string, b: string): boolean {
   const ba = Buffer.from(a);
@@ -17,10 +19,10 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
     if (header?.startsWith('Bearer ')) {
       const token = header.slice(7);
       if (safeCompare(token, ownerToken)) {
-        c.set('auth', { entityId: ownerEntityId });
+        c.set('auth', { principalId: ownerEntityId, subjectId: ownerEntityId });
       } else {
-        const result = await ctx.adapter.lookupToken(token);
-        c.set('auth', result ? { entityId: result.entityId } : null);
+        const session = await ctx.adapter.lookupToken(token);
+        c.set('auth', session);
       }
     } else {
       c.set('auth', null);
@@ -31,16 +33,23 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
 
 export function requireAuth(): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
-    if (!c.get('auth')) return c.json({ error: 'Unauthorized' }, 401);
+    if (!c.get('auth')) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
     await next();
   };
 }
 
+/**
+ * Gates a route to the owner acting alone. Being the owner is never on its
+ * own sufficient under delegation — a delegated session with the owner as
+ * principal is still refused, matching `ScopedStack`'s own owner-only gates
+ * (e.g. hard delete). See docs/spec/access-control.md § Delegation.
+ */
 export function requireOwner(ownerEntityId: string): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const auth = c.get('auth');
-    if (!auth) return c.json({ error: 'Unauthorized' }, 401);
-    if (auth.entityId !== ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
+    if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+    const ownerActingAlone = auth.principalId === ownerEntityId && auth.subjectId === ownerEntityId;
+    if (!ownerActingAlone) throw new StackPermissionError('Owner access required');
     await next();
   };
 }

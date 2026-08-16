@@ -133,6 +133,14 @@ docker compose up -d
 
 ---
 
+## Single-writer topology
+
+The `data` volume (`DB_PATH`'s directory) holds more than the database file itself: `stack.db-wal` and `stack.db-shm` are SQLite's write-ahead-log sidecar files, present whenever the process has the database open, and `stack.db.lock` is a storage-ownership lock recording the PID of the process that opened it. Back up or copy the whole directory, not just `stack.db` — a `stack.db` file copied without its `-wal` sidecar can be missing recently-committed data.
+
+A given `DB_PATH` may be held open by only one process at a time. If a second server instance (a botched redeploy, a stuck old container, a manual `pnpm start` alongside a running one) tries to open the same path, it fails at startup with an error naming the PID already holding it, rather than corrupting the database or silently serving alongside it — WAL and real file locking make concurrent _storage_ access safer than the old single-file adapter, but the single-writer topology stands regardless: permissions only exist behind this one server process, so a second writer would be a second, unenforced trust boundary. If you see this error on a routine restart, the previous process likely hasn't exited yet — give it time to shut down cleanly, or confirm it has actually stopped, before starting the replacement.
+
+---
+
 ## CORS
 
 Set `CORS_ORIGINS` to a comma-separated list of the origins that need cross-origin access to your stack:

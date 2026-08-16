@@ -1,21 +1,21 @@
 import type { ErrorHandler } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Logger } from 'pino';
 import type { AppEnv } from '../types.js';
-import {
-  StackPermissionError,
-  StackValidationError,
-  StackNotFoundError,
-  StackConflictError,
-} from '@haverstack/core';
+import { serializeError } from '@haverstack/wire-types';
 
+/**
+ * Central error handler. `serializeError()` covers every core `StackError`
+ * (thrown directly by routes or surfaced from `Stack`/`ScopedStack`) with
+ * the wire-format's typed `{ error: { code, message } }` body. Anything
+ * else is an unanticipated bug: log it and return a bodyless 500 rather
+ * than guessing at a taxonomy it doesn't belong to.
+ */
 export function errorMiddleware(logger: Logger): ErrorHandler<AppEnv> {
   return (err, c) => {
-    if (err instanceof StackNotFoundError) return c.json({ error: 'Not found' }, 404);
-    if (err instanceof StackPermissionError) return c.json({ error: 'Forbidden' }, 403);
-    if (err instanceof StackConflictError) return c.json({ error: err.message }, 409);
-    if (err instanceof StackValidationError)
-      return c.json({ error: err.message, details: err.errors }, 422);
+    const wire = serializeError(err);
+    if (wire) return c.json(wire.body, wire.status as ContentfulStatusCode);
     logger.error({ err, requestId: c.get('requestId') }, 'Unhandled request error');
-    return c.json({ error: 'Internal server error' }, 500);
+    return c.json({ error: { code: 'internal', message: 'Internal server error' } }, 500);
   };
 }

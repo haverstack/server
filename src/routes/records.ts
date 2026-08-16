@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
+import type { ScopedStack, TokenSession } from '@haverstack/core';
 import { requireAuth } from '../middleware/auth.js';
 import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
-import { SYSTEM_TYPES, StackValidationError } from '@haverstack/core';
+import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
 
 const MAX_QUERY_LIMIT = 1000;
@@ -35,6 +36,7 @@ function parseQueryBody(raw: unknown): StackQuery {
       filter.parentId = f.parentId === null ? null : (f.parentId as string);
     if (f.appId !== undefined) filter.appId = f.appId as string | string[];
     if (f.entityId !== undefined) filter.entityId = f.entityId as string | string[];
+    if (f.principalId !== undefined) filter.principalId = f.principalId as string | string[];
     if (f.tags !== undefined) filter.tags = f.tags as string[];
     if (f.hasAttachment !== undefined) filter.hasAttachment = f.hasAttachment as string;
     if (f.attachmentFileId !== undefined) filter.attachmentFileId = f.attachmentFileId as string;
@@ -91,6 +93,10 @@ function parseQueryParams(url: URL): StackQuery {
 
   const entityIds = getAll(url, 'entityId');
   if (entityIds.length) filter.entityId = entityIds.length === 1 ? entityIds[0] : entityIds;
+
+  const principalIds = getAll(url, 'principalId');
+  if (principalIds.length)
+    filter.principalId = principalIds.length === 1 ? principalIds[0] : principalIds;
 
   const tags = getAll(url, 'tag');
   if (tags.length) filter.tags = tags;
@@ -154,12 +160,17 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack } = ctx;
 
+  /** Scope to a session if authenticated, else the anonymous view. */
+  function scopeFor(auth: TokenSession | null): ScopedStack {
+    return auth ? stack.forSession(auth) : stack.asEntity(null);
+  }
+
   // POST /records/query — full query with content-field filters
   // Registered before /:id patterns to avoid param capture on the literal "query" segment.
   app.post('/query', requireAuth(), async (c) => {
     const auth = c.get('auth');
     const query = parseQueryBody(await c.req.json());
-    const result = await stack.asEntity(auth?.entityId ?? null).query(query);
+    const result = await scopeFor(auth).query(query);
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
@@ -171,7 +182,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/', async (c) => {
     const auth = c.get('auth');
     const query = parseQueryParams(new URL(c.req.url));
-    const result = await stack.asEntity(auth?.entityId ?? null).query(query);
+    const result = await scopeFor(auth).query(query);
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
@@ -184,16 +195,16 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
     if (!body.typeId || typeof body.typeId !== 'string')
-      return c.json({ error: 'typeId is required' }, 400);
+      throw new StackQueryError('typeId is required');
     if (!body.content || typeof body.content !== 'object')
-      return c.json({ error: 'content is required' }, 400);
+      throw new StackQueryError('content is required');
     if (!(await stack.getType(body.typeId as TypeId)))
       throw new StackValidationError([
         { path: 'typeId', message: `Unknown type: "${body.typeId}"` },
       ]);
 
     const created = await stack
-      .asEntity(auth.entityId)
+      .forSession(auth)
       .create(body.typeId as TypeId, body.content as Record<string, unknown>, {
         parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
         appId: typeof body.appId === 'string' ? body.appId : undefined,
@@ -211,41 +222,26 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/:id', async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
-    const record = await stack.asEntity(auth?.entityId ?? null).get(id);
-    if (!record) return c.json({ error: 'Record not found' }, 404);
+    const record = await scopeFor(auth).get(id);
+    if (!record) throw new StackNotFoundError('Record not found');
     return c.json(serializeRecord(record));
   });
 
   // PATCH /records/:id — merges content patch (RFC 7396); null field values remove the field
+  //
+  // The _attachment@1 immutable-field guard, the _grant@1 owner-only guard,
+  // and the unscoped stack.get() pre-fetch that used to back them are gone:
+  // ScopedStack now enforces all of it (docs/spec/attachments.md,
+  // docs/spec/access-control.md), so a denial round-trips as the core error
+  // it actually is instead of a route-level guess made before the
+  // permission check ever ran.
   app.patch('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
     const patch = (body.content ?? {}) as Record<string, unknown>;
 
-    const existing = await stack.get(id);
-    if (existing) {
-      if (existing.typeId.startsWith(`${SYSTEM_TYPES.ATTACHMENT}@`)) {
-        const immutableFields = ['fileId', 'size', 'mimeType'];
-        const attempted = immutableFields.filter((f) =>
-          Object.prototype.hasOwnProperty.call(patch, f),
-        );
-        if (attempted.length > 0) {
-          return c.json(
-            { error: `Cannot modify immutable attachment fields: ${attempted.join(', ')}` },
-            422,
-          );
-        }
-      }
-      if (
-        existing.typeId.startsWith(`${SYSTEM_TYPES.GRANT}@`) &&
-        auth.entityId !== stack.ownerEntityId
-      ) {
-        return c.json({ error: 'Forbidden' }, 403);
-      }
-    }
-
-    const updated = await stack.asEntity(auth.entityId).update(id, patch);
+    const updated = await stack.forSession(auth).update(id, patch);
     return c.json(serializeRecord(updated));
   });
 
@@ -254,18 +250,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
-    if (hard && auth.entityId !== stack.ownerEntityId) return c.json({ error: 'Forbidden' }, 403);
 
-    const existing = await stack.get(id);
-    if (
-      existing &&
-      existing.typeId.startsWith(`${SYSTEM_TYPES.GRANT}@`) &&
-      auth.entityId !== stack.ownerEntityId
-    ) {
-      return c.json({ error: 'Forbidden' }, 403);
-    }
-
-    await stack.asEntity(auth.entityId).delete(id, { hard });
+    await stack.forSession(auth).delete(id, { hard });
     return c.body(null, 204);
   });
 
@@ -276,8 +262,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/:id/permissions', async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
-    const record = await stack.asEntity(auth?.entityId ?? null).get(id);
-    if (!record) return c.json({ error: 'Record not found' }, 404);
+    const record = await scopeFor(auth).get(id);
+    if (!record) throw new StackNotFoundError('Record not found');
     return c.json({ permissions: record.permissions ?? [] });
   });
 
@@ -285,9 +271,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<{ permissions: Permission[] }>();
-    if (!Array.isArray(body.permissions))
-      return c.json({ error: 'permissions must be an array' }, 400);
-    await stack.asEntity(auth.entityId).setPermissions(id, body.permissions);
+    if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
+    await stack.forSession(auth).setPermissions(id, body.permissions);
     return c.json({ permissions: body.permissions });
   });
 
@@ -298,8 +283,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/:id/associations', async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
-    const record = await stack.asEntity(auth?.entityId ?? null).get(id);
-    if (!record) return c.json({ error: 'Record not found' }, 404);
+    const record = await scopeFor(auth).get(id);
+    if (!record) throw new StackNotFoundError('Record not found');
     let assocs = record.associations ?? [];
     const kind = c.req.query('kind');
     if (kind) assocs = assocs.filter((a) => a.kind === kind);
@@ -312,8 +297,8 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
-    if (!body.kind || !body.label) return c.json({ error: 'kind and label are required' }, 400);
-    await stack.asEntity(auth.entityId).associate(id, body);
+    if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
+    await stack.forSession(auth).associate(id, body);
     return c.body(null, 204);
   });
 
@@ -321,7 +306,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
-    await stack.asEntity(auth.entityId).dissociate(id, body);
+    await stack.forSession(auth).dissociate(id, body);
     return c.body(null, 204);
   });
 
@@ -332,17 +317,17 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/:id/versions', async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
-    const versions = await stack.asEntity(auth?.entityId ?? null).getVersions(id);
+    const versions = await scopeFor(auth).getVersions(id);
     return c.json(versions.map(serializeVersion));
   });
 
   app.get('/:id/versions/:version', async (c) => {
     const id = c.req.param('id');
     const vNum = parseInt(c.req.param('version'), 10);
-    if (isNaN(vNum)) return c.json({ error: 'Invalid version number' }, 400);
+    if (isNaN(vNum)) throw new StackQueryError('Invalid version number');
     const auth = c.get('auth');
-    const version = await stack.asEntity(auth?.entityId ?? null).getVersion(id, vNum);
-    if (!version) return c.json({ error: 'Version not found' }, 404);
+    const version = await scopeFor(auth).getVersion(id, vNum);
+    if (!version) throw new StackNotFoundError('Version not found');
     return c.json(serializeVersion(version));
   });
 
@@ -350,9 +335,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.post('/:id/restore/:version', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const vNum = parseInt(c.req.param('version'), 10);
-    if (isNaN(vNum)) return c.json({ error: 'Invalid version number' }, 400);
+    if (isNaN(vNum)) throw new StackQueryError('Invalid version number');
     const auth = c.get('auth')!;
-    const restored = await stack.asEntity(auth.entityId).restoreVersion(id, vNum);
+    const restored = await stack.forSession(auth).restoreVersion(id, vNum);
     return c.json(serializeRecord(restored));
   });
 

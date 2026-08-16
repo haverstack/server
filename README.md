@@ -32,7 +32,9 @@ docker run -d \
   ghcr.io/haverstack/server:latest
 ```
 
-`/app/data` holds the SQLite database and attachments — mount a volume there for persistence. Set `ENTITY_ID` only on first run; it is ignored once the database exists.
+`/app/data` holds the SQLite database, its WAL sidecar files (`stack.db-wal`, `stack.db-shm`), a storage-ownership lock file (`stack.db.lock`), and attachments — mount a volume there for persistence. Set `ENTITY_ID` only on first run; it is ignored once the database exists.
+
+Only one server process may hold a given `DB_PATH` at a time: a second process against the same path fails at startup with a clear error rather than silently sharing (or corrupting) the database. This is enforced by the storage adapter, independent of any reverse proxy or orchestrator setting — see [Deployment: single-writer topology](./docs/deployment.md#single-writer-topology).
 
 ---
 

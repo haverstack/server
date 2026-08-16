@@ -3,7 +3,12 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
 import { parseDate, serializeType } from '@haverstack/wire-types';
-import { hashSchema } from '@haverstack/core';
+import {
+  hashSchema,
+  StackQueryError,
+  StackNotFoundError,
+  StackValidationError,
+} from '@haverstack/core';
 import type { StackType, TypeSchema } from '@haverstack/core';
 
 export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
@@ -18,26 +23,27 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/:id', async (c) => {
     const id = decodeURIComponent(c.req.param('id'));
     const type = await adapter.getType(id);
-    if (!type) return c.json({ error: 'Type not found' }, 404);
+    if (!type) throw new StackNotFoundError('Type not found');
     return c.json(serializeType(type));
   });
 
   app.post('/', requireOwner(stack.ownerEntityId), async (c) => {
     const body = await c.req.json<Record<string, unknown>>();
-    if (!body.id || typeof body.id !== 'string') return c.json({ error: 'id is required' }, 400);
+    if (!body.id || typeof body.id !== 'string') throw new StackQueryError('id is required');
     if (!body.baseId || typeof body.baseId !== 'string')
-      return c.json({ error: 'baseId is required' }, 400);
-    if (typeof body.version !== 'number') return c.json({ error: 'version must be a number' }, 400);
-    if (!body.name || typeof body.name !== 'string')
-      return c.json({ error: 'name is required' }, 400);
+      throw new StackQueryError('baseId is required');
+    if (typeof body.version !== 'number') throw new StackQueryError('version must be a number');
+    if (!body.name || typeof body.name !== 'string') throw new StackQueryError('name is required');
     if (!body.schema || typeof body.schema !== 'object')
-      return c.json({ error: 'schema is required' }, 400);
+      throw new StackQueryError('schema is required');
     if (!body.schemaHash || typeof body.schemaHash !== 'string')
-      return c.json({ error: 'schemaHash is required' }, 400);
+      throw new StackQueryError('schemaHash is required');
 
     const computedHash = await hashSchema(body.schema as TypeSchema);
     if (body.schemaHash !== computedHash)
-      return c.json({ error: 'schemaHash does not match schema' }, 422);
+      throw new StackValidationError([
+        { path: 'schemaHash', message: 'schemaHash does not match schema' },
+      ]);
 
     const type: StackType = {
       id: body.id,
