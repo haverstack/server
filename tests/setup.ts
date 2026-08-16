@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
-import { LocalAdapter } from '@haverstack/adapter-local';
+import { LocalAdapter, NativeTokenStore, defaultTokenStorePath } from '@haverstack/adapter-local';
 import { Stack } from '@haverstack/core';
 import pino from 'pino';
 import { createApp } from '../src/app.js';
@@ -35,7 +35,8 @@ export async function createTestContext(dbPath: string): Promise<StackContext> {
     timezone: 'UTC',
   });
   const stack = await Stack.create(adapter);
-  return { adapter, stack };
+  const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
+  return { adapter, stack, tokens };
 }
 
 export function testConfig(dbPath: string): Config {
@@ -67,6 +68,7 @@ export async function buildTestApp(): Promise<TestApp> {
 
   const cleanup = async () => {
     await ctx.stack.close();
+    await ctx.tokens.close();
     // Remove the whole temp directory (includes the .db file and attachments/).
     await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
   };

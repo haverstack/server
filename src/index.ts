@@ -28,6 +28,7 @@ async function main() {
     server.close(async () => {
       await ctx.stack.flush();
       await ctx.stack.close();
+      await ctx.tokens.close();
       logger.info('Clean shutdown complete');
       process.exit(0);
     });

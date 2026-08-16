@@ -4,11 +4,11 @@ import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
 import { parseDate } from '@haverstack/wire-types';
 import { StackValidationError } from '@haverstack/core';
-import type { TokenInfo } from '@haverstack/adapter-local';
+import type { TokenInfo } from '@haverstack/core/wire';
 
 export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { adapter, stack } = ctx;
+  const { tokens, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
 
   // POST /tokens — issue a new token (owner only). `onBehalfOf` asserts a
@@ -27,7 +27,7 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
     if (body.expiresAt && !expiresAt)
       throw new StackValidationError([{ path: 'expiresAt', message: 'Invalid date' }]);
 
-    const { id, token } = await adapter.createToken(principalId, {
+    const { id, token } = await tokens.createToken(principalId, {
       onBehalfOf: body.onBehalfOf,
       label: body.label,
       expiresAt,
@@ -49,13 +49,13 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
 
   // GET /tokens — list all DB-managed tokens; never returns token values
   app.get('/', requireOwner(ownerEntityId), async (c) => {
-    const tokens = await adapter.listTokens();
-    return c.json({ tokens: tokens.map(serializeToken) });
+    const list = await tokens.listTokens();
+    return c.json({ tokens: list.map(serializeToken) });
   });
 
   // DELETE /tokens/:id — revoke a token by its ID
   app.delete('/:id', requireOwner(ownerEntityId), async (c) => {
-    await adapter.revokeToken(c.req.param('id'));
+    await tokens.revokeToken(c.req.param('id'));
     return c.body(null, 204);
   });
 
