@@ -21,7 +21,7 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
       if (safeCompare(token, ownerToken)) {
         c.set('auth', { principalId: ownerEntityId, subjectId: ownerEntityId });
       } else {
-        const session = await ctx.adapter.lookupToken(token);
+        const session = await ctx.tokens.lookupToken(token);
         c.set('auth', session);
       }
     } else {
