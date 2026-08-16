@@ -14,10 +14,10 @@ const logger = pino({
 
 async function main() {
   const config = loadConfig();
-  const ctx = await initStack(config);
+  const ctx = await initStack(config, logger);
   const app = createApp(ctx, config, logger);
 
-  logger.info({ dbPath: config.dbPath, isNewDb: config.isNewDb }, 'Stack initialized');
+  logger.info({ dbPath: config.dbPath }, 'Stack initialized');
 
   const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     logger.info({ port: info.port }, 'Server listening');

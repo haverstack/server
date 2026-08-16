@@ -25,7 +25,7 @@ describe('POST /tokens', () => {
   });
 
   it('owner can assert a delegation via onBehalfOf', async () => {
-    const subjectId = 'subject-entity-id-00000003';
+    const subjectId = 'did:key:subject-entity-id-00000003';
     const { status, data } = await req(t.app, 'POST', '/tokens', {
       token: TEST_TOKEN,
       body: { entityId: OTHER_ENTITY_ID, onBehalfOf: subjectId },
@@ -51,6 +51,42 @@ describe('POST /tokens', () => {
   it('returns 401 for an unauthenticated request', async () => {
     const { status } = await req(t.app, 'POST', '/tokens', { body: {} });
     expect(status).toBe(401);
+  });
+
+  it('rejects a non-DID entityId with 422', async () => {
+    const { status, data } = await req(t.app, 'POST', '/tokens', {
+      token: TEST_TOKEN,
+      body: { entityId: 'not-a-did' },
+    });
+    expect(status).toBe(422);
+    const body = data as { error: { code: string; details: Array<{ path: string }> } };
+    expect(body.error.code).toBe('validation');
+    expect(body.error.details.some((d) => d.path === 'entityId')).toBe(true);
+  });
+
+  it('rejects a non-DID onBehalfOf with 422', async () => {
+    const { status, data } = await req(t.app, 'POST', '/tokens', {
+      token: TEST_TOKEN,
+      body: { entityId: OTHER_ENTITY_ID, onBehalfOf: 'not-a-did' },
+    });
+    expect(status).toBe(422);
+    const body = data as { error: { code: string; details: Array<{ path: string }> } };
+    expect(body.error.code).toBe('validation');
+    expect(body.error.details.some((d) => d.path === 'onBehalfOf')).toBe(true);
+  });
+
+  it('reports the stored createdAt, matching what GET /tokens later reports', async () => {
+    const { data } = await req(t.app, 'POST', '/tokens', {
+      token: TEST_TOKEN,
+      body: { entityId: OTHER_ENTITY_ID },
+    });
+    const created = data as { id: string; createdAt: string };
+
+    const { data: listed } = await req(t.app, 'GET', '/tokens', { token: TEST_TOKEN });
+    const row = (listed as { tokens: Array<{ id: string; createdAt: string }> }).tokens.find(
+      (tok) => tok.id === created.id,
+    );
+    expect(row?.createdAt).toBe(created.createdAt);
   });
 });
 

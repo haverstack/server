@@ -12,9 +12,9 @@ import type { StackContext } from '../src/stack.js';
 import type { Hono } from 'hono';
 import type { AppEnv } from '../src/app.js';
 
-export const TEST_ENTITY_ID = 'test-entity-id-00000001';
+export const TEST_ENTITY_ID = 'did:key:test-entity-id-00000001';
 export const TEST_TOKEN = 'test-bearer-token';
-export const OTHER_ENTITY_ID = 'other-entity-id-00000002';
+export const OTHER_ENTITY_ID = 'did:key:other-entity-id-00000002';
 
 export const logger = pino({ level: 'silent' });
 
@@ -44,11 +44,12 @@ export function testConfig(dbPath: string): Config {
     port: 3000,
     dbPath,
     entityId: TEST_ENTITY_ID,
+    ownerName: null,
+    ownerHandle: null,
     timezone: 'UTC',
     ownerToken: TEST_TOKEN,
     corsOrigins: '*',
     baseUrl: null,
-    isNewDb: true,
     maxAttachmentBytes: 50 * 1024 * 1024,
   };
 }

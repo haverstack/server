@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { isValidDid } from '@haverstack/core/did';
 
 const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB
 
@@ -16,26 +16,28 @@ export type Config = {
   port: number;
   dbPath: string;
   entityId: string | null;
+  ownerName: string | null;
+  ownerHandle: string | null;
   timezone: string;
   ownerToken: string;
   corsOrigins: string;
   baseUrl: string | null;
-  isNewDb: boolean;
   maxAttachmentBytes: number;
 };
 
 export function loadConfig(): Config {
   const dbPath = required('DB_PATH');
-  const isNewDb = !existsSync(dbPath);
 
   const entityId = process.env['ENTITY_ID'] ?? null;
-  const timezone = optional('TIMEZONE', 'UTC');
-
-  if (isNewDb && !entityId) {
+  if (entityId && !isValidDid(entityId)) {
     throw new Error(
-      'ENTITY_ID is required when initializing a new database (DB_PATH does not exist yet)',
+      `ENTITY_ID must be a DID (e.g. "did:key:z6Mk..."), got: "${entityId}". ` +
+        'See docs/spec/identity.md for how to generate one.',
     );
   }
+  const ownerName = process.env['OWNER_NAME'] ?? null;
+  const ownerHandle = process.env['OWNER_HANDLE'] ?? null;
+  const timezone = optional('TIMEZONE', 'UTC');
 
   const port = parseInt(optional('PORT', '3000'), 10);
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -54,11 +56,12 @@ export function loadConfig(): Config {
     port,
     dbPath,
     entityId,
+    ownerName,
+    ownerHandle,
     timezone,
     ownerToken: required('OWNER_TOKEN'),
     corsOrigins: optional('CORS_ORIGINS', ''),
     baseUrl: process.env['BASE_URL'] ?? null,
-    isNewDb,
     maxAttachmentBytes,
   };
 }
