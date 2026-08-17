@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
+    "@haverstack/conformance-fixtures": "^0.1.0",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.0.0",

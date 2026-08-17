@@ -33,6 +33,9 @@ importers:
       '@eslint/js':
         specifier: ^10.0.0
         version: 10.0.1(eslint@9.39.4)
+      '@haverstack/conformance-fixtures':
+        specifier: ^0.1.0
+        version: 0.1.0
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.21
@@ -407,6 +410,9 @@ packages:
 
   '@haverstack/blob-adapter-disk@0.7.0':
     resolution: {integrity: sha512-n2qWuZD4pIN8M5dfEIGOgTFif0NOmtl28bWkeqBrjyIXBO/1u693HZ8XJ/v7W+jIolePkt+UDsjaQhzFwdjloA==}
+
+  '@haverstack/conformance-fixtures@0.1.0':
+    resolution: {integrity: sha512-XYCFR9AVmjFkd1cJauux1WSC7tWLrHJYZCIWuBLSjn0h8g49M6jnBdGjzXAqoTmKIN0bPnWmX2O+l+/RGvpxaw==}
 
   '@haverstack/core@0.9.0':
     resolution: {integrity: sha512-5tTTM4ADR6lECCdfFg/376rjzrRgHVbRaK1c63sMPQ9y9/iPWuvAJX/hA2taJ5c29JTbSQusHsbrK0uRfFa95A==}
@@ -1511,6 +1517,10 @@ snapshots:
   '@haverstack/blob-adapter-disk@0.7.0':
     dependencies:
       '@haverstack/core': 0.9.0
+
+  '@haverstack/conformance-fixtures@0.1.0':
+    dependencies:
+      '@haverstack/wire-types': 0.7.0
 
   '@haverstack/core@0.9.0': {}
 

@@ -21,6 +21,13 @@ function getOne(url: URL, key: string): string | null {
   return url.searchParams.get(key);
 }
 
+/** Parse an `If-Match: "5"` header into the version number for `ifVersion`. */
+function parseIfMatch(header: string | undefined): number | undefined {
+  if (!header) return undefined;
+  const n = parseInt(header.replace(/^"|"$/g, ''), 10);
+  return isNaN(n) ? undefined : n;
+}
+
 /** Convert wire ISO strings back to Date objects inside a StackQuery body. */
 function parseQueryBody(raw: unknown): StackQuery {
   if (!raw || typeof raw !== 'object') return {};
@@ -190,7 +197,12 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     });
   });
 
-  // POST /records — create (server generates the ID)
+  // POST /records — accepts a full record body; id is client-minted (12
+  // lowercase Crockford base-32 chars, no reserved "_" prefix) and optional
+  // — omit it to let ScopedStack.create() generate one. createdAt/updatedAt/
+  // version are never accepted from the client: those are always freshly
+  // generated for a new record, same as entityId/principalId (stamped from
+  // the authenticated session, never trusted from the body).
   app.post('/', requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
@@ -206,6 +218,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const created = await stack
       .forSession(auth)
       .create(body.typeId as TypeId, body.content as Record<string, unknown>, {
+        id: typeof body.id === 'string' ? body.id : undefined,
         parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
         appId: typeof body.appId === 'string' ? body.appId : undefined,
         permissions: Array.isArray(body.permissions)
@@ -215,7 +228,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
           ? (body.associations as Association[])
           : undefined,
       });
-    return c.json(serializeRecord(created), 201);
+    return c.json(serializeRecord(created), 200);
   });
 
   // GET /records/:id
@@ -227,7 +240,12 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeRecord(record));
   });
 
-  // PATCH /records/:id — merges content patch (RFC 7396); null field values remove the field
+  // PATCH /records/:id — the body IS the content patch (RFC 7396 merge
+  // patch), never an envelope: a conforming client sends { "title": "New" }
+  // directly, not { "content": { "title": "New" } }. Wrapping it here would
+  // make every field the client sends invisible to Stack.update(), turning
+  // a real edit into a silent no-op that still bumps version. null field
+  // values remove the field.
   //
   // The _attachment@1 immutable-field guard, the _grant@1 owner-only guard,
   // and the unscoped stack.get() pre-fetch that used to back them are gone:
@@ -238,10 +256,11 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.patch('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await c.req.json<Record<string, unknown>>();
-    const patch = (body.content ?? {}) as Record<string, unknown>;
+    const patch = await c.req.json<Record<string, unknown>>();
 
-    const updated = await stack.forSession(auth).update(id, patch);
+    const updated = await stack
+      .forSession(auth)
+      .update(id, patch, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(updated));
   });
 
@@ -253,6 +272,16 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
 
     await stack.forSession(auth).delete(id, { hard });
     return c.body(null, 204);
+  });
+
+  // POST /records/:id/undelete — reverses a soft delete; idempotent
+  app.post('/:id/undelete', requireAuth(), async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth')!;
+    const restored = await stack
+      .forSession(auth)
+      .undelete(id, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    return c.json(serializeRecord(restored));
   });
 
   // ------------------------------------------------------------------
@@ -273,7 +302,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const body = await c.req.json<{ permissions: Permission[] }>();
     if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
     await stack.forSession(auth).setPermissions(id, body.permissions);
-    return c.json({ permissions: body.permissions });
+    return c.body(null, 204);
   });
 
   // ------------------------------------------------------------------
@@ -302,7 +331,10 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.body(null, 204);
   });
 
-  app.delete('/:id/associations', requireAuth(), async (c) => {
+  // POST, not DELETE — a DELETE request body has no defined semantics
+  // (RFC 9110 §9.3.5) and is a portability landmine for proxies/gateways
+  // that drop or reject it.
+  app.post('/:id/associations/delete', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
