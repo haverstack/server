@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildTestApp,
   req,
@@ -72,6 +72,34 @@ describe('GET /entity', () => {
     const { status } = await req(t.app, 'GET', '/entity');
     expect(status).toBe(401);
   });
+
+  it('resolves the owner record id once and reuses it on later requests', async () => {
+    await seedEntityRecordWithGeneratedId(t.ctx);
+    const querySpy = vi.spyOn(t.ctx.stack, 'query');
+
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+
+    expect(querySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-resolves after the cached record is deleted, and again once it is recreated', async () => {
+    const first = await seedEntityRecordWithGeneratedId(t.ctx);
+
+    const populate = await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+    expect(populate.status).toBe(200);
+
+    await t.ctx.adapter.deleteRecord(first.id, { hard: true });
+    const afterDelete = await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+    expect(afterDelete.status).toBe(404);
+
+    const second = await seedEntityRecordWithGeneratedId(t.ctx);
+    expect(second.id).not.toBe(first.id);
+    const afterRecreate = await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+    expect(afterRecreate.status).toBe(200);
+    expect((afterRecreate.data as Record<string, unknown>).id).toBe(second.id);
+  });
 });
 
 describe('PATCH /entity', () => {
@@ -130,5 +158,37 @@ describe('PATCH /entity', () => {
       body: { content: { name: 'X' } },
     });
     expect(status).toBe(401);
+  });
+
+  it('reuses the record id cache GET already populated, without re-querying', async () => {
+    await seedEntityRecordWithGeneratedId(t.ctx);
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+
+    const querySpy = vi.spyOn(t.ctx.stack, 'query');
+    const { status } = await req(t.app, 'PATCH', '/entity', {
+      token: TEST_TOKEN,
+      body: { content: { name: 'Renamed' } },
+    });
+    expect(status).toBe(200);
+    expect(querySpy).not.toHaveBeenCalled();
+  });
+
+  it('re-resolves on the next request after PATCHing a since-deleted cached record', async () => {
+    const record = await seedEntityRecordWithGeneratedId(t.ctx);
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN }); // populate the cache
+
+    await t.ctx.adapter.deleteRecord(record.id, { hard: true });
+    const stale = await req(t.app, 'PATCH', '/entity', {
+      token: TEST_TOKEN,
+      body: { content: { name: 'X' } },
+    });
+    expect(stale.status).toBe(404);
+
+    await seedEntityRecordWithGeneratedId(t.ctx);
+    const recovered = await req(t.app, 'PATCH', '/entity', {
+      token: TEST_TOKEN,
+      body: { content: { name: 'Recovered' } },
+    });
+    expect(recovered.status).toBe(200);
   });
 });
