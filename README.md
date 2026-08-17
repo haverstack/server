@@ -32,7 +32,7 @@ docker run -d \
   ghcr.io/haverstack/server:latest
 ```
 
-`/app/data` holds the SQLite database, its WAL sidecar files (`stack.db-wal`, `stack.db-shm`), a storage-ownership lock file (`stack.db.lock`), and attachments — mount a volume there for persistence. Set `ENTITY_ID` only on first run; it is ignored once the database exists.
+`/app/data` holds the SQLite database, its WAL sidecar files (`stack.db-wal`, `stack.db-shm`), a storage-ownership lock file (`stack.db.lock`), and attachments — mount a volume there for persistence. Set `ENTITY_ID` only on first run; it is ignored once the database exists, though a value that no longer matches the stack's stored owner logs a startup warning rather than failing silently.
 
 Only one server process may hold a given `DB_PATH` at a time: a second process against the same path fails at startup with a clear error rather than silently sharing (or corrupting) the database. This is enforced by the storage adapter, independent of any reverse proxy or orchestrator setting — see [Deployment: single-writer topology](./docs/deployment.md#single-writer-topology).
 
@@ -42,16 +42,18 @@ Only one server process may hold a given `DB_PATH` at a time: a second process a
 
 All configuration is via environment variables. See `.env.example` for the full list.
 
-| Variable               | Required  | Default                                      | Description                                              |
-| ---------------------- | --------- | -------------------------------------------- | -------------------------------------------------------- |
-| `OWNER_TOKEN`          | Yes       | —                                            | Bearer token for the stack owner. Treat like a password. |
-| `ENTITY_ID`            | First run | —                                            | Owner entity ID. Only needed when initializing a new DB. |
-| `DB_PATH`              | No        | `/app/data/stack.db` (Docker) / `./stack.db` | Path to the SQLite database file.                        |
-| `PORT`                 | No        | `3000`                                       | Port to listen on.                                       |
-| `TIMEZONE`             | No        | `UTC`                                        | IANA timezone. Only used on first run.                   |
-| `CORS_ORIGINS`         | No        | `` (none)                                    | Allowed origins, comma-separated or `*`.                 |
-| `BASE_URL`             | No        | auto-detected                                | Canonical base URL of this server.                       |
-| `MAX_ATTACHMENT_BYTES` | No        | `52428800` (50 MB)                           | Maximum attachment upload size.                          |
+| Variable               | Required  | Default                                      | Description                                                                                       |
+| ---------------------- | --------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `OWNER_TOKEN`          | Yes       | —                                            | Break-glass bearer token for the stack owner. Treat like a password.                              |
+| `ENTITY_ID`            | First run | —                                            | Owner entity ID — must be a DID (e.g. `did:key:z6Mk...`). Only needed when initializing a new DB. |
+| `OWNER_NAME`           | No        | —                                            | Owner's display name. When set, ensures the owner's `_entity` profile record exists.              |
+| `OWNER_HANDLE`         | No        | —                                            | Owner's handle. Only used alongside `OWNER_NAME`.                                                 |
+| `DB_PATH`              | No        | `/app/data/stack.db` (Docker) / `./stack.db` | Path to the SQLite database file.                                                                 |
+| `PORT`                 | No        | `3000`                                       | Port to listen on.                                                                                |
+| `TIMEZONE`             | No        | `UTC`                                        | IANA timezone. Only used on first run.                                                            |
+| `CORS_ORIGINS`         | No        | `` (none)                                    | Allowed origins, comma-separated or `*`.                                                          |
+| `BASE_URL`             | No        | auto-detected                                | Canonical base URL of this server.                                                                |
+| `MAX_ATTACHMENT_BYTES` | No        | `52428800` (50 MB)                           | Maximum attachment upload size.                                                                   |
 
 ---
 

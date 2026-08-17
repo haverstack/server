@@ -62,7 +62,7 @@ Version history requires the same access `PATCH`/`DELETE` require — a write-ho
 | POST   | `/tokens`     | Owner only | Create an API token            |
 | DELETE | `/tokens/:id` | Owner only | Revoke an API token            |
 
-`POST /tokens` accepts `{ entityId, onBehalfOf?, label?, expiresAt? }`. `entityId` is the token's principal (who authenticates); `onBehalfOf` optionally asserts a delegation — the subject the principal acts for. The response always reports both: `{ id, token, principalId, subjectId, label, createdAt, expiresAt }`. Omitting `onBehalfOf` issues an undelegated token, where `subjectId` equals `principalId`.
+`POST /tokens` accepts `{ entityId, onBehalfOf?, label?, expiresAt? }`. `entityId` is the token's principal (who authenticates); `onBehalfOf` optionally asserts a delegation — the subject the principal acts for. Both, when given, must be DIDs (`422` otherwise). The response always reports both: `{ id, token, principalId, subjectId, label, createdAt, expiresAt }`. Omitting `onBehalfOf` issues an undelegated token, where `subjectId` equals `principalId`.
 
 ## Permissions
 

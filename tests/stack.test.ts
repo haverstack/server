@@ -1,9 +1,17 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { Logger } from 'pino';
 import { initStack } from '../src/stack.js';
-import { testConfig, tempDbPath } from './setup.js';
+import { testConfig, tempDbPath, logger, OTHER_ENTITY_ID } from './setup.js';
+
+// initStack() only ever calls logger.warn() — a minimal stub is enough,
+// and keeps the mock from silently missing calls to unmocked methods that
+// a full pino instance's prototype methods wouldn't survive a spread of.
+function spyLogger(): Logger & { warn: ReturnType<typeof vi.fn> } {
+  return { warn: vi.fn() } as unknown as Logger & { warn: ReturnType<typeof vi.fn> };
+}
 
 // A second server process against the same DB_PATH must fail loudly at
 // startup rather than corrupt or silently share the database — the native
@@ -20,7 +28,7 @@ describe('initStack double-open protection', () => {
     dbPath = tempDbPath();
     const config = testConfig(dbPath);
 
-    const ctx = await initStack(config);
+    const ctx = await initStack(config, logger);
     await ctx.stack.close();
 
     // Simulate another still-running process holding the lock: process.ppid
@@ -29,8 +37,86 @@ describe('initStack double-open protection', () => {
     // the scenario being tested.
     writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: process.ppid }));
 
-    await expect(initStack({ ...config, isNewDb: false })).rejects.toThrow(
-      /in use by another process/,
+    // Second call finds the db already exists (openOrInitialize's open path)
+    // and hits the same lock check LocalAdapter.open() always enforced.
+    await expect(initStack(config, logger)).rejects.toThrow(/in use by another process/);
+  });
+});
+
+describe('initStack bootstrap', () => {
+  let dbPath: string | undefined;
+  afterEach(async () => {
+    if (dbPath) await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('fails clearly when initializing a new database without ENTITY_ID', async () => {
+    dbPath = tempDbPath();
+    const config = { ...testConfig(dbPath), entityId: null };
+
+    await expect(initStack(config, logger)).rejects.toThrow(
+      /ENTITY_ID is required when initializing a new database/,
     );
+  });
+
+  it('opens an existing database fine without ENTITY_ID set', async () => {
+    dbPath = tempDbPath();
+    const config = testConfig(dbPath);
+
+    const ctx = await initStack(config, logger);
+    await ctx.stack.close();
+    await ctx.tokens.close();
+
+    const reopened = await initStack({ ...config, entityId: null }, logger);
+    expect(reopened.stack.ownerEntityId).toBe(config.entityId);
+    await reopened.stack.close();
+    await reopened.tokens.close();
+  });
+
+  it('warns but does not fail when ENTITY_ID no longer matches the stored owner', async () => {
+    dbPath = tempDbPath();
+    const config = testConfig(dbPath);
+
+    const ctx = await initStack(config, logger);
+    await ctx.stack.close();
+    await ctx.tokens.close();
+
+    const warn = spyLogger();
+    const mismatched = await initStack({ ...config, entityId: OTHER_ENTITY_ID }, warn);
+    expect(mismatched.stack.ownerEntityId).toBe(config.entityId);
+    expect(warn.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configuredEntityId: OTHER_ENTITY_ID,
+        storedOwnerEntityId: config.entityId,
+      }),
+      expect.stringMatching(/does not match/),
+    );
+    await mismatched.stack.close();
+    await mismatched.tokens.close();
+  });
+
+  it('creates the owner _entity record when OWNER_NAME is configured', async () => {
+    dbPath = tempDbPath();
+    const config = { ...testConfig(dbPath), ownerName: 'Jane Owner', ownerHandle: '@jane' };
+
+    const ctx = await initStack(config, logger);
+    const { records } = await ctx.stack.query({
+      filter: { typeId: '_entity@1', content: { did: ctx.stack.ownerEntityId } },
+    });
+    expect(records[0]?.content).toMatchObject({ name: 'Jane Owner', handle: '@jane' });
+    await ctx.stack.close();
+    await ctx.tokens.close();
+  });
+
+  it('creates no owner _entity record when OWNER_NAME is unset', async () => {
+    dbPath = tempDbPath();
+    const config = testConfig(dbPath);
+
+    const ctx = await initStack(config, logger);
+    const { records } = await ctx.stack.query({
+      filter: { typeId: '_entity@1', content: { did: ctx.stack.ownerEntityId } },
+    });
+    expect(records).toHaveLength(0);
+    await ctx.stack.close();
+    await ctx.tokens.close();
   });
 });

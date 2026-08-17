@@ -4,6 +4,7 @@ import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
 import { parseDate } from '@haverstack/wire-types';
 import { StackValidationError } from '@haverstack/core';
+import { isValidDid } from '@haverstack/core/did';
 import type { TokenInfo } from '@haverstack/core/wire';
 
 export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
@@ -22,6 +23,11 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
       label?: string;
       expiresAt?: string;
     }>();
+    if (body.entityId !== undefined && !isValidDid(body.entityId))
+      throw new StackValidationError([{ path: 'entityId', message: 'Must be a DID' }]);
+    if (body.onBehalfOf !== undefined && !isValidDid(body.onBehalfOf))
+      throw new StackValidationError([{ path: 'onBehalfOf', message: 'Must be a DID' }]);
+
     const principalId = body.entityId ?? ownerEntityId;
     const expiresAt = body.expiresAt ? parseDate(body.expiresAt) : undefined;
     if (body.expiresAt && !expiresAt)
@@ -33,15 +39,19 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
       expiresAt,
     });
 
+    // Read the row back rather than fabricating createdAt here — the store
+    // is the source of truth, and GET /tokens must report the same value.
+    const stored = (await tokens.listTokens()).find((t) => t.id === id)!;
+
     return c.json(
       {
         id,
         token,
         principalId,
         subjectId: body.onBehalfOf ?? principalId,
-        label: body.label ?? null,
-        createdAt: new Date().toISOString(),
-        expiresAt: expiresAt?.toISOString() ?? null,
+        label: stored.label ?? null,
+        createdAt: stored.createdAt.toISOString(),
+        expiresAt: stored.expiresAt?.toISOString() ?? null,
       },
       201,
     );
