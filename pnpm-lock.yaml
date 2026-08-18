@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@haverstack/core': ^0.10.0
-
 importers:
 
   .:
@@ -18,8 +15,8 @@ importers:
         specifier: ^0.10.0
         version: 0.10.0
       '@haverstack/wire-types':
-        specifier: ^0.7.0
-        version: 0.7.0
+        specifier: ^0.8.0
+        version: 0.8.0
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.14(hono@4.12.26)
@@ -420,12 +417,18 @@ packages:
   '@haverstack/core@0.10.0':
     resolution: {integrity: sha512-0/gYRn1W8xVY0OjZ0i7ZDpSmYPa7P/Pf4GCPs5wKKcIOvvALDmHjlWxlZVQ4lsqjK0TWr07QI2V1fCMJMWVxvA==}
 
+  '@haverstack/core@0.9.0':
+    resolution: {integrity: sha512-5tTTM4ADR6lECCdfFg/376rjzrRgHVbRaK1c63sMPQ9y9/iPWuvAJX/hA2taJ5c29JTbSQusHsbrK0uRfFa95A==}
+
   '@haverstack/record-adapter-sqlite@0.2.0':
     resolution: {integrity: sha512-zHjeuTndRLTiNVCCZJn5xoRMq3BIF42nkzTx9pARoxkju6/1v20mOVnP76IMU7SkFq+4qqjkqOJogK8nKAsIEg==}
     engines: {node: '>=22.5.0'}
 
   '@haverstack/wire-types@0.7.0':
     resolution: {integrity: sha512-0pqKXc4Gkqu/lH/6u3toSI2kh84ByeHd1piPHMv/LsXKSMy9NfTFrnriz/NEMOeZXkzduYv7+wKDLTwoGXMRew==}
+
+  '@haverstack/wire-types@0.8.0':
+    resolution: {integrity: sha512-dl5Gl+1cKWl4rYKTRgk5CmcMxJdjy8dfzfL4P1pmxLQ49HTsSwu9hBs3JWPsW3URcS2UhA9L3+qe0ME7AG+YIQ==}
 
   '@hono/node-server@1.19.14':
     resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
@@ -1519,7 +1522,7 @@ snapshots:
 
   '@haverstack/blob-adapter-disk@0.7.0':
     dependencies:
-      '@haverstack/core': 0.10.0
+      '@haverstack/core': 0.9.0
 
   '@haverstack/conformance-fixtures@0.1.0':
     dependencies:
@@ -1527,11 +1530,17 @@ snapshots:
 
   '@haverstack/core@0.10.0': {}
 
+  '@haverstack/core@0.9.0': {}
+
   '@haverstack/record-adapter-sqlite@0.2.0':
     dependencies:
       '@haverstack/core': 0.10.0
 
   '@haverstack/wire-types@0.7.0':
+    dependencies:
+      '@haverstack/core': 0.9.0
+
+  '@haverstack/wire-types@0.8.0':
     dependencies:
       '@haverstack/core': 0.10.0
 
