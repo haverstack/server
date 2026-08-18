@@ -2,14 +2,14 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
-import { parseDate, serializeType } from '@haverstack/wire-types';
+import { serializeType } from '@haverstack/wire-types';
 import {
   hashSchema,
   StackQueryError,
   StackNotFoundError,
   StackValidationError,
 } from '@haverstack/core';
-import type { StackType, TypeSchema } from '@haverstack/core';
+import type { TypeSchema } from '@haverstack/core';
 
 export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -45,18 +45,13 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
         { path: 'schemaHash', message: 'schemaHash does not match schema' },
       ]);
 
-    const type: StackType = {
-      id: body.id,
-      baseId: body.baseId,
-      version: body.version,
-      name: body.name,
-      schema: body.schema as TypeSchema,
-      schemaHash: computedHash,
-      createdAt: parseDate(body.createdAt) ?? new Date(),
+    // stack.defineType() (not adapter.saveType() directly) is what runs the
+    // schema-drift check: redefining an existing typeId with anything
+    // beyond additive evolution throws StackSchemaDriftError, which
+    // adapter.saveType() alone has no way to enforce — it's a raw write.
+    const type = await stack.defineType(body.id, body.name, body.schema as TypeSchema, {
       ...(body.migratesFrom ? { migratesFrom: body.migratesFrom as string } : {}),
-    };
-
-    await adapter.saveType(type);
+    });
     return c.json(serializeType(type), 201);
   });
 
