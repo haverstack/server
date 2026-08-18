@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { ScopedStack, TokenSession } from '@haverstack/core';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
@@ -19,6 +19,13 @@ function getAll(url: URL, key: string): string[] {
 
 function getOne(url: URL, key: string): string | null {
   return url.searchParams.get(key);
+}
+
+/** Parse an `If-Match: "5"` header into the version number for `ifVersion`. */
+function parseIfMatch(header: string | undefined): number | undefined {
+  if (!header) return undefined;
+  const n = parseInt(header.replace(/^"|"$/g, ''), 10);
+  return isNaN(n) ? undefined : n;
 }
 
 /** Convert wire ISO strings back to Date objects inside a StackQuery body. */
@@ -159,6 +166,7 @@ function parseQueryParams(url: URL): StackQuery {
 export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack } = ctx;
+  const ownerEntityId = stack.ownerEntityId;
 
   /** Scope to a session if authenticated, else the anonymous view. */
   function scopeFor(auth: TokenSession | null): ScopedStack {
@@ -190,7 +198,12 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     });
   });
 
-  // POST /records — create (server generates the ID)
+  // POST /records — accepts a full record body; id is client-minted (12
+  // lowercase Crockford base-32 chars, no reserved "_" prefix) and optional
+  // — omit it to let ScopedStack.create() generate one. createdAt/updatedAt/
+  // version are never accepted from the client: those are always freshly
+  // generated for a new record, same as entityId/principalId (stamped from
+  // the authenticated session, never trusted from the body).
   app.post('/', requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await c.req.json<Record<string, unknown>>();
@@ -206,6 +219,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const created = await stack
       .forSession(auth)
       .create(body.typeId as TypeId, body.content as Record<string, unknown>, {
+        id: typeof body.id === 'string' ? body.id : undefined,
         parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
         appId: typeof body.appId === 'string' ? body.appId : undefined,
         permissions: Array.isArray(body.permissions)
@@ -215,7 +229,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
           ? (body.associations as Association[])
           : undefined,
       });
-    return c.json(serializeRecord(created), 201);
+    return c.json(serializeRecord(created), 200);
   });
 
   // GET /records/:id
@@ -227,7 +241,12 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeRecord(record));
   });
 
-  // PATCH /records/:id — merges content patch (RFC 7396); null field values remove the field
+  // PATCH /records/:id — the body IS the content patch (RFC 7396 merge
+  // patch), never an envelope: a conforming client sends { "title": "New" }
+  // directly, not { "content": { "title": "New" } }. Wrapping it here would
+  // make every field the client sends invisible to Stack.update(), turning
+  // a real edit into a silent no-op that still bumps version. null field
+  // values remove the field.
   //
   // The _attachment@1 immutable-field guard, the _grant@1 owner-only guard,
   // and the unscoped stack.get() pre-fetch that used to back them are gone:
@@ -238,10 +257,11 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.patch('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await c.req.json<Record<string, unknown>>();
-    const patch = (body.content ?? {}) as Record<string, unknown>;
+    const patch = await c.req.json<Record<string, unknown>>();
 
-    const updated = await stack.forSession(auth).update(id, patch);
+    const updated = await stack
+      .forSession(auth)
+      .update(id, patch, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(updated));
   });
 
@@ -253,6 +273,16 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
 
     await stack.forSession(auth).delete(id, { hard });
     return c.body(null, 204);
+  });
+
+  // POST /records/:id/undelete — reverses a soft delete; idempotent
+  app.post('/:id/undelete', requireAuth(), async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth')!;
+    const restored = await stack
+      .forSession(auth)
+      .undelete(id, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    return c.json(serializeRecord(restored));
   });
 
   // ------------------------------------------------------------------
@@ -273,7 +303,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const body = await c.req.json<{ permissions: Permission[] }>();
     if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
     await stack.forSession(auth).setPermissions(id, body.permissions);
-    return c.json({ permissions: body.permissions });
+    return c.body(null, 204);
   });
 
   // ------------------------------------------------------------------
@@ -302,7 +332,10 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.body(null, 204);
   });
 
-  app.delete('/:id/associations', requireAuth(), async (c) => {
+  // POST, not DELETE — a DELETE request body has no defined semantics
+  // (RFC 9110 §9.3.5) and is a portability landmine for proxies/gateways
+  // that drop or reject it.
+  app.post('/:id/associations/delete', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
@@ -339,6 +372,35 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const restored = await stack.forSession(auth).restoreVersion(id, vNum);
     return c.json(serializeRecord(restored));
+  });
+
+  // POST /records/:id/migrate — the only way typeId changes after creation.
+  // Body carries the full post-migration content (computed client-side by
+  // the type's owning app); ScopedStack.commitMigration() validates it
+  // against toTypeId's schema before writing. Owner acting alone, only —
+  // ScopedStack.commitMigration()'s own doc: replacing content and typeId
+  // wholesale would have to re-derive every gate create()/update() apply at
+  // both ends, and grant-based access would reopen the non-owner
+  // _attachment@1 refusal that carve-out exists to close.
+  app.post('/:id/migrate', requireOwner(ownerEntityId), async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth')!;
+    const body = await c.req.json<Record<string, unknown>>();
+    if (!body.toTypeId || typeof body.toTypeId !== 'string')
+      throw new StackQueryError('toTypeId is required');
+    if (!body.content || typeof body.content !== 'object')
+      throw new StackQueryError('content is required');
+    if (!(await stack.getType(body.toTypeId as TypeId)))
+      throw new StackValidationError([
+        { path: 'toTypeId', message: `Unknown type: "${body.toTypeId}"` },
+      ]);
+
+    const migrated = await stack
+      .forSession(auth)
+      .commitMigration(id, body.toTypeId as TypeId, body.content as Record<string, unknown>, {
+        ifVersion: parseIfMatch(c.req.header('If-Match')),
+      });
+    return c.json(serializeRecord(migrated));
   });
 
   return app;

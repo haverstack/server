@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SYSTEM_TYPES } from '@haverstack/core';
+import { SYSTEM_TYPES, generateId } from '@haverstack/core';
 import {
   buildTestApp,
   req,
@@ -43,7 +43,7 @@ describe('Records', () => {
           entityId: TEST_ENTITY_ID,
         },
       });
-      expect(status).toBe(201);
+      expect(status).toBe(200);
       const d = data as Record<string, unknown>;
       expect(typeof d.id).toBe('string');
       expect(d.typeId).toBe(NOTE_TYPE_ID);
@@ -237,7 +237,7 @@ describe('Records', () => {
       const record = await seedRecord(t.ctx, { body: 'original', title: 'My title' });
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { content: { body: 'Updated body' } },
+        body: { body: 'Updated body' },
       });
       expect(status).toBe(200);
       const d = data as Record<string, unknown>;
@@ -251,7 +251,7 @@ describe('Records', () => {
       const record = await seedRecord(t.ctx);
       await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { content: { body: 'v2' } },
+        body: { body: 'v2' },
       });
       const versions = await t.ctx.adapter.getVersions(record.id);
       expect(versions).toHaveLength(1);
@@ -269,7 +269,7 @@ describe('Records', () => {
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
-        body: { content: { body: 'hacked' } },
+        body: { body: 'hacked' },
       });
       expect(status).toBe(403);
     });
@@ -346,7 +346,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { content: { fileId: 'tampered-id' } },
+        body: { fileId: 'tampered-id' },
       });
       expect(status).toBe(422);
       expect(detailPaths(data)).toContain('fileId');
@@ -356,7 +356,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { content: { size: 9999 } },
+        body: { size: 9999 },
       });
       expect(status).toBe(422);
       expect(detailPaths(data)).toContain('size');
@@ -366,7 +366,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { content: { mimeType: 'text/html' } },
+        body: { mimeType: 'text/html' },
       });
       expect(status).toBe(422);
       expect(detailPaths(data)).toContain('mimeType');
@@ -376,7 +376,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { content: { fileId: 'x', size: 0, mimeType: 'text/html' } },
+        body: { fileId: 'x', size: 0, mimeType: 'text/html' },
       });
       expect(status).toBe(422);
       const paths = detailPaths(data);
@@ -389,7 +389,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { content: { filename: 'renamed.txt' } },
+        body: { filename: 'renamed.txt' },
       });
       expect(status).toBe(200);
       const content = (data as { content: Record<string, unknown> }).content;
@@ -425,7 +425,7 @@ describe('Records', () => {
 
       const { status } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
         token,
-        body: { content: { actions: ['read-any', 'update-any', 'delete-any'] } },
+        body: { actions: ['read-any', 'update-any', 'delete-any'] },
       });
       expect(status).toBe(403);
     });
@@ -448,7 +448,7 @@ describe('Records', () => {
 
       const { status, data } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
         token: TEST_TOKEN,
-        body: { content: { actions: ['read-own', 'read-any'] } },
+        body: { actions: ['read-own', 'read-any'] },
       });
       expect(status).toBe(200);
       const content = (data as { content: Record<string, unknown> }).content;
@@ -484,9 +484,7 @@ describe('Records', () => {
 
       const { status } = await req(t.app, 'PATCH', `/records/${readGrant.id}`, {
         token,
-        body: {
-          content: { typeId: NOTE_TYPE_ID, actions: ['read-any', 'update-any', 'delete-any'] },
-        },
+        body: { typeId: NOTE_TYPE_ID, actions: ['read-any', 'update-any', 'delete-any'] },
       });
       expect(status).toBe(403);
 
@@ -513,7 +511,7 @@ describe('Records', () => {
     it('refuses to change _config.entityId', async () => {
       const { status } = await req(t.app, 'PATCH', '/records/_config', {
         token: TEST_TOKEN,
-        body: { content: { entityId: 'someone-else' } },
+        body: { entityId: 'someone-else' },
       });
       expect(status).toBe(409);
     });
@@ -587,19 +585,19 @@ describe('Records', () => {
 
       const { status: didChange } = await req(t.app, 'PATCH', `/records/${id}`, {
         token: TEST_TOKEN,
-        body: { content: { did: 'did:key:zChanged' } },
+        body: { did: 'did:key:zChanged' },
       });
       expect(didChange).toBe(422);
 
       const { status: appIdChange } = await req(t.app, 'PATCH', `/records/${id}`, {
         token: TEST_TOKEN,
-        body: { content: { appId: 'changed' } },
+        body: { appId: 'changed' },
       });
       expect(appIdChange).toBe(422);
 
       const { status: nameChange, data: renamed } = await req(t.app, 'PATCH', `/records/${id}`, {
         token: TEST_TOKEN,
-        body: { content: { name: 'Renamed' } },
+        body: { name: 'Renamed' },
       });
       expect(nameChange).toBe(200);
       expect((renamed as { content: { name: string } }).content.name).toBe('Renamed');
@@ -669,7 +667,7 @@ describe('Records', () => {
           content: { fileId, mimeType: 'text/plain', size: bytes.byteLength },
         },
       });
-      expect(status).toBe(201);
+      expect(status).toBe(200);
     });
   });
 
@@ -687,7 +685,7 @@ describe('Records', () => {
         token,
         body: { typeId: NOTE_TYPE_ID, content: { body: 'delegated note' } },
       });
-      expect(status).toBe(201);
+      expect(status).toBe(200);
       const d = data as Record<string, unknown>;
       expect(d.entityId).toBe(SUBJECT_ID);
       expect(d.principalId).toBe(APP_ID);
@@ -724,6 +722,375 @@ describe('Records', () => {
       const records = (data as { records: Array<{ principalId?: string }> }).records;
       expect(records).toHaveLength(1);
       expect(records[0].principalId).toBe(APP_ID);
+    });
+  });
+
+  describe('POST /records — client-minted id', () => {
+    it('accepts a client-supplied id', async () => {
+      const id = generateId();
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { id, typeId: NOTE_TYPE_ID, content: { body: 'minted' } },
+      });
+      expect(status).toBe(200);
+      expect((data as { id: string }).id).toBe(id);
+    });
+
+    it('generates an id when none is supplied', async () => {
+      const { data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'generated' } },
+      });
+      expect(typeof (data as { id: string }).id).toBe('string');
+      expect((data as { id: string }).id).not.toBe('');
+    });
+
+    it('rejects a malformed-charset id with 400 bad_request', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { id: '1hk153x0000!', typeId: NOTE_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('rejects a wrong-length id with 400 bad_request', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { id: 'short-id', typeId: NOTE_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('rejects a reserved "_" prefix id with 400 bad_request', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { id: '_hk153x00001', typeId: NOTE_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('rejects a duplicate id with 409 conflict', async () => {
+      const id = generateId();
+      await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { id, typeId: NOTE_TYPE_ID, content: { body: 'first' } },
+      });
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { id, typeId: NOTE_TYPE_ID, content: { body: 'second' } },
+      });
+      expect(status).toBe(409);
+      expect((data as { error: { code: string } }).error.code).toBe('conflict');
+    });
+  });
+
+  describe('PATCH /records/:id — If-Match / optimistic concurrency', () => {
+    it('succeeds when If-Match names the current version', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { body: 'updated' },
+        headers: { 'If-Match': `"${record.version}"` },
+      });
+      expect(status).toBe(200);
+    });
+
+    it('returns 412 version_conflict with the versionConflict payload on a mismatch', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { body: 'updated' },
+        headers: { 'If-Match': `"${record.version + 1}"` },
+      });
+      expect(status).toBe(412);
+      const body = data as {
+        error: { code: string; versionConflict: Record<string, unknown> };
+      };
+      expect(body.error.code).toBe('version_conflict');
+      expect(body.error.versionConflict).toMatchObject({
+        recordId: record.id,
+        expectedVersion: record.version + 1,
+        actualVersion: record.version,
+      });
+    });
+  });
+
+  describe('POST /records/:id/undelete', () => {
+    it('reverses a soft delete and returns the record with deletedAt absent', async () => {
+      const record = await seedRecord(t.ctx);
+      await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/undelete`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(200);
+      const body = data as Record<string, unknown>;
+      expect(body.id).toBe(record.id);
+      expect(body.deletedAt).toBeUndefined();
+
+      const stored = await t.ctx.adapter.getRecord(record.id);
+      expect(stored?.deletedAt).toBeUndefined();
+    });
+
+    it('is idempotent — a second call returns the same result', async () => {
+      const record = await seedRecord(t.ctx);
+      await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+
+      const first = await req(t.app, 'POST', `/records/${record.id}/undelete`, {
+        token: TEST_TOKEN,
+      });
+      const second = await req(t.app, 'POST', `/records/${record.id}/undelete`, {
+        token: TEST_TOKEN,
+      });
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+    });
+
+    it('returns 403 for a non-owner without write access', async () => {
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'shared' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        },
+      );
+      await t.ctx.stack.delete(record.id);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const { status } = await req(t.app, 'POST', `/records/${record.id}/undelete`, { token });
+      expect(status).toBe(403);
+    });
+
+    it('returns 404 for a record that does not exist', async () => {
+      const { status } = await req(t.app, 'POST', '/records/nonexistent/undelete', {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(404);
+    });
+  });
+
+  describe('PUT/GET /records/:id/permissions', () => {
+    it('PUT replaces permissions and returns 204 with no body', async () => {
+      const record = await seedRecord(t.ctx);
+      const res = await t.app.request(`/records/${record.id}/permissions`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions: [{ access: 'public' }] }),
+      });
+      expect(res.status).toBe(204);
+      expect(await res.text()).toBe('');
+
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status: anonStatus } = await req(t.app, 'GET', `/records/${record.id}`);
+      expect(anonStatus).toBe(200);
+      const { status: otherStatus } = await req(t.app, 'GET', `/records/${record.id}`, { token });
+      expect(otherStatus).toBe(200);
+    });
+
+    it('an empty permissions array makes the record private', async () => {
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'was public' },
+        { permissions: [{ access: 'public' }] },
+      );
+      await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+        token: TEST_TOKEN,
+        body: { permissions: [] },
+      });
+      const { status } = await req(t.app, 'GET', `/records/${record.id}`);
+      expect(status).toBe(403);
+    });
+
+    it('GET returns the current permissions', async () => {
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'x' },
+        { permissions: [{ access: 'public' }] },
+      );
+      const { status, data } = await req(t.app, 'GET', `/records/${record.id}/permissions`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(200);
+      expect((data as { permissions: unknown[] }).permissions).toEqual([{ access: 'public' }]);
+    });
+
+    it('returns 403 when a non-owner without write access tries to PUT', async () => {
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'x' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        },
+      );
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+        token,
+        body: { permissions: [{ access: 'public' }] },
+      });
+      expect(status).toBe(403);
+    });
+  });
+
+  describe('reserved content keys — PATCH', () => {
+    for (const key of ['__proto__', 'constructor', 'prototype']) {
+      it(`rejects "${key}" as a patch field with 422`, async () => {
+        const record = await seedRecord(t.ctx);
+        const body = JSON.parse(`{"${key}":{"evil":true}}`);
+        const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+          token: TEST_TOKEN,
+          body,
+        });
+        expect(status).toBe(422);
+        const details = (data as { error: { details: Array<{ path: string }> } }).error.details;
+        expect(details.some((d) => d.path === key)).toBe(true);
+      });
+    }
+  });
+
+  describe('Pagination defaults', () => {
+    it('omits limit -> returns one default-sized page, not everything', async () => {
+      for (let i = 0; i < 55; i++) {
+        await seedRecord(t.ctx, { body: `note ${i}` });
+      }
+      const { data } = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+      const body = data as { records: unknown[]; cursor: string | null };
+      expect(body.records.length).toBeLessThan(55);
+      expect(body.records.length).toBeGreaterThan(0);
+      expect(body.cursor).not.toBeNull();
+    });
+  });
+
+  describe('Query error shapes', () => {
+    it('returns 400 bad_request for a malformed cursor', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records/query', {
+        token: TEST_TOKEN,
+        body: { cursor: 'not-a-valid-cursor' },
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('returns 400 bad_request for a cursor naming an unknown sort field', async () => {
+      const badCursor = Buffer.from('badfield|123|1hk153x00001').toString('base64');
+      const { status, data } = await req(t.app, 'POST', '/records/query', {
+        token: TEST_TOKEN,
+        body: { cursor: badCursor },
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+  });
+
+  describe('Payload too large', () => {
+    it('returns 413 payload_too_large for an oversized record body', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'x'.repeat(2 * 1024 * 1024) } },
+      });
+      expect(status).toBe(413);
+      expect((data as { error: { code: string } }).error.code).toBe('payload_too_large');
+    });
+  });
+
+  describe('POST /records/:id/migrate', () => {
+    const NOTE_V2_TYPE_ID = 'com.example.test/note@2';
+
+    async function seedV2Type(ctx: TestApp['ctx']) {
+      return ctx.stack.defineType(
+        NOTE_V2_TYPE_ID,
+        'Note',
+        {
+          title: { kind: 'string' as const },
+          body: { kind: 'text' as const, required: true as const },
+        },
+        { migratesFrom: NOTE_TYPE_ID },
+      );
+    }
+
+    it('changes typeId, bumps version, and writes the given content (owner)', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx, { body: 'original' });
+
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'migrated', title: 'New' } },
+      });
+      expect(status).toBe(200);
+      const body = data as Record<string, unknown>;
+      expect(body.typeId).toBe(NOTE_V2_TYPE_ID);
+      expect(body.version).toBe(2);
+      expect((body.content as Record<string, unknown>).body).toBe('migrated');
+    });
+
+    it('returns 403 for a non-owner, even one with write access to the record', async () => {
+      await seedV2Type(t.ctx);
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'shared' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        },
+      );
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const { status } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(403);
+    });
+
+    it('returns 401 for an unauthenticated request', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(401);
+    });
+
+    it('returns 422 for an unregistered toTypeId', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: 'com.example.test/nonexistent@1', content: { body: 'x' } },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: { code: string } }).error.code).toBe('validation');
+    });
+
+    it('returns 422 when content fails the target schema', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: {} },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: { code: string } }).error.code).toBe('validation');
+    });
+
+    it('returns 404 for a record that does not exist', async () => {
+      await seedV2Type(t.ctx);
+      const { status } = await req(t.app, 'POST', '/records/nonexistent/migrate', {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(404);
+    });
+
+    it('leaves a pre-migration snapshot in version history', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx, { body: 'before' });
+      await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'after' } },
+      });
+      const versions = await t.ctx.adapter.getVersions(record.id);
+      expect(versions.some((v) => v.typeId === NOTE_TYPE_ID)).toBe(true);
     });
   });
 });

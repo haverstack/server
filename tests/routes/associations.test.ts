@@ -53,10 +53,10 @@ describe('Associations', () => {
     expect(assocs.every((a) => a.kind === 'tag')).toBe(true);
   });
 
-  it('DELETE removes an association', async () => {
+  it('POST .../associations/delete removes an association', async () => {
     const record = await seedRecord();
     await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-    const { status } = await req(t.app, 'DELETE', `/records/${record.id}/associations`, {
+    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
       token: TEST_TOKEN,
       body: { kind: 'tag', label: 'starred' },
     });

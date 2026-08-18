@@ -17,9 +17,9 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@haverstack/adapter-local": "^0.7.0",
-    "@haverstack/core": "^0.9.0",
-    "@haverstack/wire-types": "^0.7.0",
+    "@haverstack/adapter-local": "^0.8.0",
+    "@haverstack/core": "^0.10.0",
+    "@haverstack/wire-types": "^0.8.0",
     "@hono/node-server": "^1.13.7",
     "hono": "^4.6.0",
     "pino": "^9.5.0",
@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
+    "@haverstack/conformance-fixtures": "^0.1.0",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.0.0",

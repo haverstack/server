@@ -11,28 +11,42 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 
 ## Records
 
-| Method | Path                             | Auth     | Description                             |
-| ------ | -------------------------------- | -------- | --------------------------------------- |
-| GET    | `/records`                       | Optional | Query records via URL params            |
-| POST   | `/records/query`                 | Optional | Query records with content filters      |
-| POST   | `/records`                       | Required | Create a record                         |
-| GET    | `/records/:id`                   | Optional | Get a record by ID                      |
-| PATCH  | `/records/:id`                   | Required | Update record content (merge patch)     |
-| DELETE | `/records/:id`                   | Required | Soft-delete (or hard with `?hard=true`) |
-| GET    | `/records/:id/permissions`       | Optional | Get permissions                         |
-| PUT    | `/records/:id/permissions`       | Required | Replace permissions                     |
-| GET    | `/records/:id/associations`      | Optional | List associations                       |
-| POST   | `/records/:id/associations`      | Required | Add an association                      |
-| DELETE | `/records/:id/associations`      | Required | Remove an association                   |
-| GET    | `/records/:id/versions`          | Optional | List version history                    |
-| GET    | `/records/:id/versions/:version` | Optional | Get a specific version                  |
-| POST   | `/records/:id/restore/:version`  | Required | Restore a previous version              |
+| Method | Path                               | Auth       | Description                             |
+| ------ | ---------------------------------- | ---------- | --------------------------------------- |
+| GET    | `/records`                         | Optional   | Query records via URL params            |
+| POST   | `/records/query`                   | Optional   | Query records with content filters      |
+| POST   | `/records`                         | Required   | Create a record                         |
+| GET    | `/records/:id`                     | Optional   | Get a record by ID                      |
+| PATCH  | `/records/:id`                     | Required   | Update record content (merge patch)     |
+| DELETE | `/records/:id`                     | Required   | Soft-delete (or hard with `?hard=true`) |
+| POST   | `/records/:id/undelete`            | Required   | Reverse a soft delete                   |
+| GET    | `/records/:id/permissions`         | Optional   | Get permissions                         |
+| PUT    | `/records/:id/permissions`         | Required   | Replace permissions                     |
+| GET    | `/records/:id/associations`        | Optional   | List associations                       |
+| POST   | `/records/:id/associations`        | Required   | Add an association                      |
+| POST   | `/records/:id/associations/delete` | Required   | Remove an association                   |
+| GET    | `/records/:id/versions`            | Optional   | List version history                    |
+| GET    | `/records/:id/versions/:version`   | Optional   | Get a specific version                  |
+| POST   | `/records/:id/restore/:version`    | Required   | Restore a previous version              |
+| POST   | `/records/:id/migrate`             | Owner only | Change a record's typeId                |
 
 Version history requires the same access `PATCH`/`DELETE` require — a write-holder, or the owner — not plain read. A read-only requester gets `403`.
 
+`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation, and is owner-acting-alone only — a non-owner gets `403` regardless of any write grant or record-level permission they hold. Body is `{ toTypeId, content }`: `content` is the full post-migration content, computed client-side by the type's owning app; the server validates it against `toTypeId`'s schema before writing and leaves a pre-migration snapshot in version history. Accepts the same `If-Match` header as `PATCH`.
+
+Removing an association is `POST /records/:id/associations/delete`, not a body-bearing `DELETE` — a `DELETE` request body has no defined semantics (RFC 9110 §9.3.5) and is a portability landmine for proxies/gateways that drop or reject it.
+
+`PUT /records/:id/permissions` returns `204` with no body; the body and (when read back via `GET`) response both use the `{ "permissions": [...] }` envelope. An empty array makes the record private (owner-only).
+
+`POST /records/:id/undelete` reverses a soft delete and returns the record as it now stands (`deletedAt` absent). Idempotent — a second call on an already-active record returns the same result.
+
+`POST /records` returns `200`, not `201` — the response is the created record, same shape as every other write. The body is the full record: `id` is client-minted (12 lowercase Crockford base-32 characters, no reserved `_` prefix — omit it to let the server generate one) and, when supplied, must encode a creation timestamp within the server's clock-skew tolerance; `createdAt`/`updatedAt`/`version` are never accepted from the client — those, like `entityId`/`principalId`, are always server-assigned. A duplicate `id` returns `409` with code `conflict`.
+
+`PATCH /records/:id` accepts an `If-Match: "<version>"` header for optimistic concurrency; a mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload. `POST /records/:id/undelete` accepts the same header.
+
 ### Query parameters
 
-`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter.
+`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
 
 ## Types
 
