@@ -745,39 +745,31 @@ describe('Records', () => {
       expect((data as { id: string }).id).not.toBe('');
     });
 
-    // The conformance suite (@haverstack/conformance-fixtures) expects these
-    // three malformed-id cases as 400 bad_request (StackQueryError) — a
-    // structural-input class distinct from content validation. Installed
-    // @haverstack/core@0.9.0 (npm's latest as of this writing) still routes
-    // all three through StackValidationError (422), same message text. This
-    // is a version-skew gap in core, not something to paper over here with
-    // string-matched reclassification — pinning the actual current
-    // behavior so it fails loudly (not silently) once core reclassifies it.
-    it('rejects a malformed-charset id (currently 422 validation; spec wants 400 bad_request)', async () => {
+    it('rejects a malformed-charset id with 400 bad_request', async () => {
       const { status, data } = await req(t.app, 'POST', '/records', {
         token: TEST_TOKEN,
         body: { id: '1hk153x0000!', typeId: NOTE_TYPE_ID, content: { body: 'x' } },
       });
-      expect(status).toBe(422);
-      expect((data as { error: { code: string } }).error.code).toBe('validation');
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
 
-    it('rejects a wrong-length id (currently 422 validation; spec wants 400 bad_request)', async () => {
+    it('rejects a wrong-length id with 400 bad_request', async () => {
       const { status, data } = await req(t.app, 'POST', '/records', {
         token: TEST_TOKEN,
         body: { id: 'short-id', typeId: NOTE_TYPE_ID, content: { body: 'x' } },
       });
-      expect(status).toBe(422);
-      expect((data as { error: { code: string } }).error.code).toBe('validation');
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
 
-    it('rejects a reserved "_" prefix id (currently 422 validation; spec wants 400 bad_request)', async () => {
+    it('rejects a reserved "_" prefix id with 400 bad_request', async () => {
       const { status, data } = await req(t.app, 'POST', '/records', {
         token: TEST_TOKEN,
         body: { id: '_hk153x00001', typeId: NOTE_TYPE_ID, content: { body: 'x' } },
       });
-      expect(status).toBe(422);
-      expect((data as { error: { code: string } }).error.code).toBe('validation');
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
 
     it('rejects a duplicate id with 409 conflict', async () => {
@@ -1000,6 +992,105 @@ describe('Records', () => {
       });
       expect(status).toBe(413);
       expect((data as { error: { code: string } }).error.code).toBe('payload_too_large');
+    });
+  });
+
+  describe('POST /records/:id/migrate', () => {
+    const NOTE_V2_TYPE_ID = 'com.example.test/note@2';
+
+    async function seedV2Type(ctx: TestApp['ctx']) {
+      return ctx.stack.defineType(
+        NOTE_V2_TYPE_ID,
+        'Note',
+        {
+          title: { kind: 'string' as const },
+          body: { kind: 'text' as const, required: true as const },
+        },
+        { migratesFrom: NOTE_TYPE_ID },
+      );
+    }
+
+    it('changes typeId, bumps version, and writes the given content (owner)', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx, { body: 'original' });
+
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'migrated', title: 'New' } },
+      });
+      expect(status).toBe(200);
+      const body = data as Record<string, unknown>;
+      expect(body.typeId).toBe(NOTE_V2_TYPE_ID);
+      expect(body.version).toBe(2);
+      expect((body.content as Record<string, unknown>).body).toBe('migrated');
+    });
+
+    it('returns 403 for a non-owner, even one with write access to the record', async () => {
+      await seedV2Type(t.ctx);
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'shared' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        },
+      );
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const { status } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(403);
+    });
+
+    it('returns 401 for an unauthenticated request', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(401);
+    });
+
+    it('returns 422 for an unregistered toTypeId', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: 'com.example.test/nonexistent@1', content: { body: 'x' } },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: { code: string } }).error.code).toBe('validation');
+    });
+
+    it('returns 422 when content fails the target schema', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: {} },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: { code: string } }).error.code).toBe('validation');
+    });
+
+    it('returns 404 for a record that does not exist', async () => {
+      await seedV2Type(t.ctx);
+      const { status } = await req(t.app, 'POST', '/records/nonexistent/migrate', {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(404);
+    });
+
+    it('leaves a pre-migration snapshot in version history', async () => {
+      await seedV2Type(t.ctx);
+      const record = await seedRecord(t.ctx, { body: 'before' });
+      await req(t.app, 'POST', `/records/${record.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_V2_TYPE_ID, content: { body: 'after' } },
+      });
+      const versions = await t.ctx.adapter.getVersions(record.id);
+      expect(versions.some((v) => v.typeId === NOTE_TYPE_ID)).toBe(true);
     });
   });
 });

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { ScopedStack, TokenSession } from '@haverstack/core';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
@@ -166,6 +166,7 @@ function parseQueryParams(url: URL): StackQuery {
 export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack } = ctx;
+  const ownerEntityId = stack.ownerEntityId;
 
   /** Scope to a session if authenticated, else the anonymous view. */
   function scopeFor(auth: TokenSession | null): ScopedStack {
@@ -371,6 +372,35 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const restored = await stack.forSession(auth).restoreVersion(id, vNum);
     return c.json(serializeRecord(restored));
+  });
+
+  // POST /records/:id/migrate — the only way typeId changes after creation.
+  // Body carries the full post-migration content (computed client-side by
+  // the type's owning app); ScopedStack.commitMigration() validates it
+  // against toTypeId's schema before writing. Owner acting alone, only —
+  // ScopedStack.commitMigration()'s own doc: replacing content and typeId
+  // wholesale would have to re-derive every gate create()/update() apply at
+  // both ends, and grant-based access would reopen the non-owner
+  // _attachment@1 refusal that carve-out exists to close.
+  app.post('/:id/migrate', requireOwner(ownerEntityId), async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth')!;
+    const body = await c.req.json<Record<string, unknown>>();
+    if (!body.toTypeId || typeof body.toTypeId !== 'string')
+      throw new StackQueryError('toTypeId is required');
+    if (!body.content || typeof body.content !== 'object')
+      throw new StackQueryError('content is required');
+    if (!(await stack.getType(body.toTypeId as TypeId)))
+      throw new StackValidationError([
+        { path: 'toTypeId', message: `Unknown type: "${body.toTypeId}"` },
+      ]);
+
+    const migrated = await stack
+      .forSession(auth)
+      .commitMigration(id, body.toTypeId as TypeId, body.content as Record<string, unknown>, {
+        ifVersion: parseIfMatch(c.req.header('If-Match')),
+      });
+    return c.json(serializeRecord(migrated));
   });
 
   return app;

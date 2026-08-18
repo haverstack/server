@@ -11,25 +11,28 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 
 ## Records
 
-| Method | Path                               | Auth     | Description                             |
-| ------ | ---------------------------------- | -------- | --------------------------------------- |
-| GET    | `/records`                         | Optional | Query records via URL params            |
-| POST   | `/records/query`                   | Optional | Query records with content filters      |
-| POST   | `/records`                         | Required | Create a record                         |
-| GET    | `/records/:id`                     | Optional | Get a record by ID                      |
-| PATCH  | `/records/:id`                     | Required | Update record content (merge patch)     |
-| DELETE | `/records/:id`                     | Required | Soft-delete (or hard with `?hard=true`) |
-| POST   | `/records/:id/undelete`            | Required | Reverse a soft delete                   |
-| GET    | `/records/:id/permissions`         | Optional | Get permissions                         |
-| PUT    | `/records/:id/permissions`         | Required | Replace permissions                     |
-| GET    | `/records/:id/associations`        | Optional | List associations                       |
-| POST   | `/records/:id/associations`        | Required | Add an association                      |
-| POST   | `/records/:id/associations/delete` | Required | Remove an association                   |
-| GET    | `/records/:id/versions`            | Optional | List version history                    |
-| GET    | `/records/:id/versions/:version`   | Optional | Get a specific version                  |
-| POST   | `/records/:id/restore/:version`    | Required | Restore a previous version              |
+| Method | Path                               | Auth       | Description                             |
+| ------ | ---------------------------------- | ---------- | --------------------------------------- |
+| GET    | `/records`                         | Optional   | Query records via URL params            |
+| POST   | `/records/query`                   | Optional   | Query records with content filters      |
+| POST   | `/records`                         | Required   | Create a record                         |
+| GET    | `/records/:id`                     | Optional   | Get a record by ID                      |
+| PATCH  | `/records/:id`                     | Required   | Update record content (merge patch)     |
+| DELETE | `/records/:id`                     | Required   | Soft-delete (or hard with `?hard=true`) |
+| POST   | `/records/:id/undelete`            | Required   | Reverse a soft delete                   |
+| GET    | `/records/:id/permissions`         | Optional   | Get permissions                         |
+| PUT    | `/records/:id/permissions`         | Required   | Replace permissions                     |
+| GET    | `/records/:id/associations`        | Optional   | List associations                       |
+| POST   | `/records/:id/associations`        | Required   | Add an association                      |
+| POST   | `/records/:id/associations/delete` | Required   | Remove an association                   |
+| GET    | `/records/:id/versions`            | Optional   | List version history                    |
+| GET    | `/records/:id/versions/:version`   | Optional   | Get a specific version                  |
+| POST   | `/records/:id/restore/:version`    | Required   | Restore a previous version              |
+| POST   | `/records/:id/migrate`             | Owner only | Change a record's typeId                |
 
 Version history requires the same access `PATCH`/`DELETE` require — a write-holder, or the owner — not plain read. A read-only requester gets `403`.
+
+`POST /records/:id/migrate` is the only way a record's `typeId` changes after creation, and is owner-acting-alone only — a non-owner gets `403` regardless of any write grant or record-level permission they hold. Body is `{ toTypeId, content }`: `content` is the full post-migration content, computed client-side by the type's owning app; the server validates it against `toTypeId`'s schema before writing and leaves a pre-migration snapshot in version history. Accepts the same `If-Match` header as `PATCH`.
 
 Removing an association is `POST /records/:id/associations/delete`, not a body-bearing `DELETE` — a `DELETE` request body has no defined semantics (RFC 9110 §9.3.5) and is a portability landmine for proxies/gateways that drop or reject it.
 
