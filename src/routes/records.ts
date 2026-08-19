@@ -182,7 +182,12 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
-      total: result.total,
+      // Always null over the wire: every response has passed a permission
+      // boundary, so an unscoped count would leak how many Records exist
+      // beyond what this requester may read. Set explicitly here rather
+      // than trusting result.total, so the guarantee holds regardless of
+      // which query path produced the result.
+      total: null,
     });
   });
 
@@ -194,7 +199,12 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
-      total: result.total,
+      // Always null over the wire: every response has passed a permission
+      // boundary, so an unscoped count would leak how many Records exist
+      // beyond what this requester may read. Set explicitly here rather
+      // than trusting result.total, so the guarantee holds regardless of
+      // which query path produced the result.
+      total: null,
     });
   });
 
@@ -271,7 +281,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
 
-    await stack.forSession(auth).delete(id, { hard });
+    await stack
+      .forSession(auth)
+      .delete(id, { hard, ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.body(null, 204);
   });
 
@@ -302,7 +314,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const body = await c.req.json<{ permissions: Permission[] }>();
     if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
-    await stack.forSession(auth).setPermissions(id, body.permissions);
+    await stack
+      .forSession(auth)
+      .setPermissions(id, body.permissions, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.body(null, 204);
   });
 
@@ -328,7 +342,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
     if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
-    await stack.forSession(auth).associate(id, body);
+    await stack
+      .forSession(auth)
+      .associate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.body(null, 204);
   });
 
@@ -339,7 +355,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await c.req.json<Association>();
-    await stack.forSession(auth).dissociate(id, body);
+    await stack
+      .forSession(auth)
+      .dissociate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.body(null, 204);
   });
 
@@ -370,7 +388,9 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
     const vNum = parseInt(c.req.param('version'), 10);
     if (isNaN(vNum)) throw new StackQueryError('Invalid version number');
     const auth = c.get('auth')!;
-    const restored = await stack.forSession(auth).restoreVersion(id, vNum);
+    const restored = await stack
+      .forSession(auth)
+      .restoreVersion(id, vNum, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(restored));
   });
 
