@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@haverstack/blob-adapter-disk': ^0.8.0
+
 importers:
 
   .:
@@ -265,17 +268,14 @@ packages:
     resolution: {integrity: sha512-6ruqNRVr5GpzJfNf5Tz7VAhTvVxKO4oDIU/9VeWVEd+nHYosj2EawW+gxT64vRmfH8tE2i3a6vDQVYKQqO5rvQ==}
     engines: {node: '>=22.5.0'}
 
-  '@haverstack/blob-adapter-disk@0.7.0':
-    resolution: {integrity: sha512-n2qWuZD4pIN8M5dfEIGOgTFif0NOmtl28bWkeqBrjyIXBO/1u693HZ8XJ/v7W+jIolePkt+UDsjaQhzFwdjloA==}
+  '@haverstack/blob-adapter-disk@0.8.0':
+    resolution: {integrity: sha512-qSgarVkFdb9HvMXeQVItZq8APO9sDLzui5wIv28oTTIrNDR0Gdihyd9F4G8mbwymCFatfz697Y9SV/pNieVg7Q==}
 
   '@haverstack/conformance-fixtures@0.2.0':
     resolution: {integrity: sha512-8+rSWeD14PDRxCLOrX4cq99fPnsLLhr1uPcoEbhZk/ERtH2nsE86cT6B0s5UDcND536ez1tGX76A2AUX5BPiAA==}
 
   '@haverstack/core@0.10.0':
     resolution: {integrity: sha512-0/gYRn1W8xVY0OjZ0i7ZDpSmYPa7P/Pf4GCPs5wKKcIOvvALDmHjlWxlZVQ4lsqjK0TWr07QI2V1fCMJMWVxvA==}
-
-  '@haverstack/core@0.9.0':
-    resolution: {integrity: sha512-5tTTM4ADR6lECCdfFg/376rjzrRgHVbRaK1c63sMPQ9y9/iPWuvAJX/hA2taJ5c29JTbSQusHsbrK0uRfFa95A==}
 
   '@haverstack/record-adapter-sqlite@0.2.0':
     resolution: {integrity: sha512-zHjeuTndRLTiNVCCZJn5xoRMq3BIF42nkzTx9pARoxkju6/1v20mOVnP76IMU7SkFq+4qqjkqOJogK8nKAsIEg==}
@@ -1260,21 +1260,19 @@ snapshots:
 
   '@haverstack/adapter-local@0.8.0':
     dependencies:
-      '@haverstack/blob-adapter-disk': 0.7.0
+      '@haverstack/blob-adapter-disk': 0.8.0
       '@haverstack/core': 0.10.0
       '@haverstack/record-adapter-sqlite': 0.2.0
 
-  '@haverstack/blob-adapter-disk@0.7.0':
+  '@haverstack/blob-adapter-disk@0.8.0':
     dependencies:
-      '@haverstack/core': 0.9.0
+      '@haverstack/core': 0.10.0
 
   '@haverstack/conformance-fixtures@0.2.0':
     dependencies:
       '@haverstack/wire-types': 0.8.0
 
   '@haverstack/core@0.10.0': {}
-
-  '@haverstack/core@0.9.0': {}
 
   '@haverstack/record-adapter-sqlite@0.2.0':
     dependencies:
