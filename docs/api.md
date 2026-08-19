@@ -42,11 +42,13 @@ Removing an association is `POST /records/:id/associations/delete`, not a body-b
 
 `POST /records` returns `200`, not `201` — the response is the created record, same shape as every other write. The body is the full record: `id` is client-minted (12 lowercase Crockford base-32 characters, no reserved `_` prefix — omit it to let the server generate one) and, when supplied, must encode a creation timestamp within the server's clock-skew tolerance; `createdAt`/`updatedAt`/`version` are never accepted from the client — those, like `entityId`/`principalId`, are always server-assigned. A duplicate `id` returns `409` with code `conflict`.
 
-`PATCH /records/:id` accepts an `If-Match: "<version>"` header for optimistic concurrency; a mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload. `POST /records/:id/undelete` accepts the same header.
+`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, `POST /records/:id/associations/delete`, and `PUT /records/:id/permissions`. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins.
 
 ### Query parameters
 
 `GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
+
+Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
 
 ## Types
 

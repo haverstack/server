@@ -321,6 +321,26 @@ describe('Records', () => {
       expect(status).toBe(403);
       expect(await t.ctx.adapter.getRecord(record.id)).not.toBeNull();
     });
+
+    it('succeeds when If-Match names the current version', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'DELETE', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        headers: { 'If-Match': `"${record.version}"` },
+      });
+      expect(status).toBe(204);
+    });
+
+    it('returns 412 version_conflict on an If-Match mismatch, leaving the record untouched', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'DELETE', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        headers: { 'If-Match': `"${record.version + 1}"` },
+      });
+      expect(status).toBe(412);
+      expect((data as { error: { code: string } }).error.code).toBe('version_conflict');
+      expect((await t.ctx.adapter.getRecord(record.id))?.deletedAt).toBeUndefined();
+    });
   });
 
   describe('_attachment@1 immutable field protection', () => {
@@ -931,6 +951,27 @@ describe('Records', () => {
         body: { permissions: [{ access: 'public' }] },
       });
       expect(status).toBe(403);
+    });
+
+    it('PUT succeeds when If-Match names the current version', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+        token: TEST_TOKEN,
+        body: { permissions: [{ access: 'public' }] },
+        headers: { 'If-Match': `"${record.version}"` },
+      });
+      expect(status).toBe(204);
+    });
+
+    it('PUT returns 412 version_conflict on an If-Match mismatch', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+        token: TEST_TOKEN,
+        body: { permissions: [{ access: 'public' }] },
+        headers: { 'If-Match': `"${record.version + 1}"` },
+      });
+      expect(status).toBe(412);
+      expect((data as { error: { code: string } }).error.code).toBe('version_conflict');
     });
   });
 

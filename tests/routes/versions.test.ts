@@ -54,6 +54,29 @@ describe('Versions', () => {
     expect(d.version).toBe(3);
   });
 
+  describe('POST /records/:id/restore/:version — If-Match / optimistic concurrency', () => {
+    it('succeeds when If-Match names the current version', async () => {
+      const record = await createAndPatch();
+      const current = await t.ctx.adapter.getRecord(record.id);
+      const { status } = await req(t.app, 'POST', `/records/${record.id}/restore/1`, {
+        token: TEST_TOKEN,
+        headers: { 'If-Match': `"${current!.version}"` },
+      });
+      expect(status).toBe(200);
+    });
+
+    it('returns 412 version_conflict on an If-Match mismatch', async () => {
+      const record = await createAndPatch();
+      const current = await t.ctx.adapter.getRecord(record.id);
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/restore/1`, {
+        token: TEST_TOKEN,
+        headers: { 'If-Match': `"${current!.version + 1}"` },
+      });
+      expect(status).toBe(412);
+      expect((data as { error: { code: string } }).error.code).toBe('version_conflict');
+    });
+  });
+
   // Version history is now gated at the same level as update() — a
   // write-holder, or owner/creator — not plain read, per
   // docs/spec/versioning.md § History access.
