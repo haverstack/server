@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { readJson } from '../lib/json.js';
 import { serializeRecord } from '@haverstack/wire-types';
 import { StackNotFoundError } from '@haverstack/core';
 
@@ -56,7 +57,7 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     const auth = c.get('auth')!;
     const id = await resolveOwnerRecordId();
     if (!id) throw new StackNotFoundError('Entity record not found');
-    const body = await c.req.json<Record<string, unknown>>();
+    const body = await readJson<Record<string, unknown>>(c);
     let updated;
     try {
       updated = await stack

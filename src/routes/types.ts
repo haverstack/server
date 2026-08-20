@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
+import { readJson } from '../lib/json.js';
 import { serializeType } from '@haverstack/wire-types';
 import {
   hashSchema,
@@ -28,11 +29,8 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
   });
 
   app.post('/', requireOwner(stack.ownerEntityId), async (c) => {
-    const body = await c.req.json<Record<string, unknown>>();
+    const body = await readJson<Record<string, unknown>>(c);
     if (!body.id || typeof body.id !== 'string') throw new StackQueryError('id is required');
-    if (!body.baseId || typeof body.baseId !== 'string')
-      throw new StackQueryError('baseId is required');
-    if (typeof body.version !== 'number') throw new StackQueryError('version must be a number');
     if (!body.name || typeof body.name !== 'string') throw new StackQueryError('name is required');
     if (!body.schema || typeof body.schema !== 'object')
       throw new StackQueryError('schema is required');

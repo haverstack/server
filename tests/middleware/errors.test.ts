@@ -65,3 +65,33 @@ describe('errorMiddleware — denied-but-verified logging', () => {
     expect(warn.warn).not.toHaveBeenCalled();
   });
 });
+
+describe('errorMiddleware — malformed JSON bodies', () => {
+  let dbPath: string;
+  let ctx: StackContext;
+
+  beforeEach(async () => {
+    dbPath = tempDbPath();
+    ctx = await createTestContext(dbPath);
+  });
+
+  afterEach(async () => {
+    await ctx.stack.close();
+    await ctx.tokens.close();
+    await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('returns 400 bad_request rather than a bare 500', async () => {
+    const app = createApp(ctx, testConfig(dbPath), spyLogger());
+
+    const res = await app.request('/records', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${TEST_TOKEN}` },
+      body: '{ this is not json',
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('bad_request');
+  });
+});
