@@ -133,6 +133,21 @@ docker compose up -d
 
 ---
 
+## Request body size limits
+
+The server enforces two ceilings of its own — `MAX_CONTENT_BYTES` (default 1 MB, JSON bodies: records, patches, and every other JSON-accepting route) and `MAX_ATTACHMENT_BYTES` (default 50 MB, `POST /attachments` only) — and declares both in `GET /.well-known/stack` (`capabilities.maxContentBytes`/`maxAttachmentBytes`) so clients can pre-check.
+
+A reverse proxy sitting in front, however, often has its own request-body limit, independent of the app's. If that limit is smaller than `MAX_ATTACHMENT_BYTES`, the proxy rejects large uploads before they ever reach the server — usually with a proxy-branded error page, not the server's `413 payload_too_large` wire response. Raise the proxy's own limit to at least `MAX_ATTACHMENT_BYTES` (or match it exactly, so the two ceilings agree and the server's typed error is what clients actually see):
+
+- **nginx** defaults `client_max_body_size` to `1m`. Set it explicitly in the `server` or `location` block:
+  ```nginx
+  client_max_body_size 50m;
+  ```
+- **Caddy** has no body-size limit by default — nothing to configure unless you want one tighter than the app's own.
+- **Traefik** has no body-size limit by default either, unless you've added a `buffering` middleware with `maxRequestBodyBytes` set — if so, raise it to match.
+
+---
+
 ## Single-writer topology
 
 The `data` volume (`DB_PATH`'s directory) holds more than the database file itself: `stack.db-wal` and `stack.db-shm` are SQLite's write-ahead-log sidecar files, present whenever the process has the database open, and `stack.db.lock` is a storage-ownership lock recording the PID of the process that opened it. Back up or copy the whole directory, not just `stack.db` — a `stack.db` file copied without its `-wal` sidecar can be missing recently-committed data.
