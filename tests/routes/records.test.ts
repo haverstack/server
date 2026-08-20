@@ -199,6 +199,38 @@ describe('Records', () => {
       expect((narrow as { records: unknown[] }).records).toHaveLength(1);
     });
 
+    it('filters by relatedTo, narrowed further by relatedToLabel', async () => {
+      const target = await seedRecord(t.ctx, { body: 'target' });
+      const child = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'child' },
+        { associations: [{ kind: 'relationship', label: 'child', recordId: target.id }] },
+      );
+      await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'sibling' },
+        { associations: [{ kind: 'relationship', label: 'sibling', recordId: target.id }] },
+      );
+
+      const { data: unlabeled } = await req(
+        t.app,
+        'GET',
+        `/records?relatedTo=${encodeURIComponent(target.id)}`,
+        { token: TEST_TOKEN },
+      );
+      expect((unlabeled as { records: Array<{ id: string }> }).records).toHaveLength(2);
+
+      const { data: labeled } = await req(
+        t.app,
+        'GET',
+        `/records?relatedTo=${encodeURIComponent(target.id)}&relatedToLabel=child`,
+        { token: TEST_TOKEN },
+      );
+      const labeledRecords = (labeled as { records: Array<{ id: string }> }).records;
+      expect(labeledRecords).toHaveLength(1);
+      expect(labeledRecords[0]!.id).toBe(child.id);
+    });
+
     it('anonymous query returns only public records', async () => {
       await seedRecord(t.ctx, { body: 'private' });
       await t.ctx.stack.create(

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { bodyLimit } from 'hono/body-limit';
+import { StackPayloadTooLargeError } from '@haverstack/core';
 import type { Logger } from 'pino';
 import type { StackContext } from './stack.js';
 import type { Config } from './config.js';
@@ -17,8 +18,6 @@ import { tokenRoutes } from './routes/tokens.js';
 import { wireError } from './wireError.js';
 
 export type { AppEnv };
-
-const JSON_BODY_LIMIT = 1 * 1024 * 1024; // 1 MB
 
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -47,18 +46,28 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.onError(errorMiddleware(logger));
   app.use(authMiddleware(config.ownerToken, ctx));
 
-  // Cap JSON body size on all routes that accept JSON. Attachment uploads are
-  // excluded here — they enforce their own limit via maxAttachmentBytes.
+  // Cap request body size globally — not per-prefix, so a route added later
+  // (e.g. auth endpoints) can't silently end up with no limit at all. The
+  // one exception is POST /attachments, which enforces its own, larger
+  // ceiling via maxAttachmentBytes; running this limit ahead of that one
+  // would reject legitimate uploads before the upload-specific check ever
+  // runs. Thrown as a StackError, like every other Stack-domain failure,
+  // rather than hand-built via wireError() — errorMiddleware/serializeError()
+  // produces the conforming { error: { code, message } } body from it.
   const jsonBodyLimit = bodyLimit({
-    maxSize: JSON_BODY_LIMIT,
-    onError: (c) => wireError(c, 413, 'payload_too_large', 'Request body too large'),
+    maxSize: config.maxContentBytes,
+    onError: () => {
+      throw new StackPayloadTooLargeError(
+        `Request body exceeds the ${config.maxContentBytes}-byte limit`,
+      );
+    },
   });
-  app.use('/records/*', jsonBodyLimit);
-  app.use('/types/*', jsonBodyLimit);
-  app.use('/tokens/*', jsonBodyLimit);
-  app.use('/entity/*', jsonBodyLimit);
+  app.use('*', async (c, next) => {
+    if (c.req.method === 'POST' && c.req.path === '/attachments') return next();
+    return jsonBodyLimit(c, next);
+  });
 
-  app.route('/.well-known', wellknownRoutes(ctx));
+  app.route('/.well-known', wellknownRoutes(ctx, config));
   app.route('/health', healthRoutes());
   app.route('/records', recordRoutes(ctx));
   app.route('/types', typeRoutes(ctx));

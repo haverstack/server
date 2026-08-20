@@ -106,12 +106,17 @@ function assertCoverage(names: string[], handled: Set<string>, skipped: Set<stri
 // -------------------------------------------------------
 
 describe('discovery fixtures', () => {
-  // discovery-omits-absent-timezone and discovery-advertises-did-challenge-auth
-  // pin edge-case deployments (no timezone configured; did-challenge auth
-  // advertised) this harness's fixed test config doesn't stand up. The
-  // envelope shape below is the invariant every discovery fixture shares.
-  test('GET /.well-known/stack matches the documented envelope shape', async () => {
-    const fixture = discoveryFixtures[0]!;
+  // discovery-advertises-did-challenge-auth pins a deployment with the
+  // did-challenge handshake enabled — not yet implemented by this server
+  // (tracked separately under #53). A real gap, not a harness limitation.
+  const SKIPPED = new Set(['discovery-advertises-did-challenge-auth']);
+  const handled = new Set<string>();
+
+  test('discovery-declares-protocol-version-and-capabilities', async () => {
+    const fixture = discoveryFixtures.find(
+      (f) => f.name === 'discovery-declares-protocol-version-and-capabilities',
+    )!;
+    handled.add(fixture.name);
     const { status, data } = await req(t.app, fixture.method, fixture.path);
     expect(status).toBe(fixture.responseStatus);
     const d = data as Record<string, unknown>;
@@ -125,6 +130,27 @@ describe('discovery fixtures', () => {
     for (const field of fixture.responseBody!.capabilities.sortableFields) {
       expect(capabilities.sortableFields).toContain(field);
     }
+  });
+
+  test('discovery-omits-absent-timezone', async () => {
+    const fixture = discoveryFixtures.find((f) => f.name === 'discovery-omits-absent-timezone')!;
+    handled.add(fixture.name);
+    const noTzApp = await buildTestApp({ timezone: undefined });
+    try {
+      const { status, data } = await req(noTzApp.app, fixture.method, fixture.path);
+      expect(status).toBe(fixture.responseStatus);
+      expect('timezone' in (data as Record<string, unknown>)).toBe(false);
+    } finally {
+      await noTzApp.cleanup();
+    }
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      discoveryFixtures.map((f) => f.name),
+      handled,
+      SKIPPED,
+    );
   });
 });
 

@@ -28,29 +28,43 @@ export function tempDbPath(): string {
   return join(dir, 'stack.db');
 }
 
-export async function createTestContext(dbPath: string): Promise<StackContext> {
+export type TestContextOpts = {
+  /**
+   * IANA timezone string, or `undefined` to opt out of one. Note: a plain
+   * default parameter can't tell "omitted" from "explicitly undefined"
+   * (both trigger the default), so this must be an options bag — pass
+   * `{ timezone: undefined }` deliberately, not the bare value.
+   */
+  timezone?: string;
+};
+
+export async function createTestContext(
+  dbPath: string,
+  opts: TestContextOpts = { timezone: 'UTC' },
+): Promise<StackContext> {
   const adapter = await LocalAdapter.initialize({
     path: dbPath,
     entityId: TEST_ENTITY_ID,
-    timezone: 'UTC',
+    ...(opts.timezone !== undefined && { timezone: opts.timezone }),
   });
   const stack = await Stack.create(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
   return { adapter, stack, tokens };
 }
 
-export function testConfig(dbPath: string): Config {
+export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {
   return {
     port: 3000,
     dbPath,
     entityId: TEST_ENTITY_ID,
     ownerName: null,
     ownerHandle: null,
-    timezone: 'UTC',
+    timezone: opts.timezone,
     ownerToken: TEST_TOKEN,
     corsOrigins: '*',
     baseUrl: null,
     maxAttachmentBytes: 50 * 1024 * 1024,
+    maxContentBytes: 1 * 1024 * 1024,
   };
 }
 
@@ -61,10 +75,10 @@ export type TestApp = {
   cleanup: () => Promise<void>;
 };
 
-export async function buildTestApp(): Promise<TestApp> {
+export async function buildTestApp(opts: TestContextOpts = { timezone: 'UTC' }): Promise<TestApp> {
   const dbPath = tempDbPath();
-  const ctx = await createTestContext(dbPath);
-  const config = testConfig(dbPath);
+  const ctx = await createTestContext(dbPath, opts);
+  const config = testConfig(dbPath, opts);
   const app = createApp(ctx, config, logger);
 
   const cleanup = async () => {

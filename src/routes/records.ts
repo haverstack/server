@@ -116,7 +116,7 @@ function parseQueryParams(url: URL): StackQuery {
 
   const relatedTo = getOne(url, 'relatedTo');
   if (relatedTo) {
-    const label = getOne(url, 'relatedLabel');
+    const label = getOne(url, 'relatedToLabel');
     filter.relatedTo = { recordId: relatedTo, ...(label && { label }) };
   }
 
