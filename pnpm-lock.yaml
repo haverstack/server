@@ -4,16 +4,13 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@haverstack/blob-adapter-disk': ^0.8.0
-
 importers:
 
   .:
     dependencies:
       '@haverstack/adapter-local':
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: ^0.9.0
+        version: 0.9.0
       '@haverstack/core':
         specifier: ^0.10.0
         version: 0.10.0
@@ -264,8 +261,8 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@haverstack/adapter-local@0.8.0':
-    resolution: {integrity: sha512-6ruqNRVr5GpzJfNf5Tz7VAhTvVxKO4oDIU/9VeWVEd+nHYosj2EawW+gxT64vRmfH8tE2i3a6vDQVYKQqO5rvQ==}
+  '@haverstack/adapter-local@0.9.0':
+    resolution: {integrity: sha512-v1xy7mF3KXyw06HKy4mQxm6Ma6KsOe9TJ4yHgHMYL1Mk5P5uBrRCChE71wryQWw92VPKVqz1KbrpDOhRD317Wg==}
     engines: {node: '>=22.5.0'}
 
   '@haverstack/blob-adapter-disk@0.8.0':
@@ -1258,7 +1255,7 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@haverstack/adapter-local@0.8.0':
+  '@haverstack/adapter-local@0.9.0':
     dependencies:
       '@haverstack/blob-adapter-disk': 0.8.0
       '@haverstack/core': 0.10.0
