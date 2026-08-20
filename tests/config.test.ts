@@ -48,4 +48,31 @@ describe('loadConfig', () => {
     expect(config.ownerName).toBeNull();
     expect(config.ownerHandle).toBeNull();
   });
+
+  it('leaves timezone undefined when TIMEZONE is unset', () => {
+    const config = loadConfig();
+    expect(config.timezone).toBeUndefined();
+  });
+
+  it('reads TIMEZONE when set', () => {
+    process.env['TIMEZONE'] = 'America/New_York';
+    const config = loadConfig();
+    expect(config.timezone).toBe('America/New_York');
+  });
+
+  it('defaults maxContentBytes to 1 MB', () => {
+    const config = loadConfig();
+    expect(config.maxContentBytes).toBe(1 * 1024 * 1024);
+  });
+
+  it('reads MAX_CONTENT_BYTES when set', () => {
+    process.env['MAX_CONTENT_BYTES'] = '2048';
+    const config = loadConfig();
+    expect(config.maxContentBytes).toBe(2048);
+  });
+
+  it('rejects an invalid MAX_CONTENT_BYTES', () => {
+    process.env['MAX_CONTENT_BYTES'] = 'not-a-number';
+    expect(() => loadConfig()).toThrow(/Invalid MAX_CONTENT_BYTES/);
+  });
 });

@@ -1,6 +1,7 @@
 import { isValidDid } from '@haverstack/core/did';
 
 const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB
+const DEFAULT_MAX_CONTENT_BYTES = 1 * 1024 * 1024; // 1 MB
 
 function required(name: string): string {
   const val = process.env[name];
@@ -18,11 +19,12 @@ export type Config = {
   entityId: string | null;
   ownerName: string | null;
   ownerHandle: string | null;
-  timezone: string;
+  timezone: string | undefined;
   ownerToken: string;
   corsOrigins: string;
   baseUrl: string | null;
   maxAttachmentBytes: number;
+  maxContentBytes: number;
 };
 
 export function loadConfig(): Config {
@@ -37,7 +39,10 @@ export function loadConfig(): Config {
   }
   const ownerName = process.env['OWNER_NAME'] ?? null;
   const ownerHandle = process.env['OWNER_HANDLE'] ?? null;
-  const timezone = optional('TIMEZONE', 'UTC');
+  // No default: an absent timezone stays undefined end to end rather than
+  // asserting knowledge the stack was never actually given. See
+  // docs/spec/wire-format.md § Discovery.
+  const timezone = process.env['TIMEZONE'] ?? undefined;
 
   const port = parseInt(optional('PORT', '3000'), 10);
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -52,6 +57,14 @@ export function loadConfig(): Config {
     throw new Error(`Invalid MAX_ATTACHMENT_BYTES: ${process.env['MAX_ATTACHMENT_BYTES']}`);
   }
 
+  const maxContentBytes = parseInt(
+    optional('MAX_CONTENT_BYTES', String(DEFAULT_MAX_CONTENT_BYTES)),
+    10,
+  );
+  if (isNaN(maxContentBytes) || maxContentBytes < 1) {
+    throw new Error(`Invalid MAX_CONTENT_BYTES: ${process.env['MAX_CONTENT_BYTES']}`);
+  }
+
   return {
     port,
     dbPath,
@@ -63,5 +76,6 @@ export function loadConfig(): Config {
     corsOrigins: optional('CORS_ORIGINS', ''),
     baseUrl: process.env['BASE_URL'] ?? null,
     maxAttachmentBytes,
+    maxContentBytes,
   };
 }

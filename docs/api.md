@@ -9,6 +9,25 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 | GET    | `/.well-known/stack` | None | Stack metadata and capabilities |
 | GET    | `/health`            | None | Liveness check                  |
 
+`GET /.well-known/stack` returns:
+
+```json
+{
+  "version": "1.0",
+  "entityId": "did:key:z6Mk...",
+  "timezone": "America/New_York",
+  "capabilities": {
+    "fullTextSearch": true,
+    "contentFieldQuery": true,
+    "sortableFields": ["createdAt", "updatedAt", "version"],
+    "maxAttachmentBytes": 52428800,
+    "maxContentBytes": 1048576
+  }
+}
+```
+
+`version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.maxAttachmentBytes` and `maxContentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. An optional `auth: { methods: [...] }` field advertises a supported authentication handshake (e.g. `"did-challenge"`) when the server implements one; its absence means only whatever issuance scheme was arranged out of band.
+
 ## Records
 
 | Method | Path                               | Auth       | Description                             |
@@ -46,7 +65,7 @@ Removing an association is `POST /records/:id/associations/delete`, not a body-b
 
 ### Query parameters
 
-`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
+`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
 
 Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
 
