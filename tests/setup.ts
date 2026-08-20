@@ -5,16 +5,22 @@ import { rm } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { LocalAdapter, NativeTokenStore, defaultTokenStorePath } from '@haverstack/adapter-local';
 import { Stack } from '@haverstack/core';
+import { authOriginFromUrl } from '@haverstack/core/wire';
 import pino from 'pino';
 import { createApp } from '../src/app.js';
 import type { Config } from '../src/config.js';
 import type { StackContext } from '../src/stack.js';
+import { AuthNonceStore, defaultNonceStorePath } from '../src/lib/nonceStore.js';
 import type { Hono } from 'hono';
 import type { AppEnv } from '../src/app.js';
 
 export const TEST_ENTITY_ID = 'did:key:test-entity-id-00000001';
 export const TEST_TOKEN = 'test-bearer-token';
 export const OTHER_ENTITY_ID = 'did:key:other-entity-id-00000002';
+// Matches @haverstack/conformance-fixtures' AUTH_FIXTURE_ORIGIN — the auth
+// handshake fixtures carry real signatures over this exact origin, so the
+// test harness must present itself as it.
+export const TEST_BASE_URL = 'https://stack.example.com';
 
 export const logger = pino({ level: 'silent' });
 
@@ -49,7 +55,8 @@ export async function createTestContext(
   });
   const stack = await Stack.create(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
-  return { adapter, stack, tokens };
+  const nonces = AuthNonceStore.open(defaultNonceStorePath(dbPath));
+  return { adapter, stack, tokens, nonces };
 }
 
 export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {
@@ -62,7 +69,8 @@ export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: '
     timezone: opts.timezone,
     ownerToken: TEST_TOKEN,
     corsOrigins: '*',
-    baseUrl: null,
+    baseUrl: TEST_BASE_URL,
+    authOrigin: authOriginFromUrl(TEST_BASE_URL),
     maxAttachmentBytes: 50 * 1024 * 1024,
     maxContentBytes: 1 * 1024 * 1024,
   };
@@ -84,6 +92,7 @@ export async function buildTestApp(opts: TestContextOpts = { timezone: 'UTC' }):
   const cleanup = async () => {
     await ctx.stack.close();
     await ctx.tokens.close();
+    ctx.nonces.close();
     // Remove the whole temp directory (includes the .db file and attachments/).
     await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
   };

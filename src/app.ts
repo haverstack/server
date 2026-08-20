@@ -15,6 +15,7 @@ import { typeRoutes } from './routes/types.js';
 import { attachmentRoutes } from './routes/attachments.js';
 import { entityRoutes } from './routes/entity.js';
 import { tokenRoutes } from './routes/tokens.js';
+import { authRoutes } from './routes/auth.js';
 import { wireError } from './wireError.js';
 
 export type { AppEnv };
@@ -74,6 +75,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
   app.route('/entity', entityRoutes(ctx));
   app.route('/tokens', tokenRoutes(ctx));
+  app.route('/auth', authRoutes(ctx, config.authOrigin));
 
   app.notFound((c) => wireError(c, 404, 'not_found', 'Not found'));
 

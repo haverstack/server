@@ -26,7 +26,43 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 }
 ```
 
-`version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.maxAttachmentBytes` and `maxContentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. An optional `auth: { methods: [...] }` field advertises a supported authentication handshake (e.g. `"did-challenge"`) when the server implements one; its absence means only whatever issuance scheme was arranged out of band.
+`version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.maxAttachmentBytes` and `maxContentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
+
+## Authentication
+
+| Method | Path              | Auth | Description                               |
+| ------ | ----------------- | ---- | ----------------------------------------- |
+| POST   | `/auth/challenge` | None | Request a nonce to prove control of a DID |
+| POST   | `/auth/token`     | None | Redeem a signed nonce for a bearer token  |
+
+Both endpoints are unauthenticated — they're how a token is earned in the first place. This is the DID challenge-response handshake: a client proves it holds the private key behind a `did:key` DID, and the server issues a bearer token for that DID without any out-of-band secret handoff. `POST /tokens` (owner-only, see [Entity & Tokens](#entity--tokens)) remains as the owner's separate escape hatch for admin-issued and delegated tokens.
+
+```
+POST /auth/challenge   { "did": "did:key:z6Mk..." }
+                     → { "nonce": "k7Qm2ZxRt9vLbNc4Hy8Wf3", "expiresAt": "2024-06-15T12:05:00.000Z" }
+
+POST /auth/token       { "did": "...", "nonce": "...", "signature": "..." }
+                     → { "token": "...", "expiresAt": "...", "principalId": "...", "subjectId": "..." }
+```
+
+`signature` is base64url. What gets signed is not the nonce alone but a domain-separated payload built by `buildAuthChallengePayload()` in `@haverstack/core/wire` — `haverstack-auth-v1\n<origin>\n<did>\n<nonce>` — where `<origin>` is this server's own configured public origin (`BASE_URL`), never a request header. Binding the origin into the signed payload is what stops a signature obtained for one server from being redeemed at another. `verifyAuthChallenge()` verifies it server-side; a client uses `signAuthChallenge()` / `didCredentialFromKeypair()` from the same module so both sides build the identical payload.
+
+`POST /auth/token` never delegates: `principalId` and `subjectId` in the response are always equal, since proving key possession proves the principal and says nothing about whom that key may act for. A delegated token is only ever asserted by the owner out of band, via `POST /tokens`' `onBehalfOf`.
+
+A nonce is single-use, bound to the DID it was issued for, and expires per the `expiresAt` `POST /auth/challenge` returns (5 minutes). Redeeming it — successfully or not — spends it; a second redemption of the same nonce always fails.
+
+### Auth errors
+
+Auth failures use their own vocabulary, deliberately outside the `WireErrorCode` taxonomy used elsewhere in this document — no Stack operation has begun yet, so none of these is a `StackError`:
+
+| Code                | Status | Meaning                                               | Retryable |
+| ------------------- | ------ | ----------------------------------------------------- | --------- |
+| `invalid_did`       | 400    | Not a well-formed DID                                 | No        |
+| `unknown_nonce`     | 401    | Never issued, already spent, or issued to another DID | Yes       |
+| `expired_nonce`     | 401    | Past `expiresAt`                                      | Yes       |
+| `invalid_signature` | 401    | Does not verify against the payload                   | No        |
+
+The retryable column is why these carry a `code` at all rather than being bodyless 401s like other auth failures on this server: a stale or unknown nonce means re-run the handshake once from `POST /auth/challenge`; a rejected signature will be rejected identically forever, so a client that retried it would loop. `unknown_nonce` deliberately does not distinguish "never issued" from "already spent" from "issued to a different DID" — the three differ only in what an attacker would learn.
 
 ## Records
 

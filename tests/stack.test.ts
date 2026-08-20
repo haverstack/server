@@ -65,11 +65,13 @@ describe('initStack bootstrap', () => {
     const ctx = await initStack(config, logger);
     await ctx.stack.close();
     await ctx.tokens.close();
+    ctx.nonces.close();
 
     const reopened = await initStack({ ...config, entityId: null }, logger);
     expect(reopened.stack.ownerEntityId).toBe(config.entityId);
     await reopened.stack.close();
     await reopened.tokens.close();
+    reopened.nonces.close();
   });
 
   it('warns but does not fail when ENTITY_ID no longer matches the stored owner', async () => {
@@ -79,6 +81,7 @@ describe('initStack bootstrap', () => {
     const ctx = await initStack(config, logger);
     await ctx.stack.close();
     await ctx.tokens.close();
+    ctx.nonces.close();
 
     const warn = spyLogger();
     const mismatched = await initStack({ ...config, entityId: OTHER_ENTITY_ID }, warn);
@@ -92,6 +95,7 @@ describe('initStack bootstrap', () => {
     );
     await mismatched.stack.close();
     await mismatched.tokens.close();
+    mismatched.nonces.close();
   });
 
   it('creates the owner _entity record when OWNER_NAME is configured', async () => {
@@ -105,6 +109,7 @@ describe('initStack bootstrap', () => {
     expect(records[0]?.content).toMatchObject({ name: 'Jane Owner', handle: '@jane' });
     await ctx.stack.close();
     await ctx.tokens.close();
+    ctx.nonces.close();
   });
 
   it('creates no owner _entity record when OWNER_NAME is unset', async () => {
@@ -118,5 +123,6 @@ describe('initStack bootstrap', () => {
     expect(records).toHaveLength(0);
     await ctx.stack.close();
     await ctx.tokens.close();
+    ctx.nonces.close();
   });
 });

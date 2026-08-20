@@ -4,6 +4,7 @@ import { loadConfig } from '../src/config.js';
 const REQUIRED_ENV = {
   DB_PATH: './stack.db',
   OWNER_TOKEN: 'test-owner-token',
+  BASE_URL: 'https://stack.example.com',
 };
 
 describe('loadConfig', () => {
@@ -74,5 +75,22 @@ describe('loadConfig', () => {
   it('rejects an invalid MAX_CONTENT_BYTES', () => {
     process.env['MAX_CONTENT_BYTES'] = 'not-a-number';
     expect(() => loadConfig()).toThrow(/Invalid MAX_CONTENT_BYTES/);
+  });
+
+  it('refuses to start when BASE_URL is unset', () => {
+    delete process.env['BASE_URL'];
+    expect(() => loadConfig()).toThrow(/Missing required environment variable: BASE_URL/);
+  });
+
+  it('rejects a BASE_URL with no origin to bind a signature to', () => {
+    process.env['BASE_URL'] = 'not-a-url';
+    expect(() => loadConfig()).toThrow(/BASE_URL must be an absolute URL/);
+  });
+
+  it('derives authOrigin from BASE_URL', () => {
+    process.env['BASE_URL'] = 'https://stack.example.com/some/path';
+    const config = loadConfig();
+    expect(config.baseUrl).toBe('https://stack.example.com/some/path');
+    expect(config.authOrigin).toBe('https://stack.example.com');
   });
 });

@@ -43,8 +43,10 @@ describe('GET /.well-known/stack', () => {
     }
   });
 
-  it('does not advertise auth when no handshake is implemented', async () => {
+  it('advertises the DID challenge-response handshake', async () => {
     const { data } = await req(t.app, 'GET', '/.well-known/stack');
-    expect('auth' in (data as Record<string, unknown>)).toBe(false);
+    expect((data as { auth?: { methods: string[] } }).auth).toEqual({
+      methods: ['did-challenge'],
+    });
   });
 });

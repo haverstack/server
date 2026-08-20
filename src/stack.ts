@@ -3,6 +3,7 @@ import { Stack } from '@haverstack/core';
 import type { StackTokenStore } from '@haverstack/core/wire';
 import type { Logger } from 'pino';
 import type { Config } from './config.js';
+import { AuthNonceStore, defaultNonceStorePath } from './lib/nonceStore.js';
 
 export type StackContext = {
   adapter: LocalAdapter;
@@ -13,6 +14,9 @@ export type StackContext = {
   // the one lifecycle hook every implementation needs but the core
   // interface doesn't declare.
   tokens: StackTokenStore & { close(): Promise<void> };
+  // DID challenge-response nonces — see AuthNonceStore. Also kept outside
+  // the portable stack file, in its own sibling store beside the tokens.
+  nonces: AuthNonceStore;
 };
 
 export async function initStack(config: Config, logger: Logger): Promise<StackContext> {
@@ -57,6 +61,7 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
   // material lives in its own file beside stack.db (not inside the
   // portable stack export) per docs/spec/wire-format.md § Authentication.
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(config.dbPath) });
+  const nonces = AuthNonceStore.open(defaultNonceStorePath(config.dbPath));
 
-  return { adapter, stack, tokens };
+  return { adapter, stack, tokens, nonces };
 }
