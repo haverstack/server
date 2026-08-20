@@ -1,6 +1,13 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { StackPermissionError, StackPayloadTooLargeError } from '@haverstack/core';
+import type { AttachmentContent, StackRecord } from '@haverstack/core';
+import {
+  resolveAttachmentDownloadContentType,
+  firstRecordedAttachment,
+  NOSNIFF_HEADER_NAME,
+  NOSNIFF_HEADER_VALUE,
+} from '@haverstack/core/wire';
 import { serializeRecord } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
@@ -48,24 +55,50 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     try {
       data = await (auth ? stack.forSession(auth) : stack.asEntity(null)).getAttachment(fileId);
     } catch (e) {
-      if (e instanceof StackPermissionError) return c.json({ error: 'Unauthorized' }, 401);
-      return c.json({ error: 'Attachment not found' }, 404);
+      // Anonymous + denied is a transport-auth failure (no token at all),
+      // distinct from an authenticated requester lacking access. Anything
+      // else — StackPermissionError with auth present, StackNotFoundError,
+      // or a genuine fault — falls through to errorMiddleware, which maps
+      // the first two to 403/404 via serializeError() and logs/500s the
+      // rest. Missing and forbidden stay indistinguishable for non-owners
+      // because ScopedStack.getAttachment already throws the same
+      // StackPermissionError for both (see canAccessFile) — this handler
+      // doesn't need its own anti-oracle logic, only to stop overriding it.
+      if (!auth && e instanceof StackPermissionError) {
+        return c.json({ error: 'Unauthorized' }, 401);
+      }
+      throw e;
     }
+
+    const metaResult = await stack.query({
+      filter: { typeId: '_attachment@1', content: { fileId }, includeDeleted: true },
+      limit: 1000,
+    });
+    const metaRecords = metaResult.records as (StackRecord & { content: AttachmentContent })[];
+    const firstRecord = firstRecordedAttachment(metaRecords);
+    const ownRecord = auth
+      ? firstRecordedAttachment(metaRecords.filter((r) => r.entityId === auth.subjectId))
+      : undefined;
 
     const contentTypeParam = c.req.query('contentType');
     const filenameParam = c.req.query('filename');
 
-    const disposition = filenameParam
-      ? `attachment; filename*=UTF-8''${encodeURIComponent(filenameParam)}`
+    const { contentType } = resolveAttachmentDownloadContentType({
+      contentTypeParam,
+      filenameParam,
+      storedMimeType: firstRecord?.content.mimeType,
+    });
+    const filename = filenameParam ?? ownRecord?.content.filename ?? firstRecord?.content.filename;
+
+    const disposition = filename
+      ? `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
       : 'attachment';
 
     return c.newResponse(data as unknown as Uint8Array<ArrayBuffer>, 200, {
-      'Content-Type': sanitizeMimeType(
-        contentTypeParam ?? resolveMimeType('application/octet-stream', filenameParam),
-      ),
+      'Content-Type': contentType,
       'Content-Length': String(data.byteLength),
       'Content-Disposition': disposition,
-      'X-Content-Type-Options': 'nosniff',
+      [NOSNIFF_HEADER_NAME]: NOSNIFF_HEADER_VALUE,
     });
   });
 
@@ -74,6 +107,21 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const fileId = c.req.param('fileId');
     await stack.deleteAttachment(fileId);
     return c.body(null, 204);
+  });
+
+  // POST /attachments/gc — sweep and delete orphaned attachment bytes.
+  // Owner-only, invoke-only (no built-in scheduling): dryRun makes a
+  // cron-from-outside workflow safe. Body is entirely optional — every
+  // field defaults inside ScopedStack.collectAttachmentGarbage().
+  app.post('/gc', requireOwner(ownerEntityId), async (c) => {
+    const auth = c.get('auth')!;
+    const raw = await c.req.text();
+    const body = raw ? (JSON.parse(raw) as { graceMs?: number; dryRun?: boolean }) : {};
+    const result = await stack.forSession(auth).collectAttachmentGarbage({
+      ...(typeof body.graceMs === 'number' && { graceMs: body.graceMs }),
+      ...(body.dryRun === true && { dryRun: true }),
+    });
+    return c.json(result, 200);
   });
 
   return app;
@@ -97,53 +145,4 @@ function parseUploadFilename(header: string | undefined): string | undefined {
   }
   const plain = /filename\s*=\s*"([^"]+)"/i.exec(header);
   return plain ? plain[1] : undefined;
-}
-
-// MIME types that browsers can use to execute scripts or parse as markup.
-// Callers requesting one of these as Content-Type receive application/octet-stream instead.
-const BLOCKED_MIME_TYPES = new Set([
-  'text/html',
-  'text/javascript',
-  'application/javascript',
-  'application/x-javascript',
-  'application/xhtml+xml',
-  'image/svg+xml',
-  'text/xml',
-  'application/xml',
-]);
-
-function sanitizeMimeType(mimeType: string): string {
-  const base = mimeType.split(';')[0].trim().toLowerCase();
-  return BLOCKED_MIME_TYPES.has(base) ? 'application/octet-stream' : mimeType;
-}
-
-// Extension-to-MIME map used to infer Content-Type from a ?filename param.
-// Omits types in BLOCKED_MIME_TYPES — they would be sanitized away regardless.
-const EXTENSION_MIME: Record<string, string> = {
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  ico: 'image/x-icon',
-  pdf: 'application/pdf',
-  txt: 'text/plain',
-  md: 'text/markdown',
-  csv: 'text/csv',
-  json: 'application/json',
-  mp4: 'video/mp4',
-  webm: 'video/webm',
-  mov: 'video/quicktime',
-  mp3: 'audio/mpeg',
-  wav: 'audio/wav',
-  ogg: 'audio/ogg',
-  m4a: 'audio/mp4',
-  zip: 'application/zip',
-  gz: 'application/gzip',
-};
-
-function resolveMimeType(declared: string, filename: string | undefined): string {
-  if (declared !== 'application/octet-stream' || !filename) return declared;
-  const ext = filename.split('.').pop()?.toLowerCase();
-  return (ext && EXTENSION_MIME[ext]) || declared;
 }
