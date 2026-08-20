@@ -3,6 +3,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { ScopedStack, TokenSession } from '@haverstack/core';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { readJson } from '../lib/json.js';
 import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
 import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
@@ -177,7 +178,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   // Registered before /:id patterns to avoid param capture on the literal "query" segment.
   app.post('/query', requireAuth(), async (c) => {
     const auth = c.get('auth');
-    const query = parseQueryBody(await c.req.json());
+    const query = parseQueryBody(await readJson(c));
     const result = await scopeFor(auth).query(query);
     return c.json({
       records: result.records.map(serializeRecord),
@@ -216,7 +217,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   // the authenticated session, never trusted from the body).
   app.post('/', requireAuth(), async (c) => {
     const auth = c.get('auth')!;
-    const body = await c.req.json<Record<string, unknown>>();
+    const body = await readJson<Record<string, unknown>>(c);
     if (!body.typeId || typeof body.typeId !== 'string')
       throw new StackQueryError('typeId is required');
     if (!body.content || typeof body.content !== 'object')
@@ -267,7 +268,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.patch('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const patch = await c.req.json<Record<string, unknown>>();
+    const patch = await readJson<Record<string, unknown>>(c);
 
     const updated = await stack
       .forSession(auth)
@@ -312,7 +313,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.put('/:id/permissions', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await c.req.json<{ permissions: Permission[] }>();
+    const body = await readJson<{ permissions: Permission[] }>(c);
     if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
     await stack
       .forSession(auth)
@@ -340,7 +341,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.post('/:id/associations', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await c.req.json<Association>();
+    const body = await readJson<Association>(c);
     if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
     await stack
       .forSession(auth)
@@ -354,7 +355,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.post('/:id/associations/delete', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await c.req.json<Association>();
+    const body = await readJson<Association>(c);
     await stack
       .forSession(auth)
       .dissociate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
@@ -405,7 +406,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.post('/:id/migrate', requireOwner(ownerEntityId), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await c.req.json<Record<string, unknown>>();
+    const body = await readJson<Record<string, unknown>>(c);
     if (!body.toTypeId || typeof body.toTypeId !== 'string')
       throw new StackQueryError('toTypeId is required');
     if (!body.content || typeof body.content !== 'object')

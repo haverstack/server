@@ -48,6 +48,60 @@ describe('Types', () => {
       });
       expect(status).toBe(403);
     });
+
+    it('re-POSTing an identical schema is a no-op that preserves createdAt', async () => {
+      const schemaHash = await hashSchema(schema);
+      const first = await req(t.app, 'POST', '/types', {
+        token: TEST_TOKEN,
+        body: { id: typeId, name: 'Item', schema, schemaHash },
+      });
+      expect(first.status).toBe(201);
+      const createdAt = (first.data as Record<string, unknown>).createdAt;
+
+      const second = await req(t.app, 'POST', '/types', {
+        token: TEST_TOKEN,
+        body: { id: typeId, name: 'Item', schema, schemaHash },
+      });
+      expect(second.status).toBe(201);
+      expect((second.data as Record<string, unknown>).createdAt).toBe(createdAt);
+    });
+
+    it('re-POSTing an additive-legal schema change is accepted', async () => {
+      const schemaHash = await hashSchema(schema);
+      await req(t.app, 'POST', '/types', {
+        token: TEST_TOKEN,
+        body: { id: typeId, name: 'Item', schema, schemaHash },
+      });
+
+      const widened = {
+        ...schema,
+        note: { kind: 'string' as const, required: false as const },
+      };
+      const widenedHash = await hashSchema(widened);
+      const { status, data } = await req(t.app, 'POST', '/types', {
+        token: TEST_TOKEN,
+        body: { id: typeId, name: 'Item', schema: widened, schemaHash: widenedHash },
+      });
+      expect(status).toBe(201);
+      expect((data as Record<string, unknown>).schema).toEqual(widened);
+    });
+
+    it('re-POSTing a non-additive schema change returns 409 schema_drift', async () => {
+      const schemaHash = await hashSchema(schema);
+      await req(t.app, 'POST', '/types', {
+        token: TEST_TOKEN,
+        body: { id: typeId, name: 'Item', schema, schemaHash },
+      });
+
+      const incompatible = { name: { kind: 'number' as const, required: true as const } };
+      const incompatibleHash = await hashSchema(incompatible);
+      const { status, data } = await req(t.app, 'POST', '/types', {
+        token: TEST_TOKEN,
+        body: { id: typeId, name: 'Item', schema: incompatible, schemaHash: incompatibleHash },
+      });
+      expect(status).toBe(409);
+      expect((data as { error: { code: string } }).error.code).toBe('schema_drift');
+    });
   });
 
   describe('GET /types', () => {

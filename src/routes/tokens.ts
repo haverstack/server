@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
+import { readJson } from '../lib/json.js';
 import { parseDate } from '@haverstack/wire-types';
 import { StackValidationError } from '@haverstack/core';
 import { isValidDid } from '@haverstack/core/did';
@@ -17,12 +18,12 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   // principal acts for, per docs/spec/wire-format.md § The session a
   // token names.
   app.post('/', requireOwner(ownerEntityId), async (c) => {
-    const body = await c.req.json<{
+    const body = await readJson<{
       entityId?: string;
       onBehalfOf?: string;
       label?: string;
       expiresAt?: string;
-    }>();
+    }>(c);
     if (body.entityId !== undefined && !isValidDid(body.entityId))
       throw new StackValidationError([{ path: 'entityId', message: 'Must be a DID' }]);
     if (body.onBehalfOf !== undefined && !isValidDid(body.onBehalfOf))
