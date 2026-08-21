@@ -93,4 +93,20 @@ describe('loadConfig', () => {
     expect(config.baseUrl).toBe('https://stack.example.com/some/path');
     expect(config.authOrigin).toBe('https://stack.example.com');
   });
+
+  it('defaults shutdownTimeoutMs to 10s', () => {
+    const config = loadConfig();
+    expect(config.shutdownTimeoutMs).toBe(10_000);
+  });
+
+  it('reads SHUTDOWN_TIMEOUT_MS when set', () => {
+    process.env['SHUTDOWN_TIMEOUT_MS'] = '5000';
+    const config = loadConfig();
+    expect(config.shutdownTimeoutMs).toBe(5000);
+  });
+
+  it('rejects an invalid SHUTDOWN_TIMEOUT_MS', () => {
+    process.env['SHUTDOWN_TIMEOUT_MS'] = 'not-a-number';
+    expect(() => loadConfig()).toThrow(/Invalid SHUTDOWN_TIMEOUT_MS/);
+  });
 });

@@ -4,6 +4,7 @@ import { authOriginFromUrl } from '@haverstack/core/wire';
 const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB
 const DEFAULT_MAX_CONTENT_BYTES = 1 * 1024 * 1024; // 1 MB
 const DEFAULT_QUERY_TIMEOUT_MS = 10_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 const DEFAULT_QUERY_WORKER_POOL_SIZE = 2;
 // Each worker is a thread plus its own SQLite connection to the same file,
 // so an accidental extra zero here is expensive in a way the other limits
@@ -38,6 +39,7 @@ export type Config = {
   queryTimeoutMs: number;
   queryWorkerPoolSize: number;
   queryQueueLimit: number;
+  shutdownTimeoutMs: number;
 };
 
 export function loadConfig(): Config {
@@ -121,6 +123,18 @@ export function loadConfig(): Config {
     );
   }
 
+  // Bounds how long shutdown() waits for in-flight/keep-alive connections to
+  // drain on server.close() before forcing them closed with
+  // closeAllConnections() and finishing the flush/close sequence anyway. See
+  // #49.
+  const shutdownTimeoutMs = parseInt(
+    optional('SHUTDOWN_TIMEOUT_MS', String(DEFAULT_SHUTDOWN_TIMEOUT_MS)),
+    10,
+  );
+  if (isNaN(shutdownTimeoutMs) || shutdownTimeoutMs < 1) {
+    throw new Error(`Invalid SHUTDOWN_TIMEOUT_MS: ${process.env['SHUTDOWN_TIMEOUT_MS']}`);
+  }
+
   // Required, not auto-detected: the DID challenge-response handshake signs
   // a payload scoped to this server's own public origin, and that origin
   // must come from configuration rather than a client-controlled request
@@ -155,5 +169,6 @@ export function loadConfig(): Config {
     queryTimeoutMs,
     queryWorkerPoolSize,
     queryQueueLimit,
+    shutdownTimeoutMs,
   };
 }
