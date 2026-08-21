@@ -11,6 +11,7 @@ import { createApp } from '../src/app.js';
 import type { Config } from '../src/config.js';
 import type { StackContext } from '../src/stack.js';
 import { AuthNonceStore, defaultNonceStorePath } from '../src/lib/nonceStore.js';
+import { QueryWorkerPool } from '../src/lib/queryWorker/pool.js';
 import type { Hono } from 'hono';
 import type { AppEnv } from '../src/app.js';
 
@@ -56,7 +57,12 @@ export async function createTestContext(
   const stack = await Stack.create(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(dbPath));
-  return { adapter, stack, tokens, nonces };
+  const queryWorker = new QueryWorkerPool(
+    { dbPath, ...(opts.timezone !== undefined && { timezone: opts.timezone }) },
+    1,
+    logger,
+  );
+  return { adapter, stack, tokens, nonces, queryWorker };
 }
 
 export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {
@@ -73,6 +79,8 @@ export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: '
     authOrigin: authOriginFromUrl(TEST_BASE_URL),
     maxAttachmentBytes: 50 * 1024 * 1024,
     maxContentBytes: 1 * 1024 * 1024,
+    queryTimeoutMs: 10_000,
+    queryWorkerPoolSize: 1,
   };
 }
 
@@ -90,6 +98,7 @@ export async function buildTestApp(opts: TestContextOpts = { timezone: 'UTC' }):
   const app = createApp(ctx, config, logger);
 
   const cleanup = async () => {
+    await ctx.queryWorker.close();
     await ctx.stack.close();
     await ctx.tokens.close();
     ctx.nonces.close();

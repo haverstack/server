@@ -148,6 +148,18 @@ A reverse proxy sitting in front, however, often has its own request-body limit,
 
 ---
 
+## Bounding query cost
+
+`GET /records` and `POST /records/query` can run a full-text or content-field search over the whole store. The sanitizers bound a `search` string's _complexity_ (wildcards stripped, `NEAR` neutralized, parenthesis nesting capped), but not its _cost_ — a syntactically modest query over a large index can still be slow, and `node:sqlite` runs synchronously with no way to cancel a query from inside the call once it's started (there is no `sqlite3_interrupt` exposed).
+
+The server addresses this the way `docs/spec/wire-format.md § Bounding query cost` prescribes: both query routes run on a small pool of worker threads (`QUERY_WORKER_POOL_SIZE`, default 2) rather than the request thread, each holding its own connection to the same `stack.db` — legal because worker threads share the process's PID with the storage-ownership lock, and because SQLite's WAL mode is built for multiple connections against one file. A query still running past `QUERY_TIMEOUT_MS` (default 10s) is abandoned: the request gets `503` (code `timeout`, meaning "retryable — narrow the query or try again," never `bad_request`), and the worker it was running on is terminated and replaced so a stuck query costs one pool slot rather than blocking every other request. Terminating mid-query is safe — SQLite's WAL journaling means an uncommitted transaction is simply gone once the file is reopened.
+
+Every other route (`GET /records/:id`, `POST /records`, `PATCH /records/:id`, etc.) still runs on the main request thread — those are index-bound lookups and writes, not full-index scans, so they aren't the unbounded-cost case this section covers.
+
+Raise `QUERY_TIMEOUT_MS` if your store is large enough that legitimate searches routinely take longer than the default, and raise `QUERY_WORKER_POOL_SIZE` if concurrent searches should run in parallel rather than queue behind each other — each pool worker is a full second (or third, ...) connection to the database, so size it against expected concurrent search load, not total request volume.
+
+---
+
 ## Single-writer topology
 
 The `data` volume (`DB_PATH`'s directory) holds more than the database file itself: `stack.db-wal` and `stack.db-shm` are SQLite's write-ahead-log sidecar files, present whenever the process has the database open, and `stack.db.lock` is a storage-ownership lock recording the PID of the process that opened it. Back up or copy the whole directory, not just `stack.db` — a `stack.db` file copied without its `-wal` sidecar can be missing recently-committed data.

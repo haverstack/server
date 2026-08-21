@@ -26,6 +26,7 @@ async function main() {
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutting down');
     server.close(async () => {
+      await ctx.queryWorker.close();
       await ctx.stack.flush();
       await ctx.stack.close();
       await ctx.tokens.close();
