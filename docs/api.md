@@ -49,7 +49,11 @@ POST /auth/token       { "did": "...", "nonce": "...", "signature": "..." }
 
 `POST /auth/token` never delegates: `principalId` and `subjectId` in the response are always equal, since proving key possession proves the principal and says nothing about whom that key may act for. A delegated token is only ever asserted by the owner out of band, via `POST /tokens`' `onBehalfOf`.
 
-A nonce is single-use, bound to the DID it was issued for, and expires per the `expiresAt` `POST /auth/challenge` returns (5 minutes). Redeeming it — successfully or not — spends it; a second redemption of the same nonce always fails.
+A nonce is single-use, bound to the DID it was issued for, and expires per the `expiresAt` `POST /auth/challenge` returns (5 minutes). Redeeming it — successfully or not — spends it; a second redemption of the same nonce always fails. A redemption naming a _different_ DID than the nonce was issued to spends nothing, so a third party who learns a nonce cannot burn it out from under its holder.
+
+Both endpoints require a `did:key`. Other DID methods are well-formed DIDs but are refused with `invalid_did`: verification decodes the Ed25519 public key straight out of the DID, so no other method could produce a signature this server can check.
+
+Handshake-issued tokens carry the label `did-challenge` and a 7-day expiry. The label is what makes them distinguishable in `GET /tokens` from tokens the owner minted deliberately — the two are otherwise identical rows. Expired tokens are reclaimed periodically rather than accumulating.
 
 ### Auth errors
 
@@ -57,7 +61,7 @@ Auth failures use their own vocabulary, deliberately outside the `WireErrorCode`
 
 | Code                | Status | Meaning                                               | Retryable |
 | ------------------- | ------ | ----------------------------------------------------- | --------- |
-| `invalid_did`       | 400    | Not a well-formed DID                                 | No        |
+| `invalid_did`       | 400    | Not a well-formed `did:key`                           | No        |
 | `unknown_nonce`     | 401    | Never issued, already spent, or issued to another DID | Yes       |
 | `expired_nonce`     | 401    | Past `expiresAt`                                      | Yes       |
 | `invalid_signature` | 401    | Does not verify against the payload                   | No        |
@@ -150,7 +154,9 @@ Records are private by default (readable only by the stack owner). The `permissi
 { "access": "group",  "groupId":  "...", "read": true, "write": true  }
 ```
 
-Non-owner entities authenticate with tokens issued via `POST /tokens` and are subject to both record-level permissions and create-grant checks on write.
+Non-owner entities authenticate either via the DID challenge-response handshake above or with tokens issued by the owner via `POST /tokens`, and are subject to both record-level permissions and create-grant checks on write.
+
+A type-level grant names a specific entity (`grant(<did>, ...)`) or no entity at all. **A grant with no grantee is a grant to the public.** It resolves for any authenticated entity, and since `POST /auth/challenge` lets anyone authenticate by generating a keypair, "any authenticated entity" means anyone who can reach the server — there is no vouching step in between. Grant a DID by name unless you genuinely mean everyone. (Note the asymmetry with record-level permissions above, which have a `group` tier between `entity` and `public`; type-level grants have no group tier, so a set of entities is expressed as one named grant each.)
 
 ### Principal and subject
 

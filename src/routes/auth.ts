@@ -11,9 +11,11 @@ import type {
   WireAuthErrorCode,
 } from '@haverstack/wire-types';
 import type { Context } from 'hono';
+import type { Logger } from 'pino';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { readJson } from '../lib/json.js';
+import { createExpiredTokenSweeper } from '../lib/tokenSweep.js';
 
 // The handshake never issues a delegated token — proving key possession
 // proves the principal and nothing about whom it may act for (see #54's
@@ -22,6 +24,39 @@ import { readJson } from '../lib/json.js';
 // the owner's POST /tokens (which leaves expiry to the owner's choice),
 // self-service handshake tokens get a bounded lifetime by default.
 const AUTH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Stamped on every handshake-issued token. GET /tokens is the owner's only
+// view of what exists, and without this a self-service token is
+// indistinguishable from one the owner minted deliberately — so "revoke
+// everything the handshake handed out" would be an unanswerable question.
+const AUTH_TOKEN_LABEL = 'did-challenge';
+
+// An Ed25519 did:key is "did:key:z" followed by base58btc over a 34-byte
+// payload (2-byte multicodec prefix + 32-byte key) — 46-48 characters, so
+// ~57 in total. 64 leaves headroom without leaving the field open-ended.
+const MAX_DID_KEY_LENGTH = 64;
+
+/**
+ * A cheap did:key gate for the two unauthenticated handshake routes.
+ *
+ * Not full validation — `verifyDidSignature()` still decodes the key and
+ * settles whether the DID is real, and that is deliberately left where it
+ * is. This answers a narrower question that has to be answered *before*
+ * anything is stored: is this string even a candidate?
+ *
+ * `isValidDid()` alone is the generic W3C grammar, any method and any
+ * length. Both are wrong here. Core can only verify did:key — it decodes
+ * the public key straight out of the DID — so a did:web or did:plc could
+ * never redeem the nonce a challenge would issue, and the unbounded
+ * method-specific-id means a body-limit's worth of "DID" would otherwise
+ * be written to a nonce row by an unauthenticated caller.
+ *
+ * Core has `isValidDidKey()` for exactly this, but does not export it from
+ * `@haverstack/core/did`; if that is ever exported, delete this.
+ */
+function isDidKeyShaped(did: string): boolean {
+  return did.length <= MAX_DID_KEY_LENGTH && did.startsWith('did:key:z') && isValidDid(did);
+}
 
 /**
  * `{ error: { code, message } }` for the four handshake-specific codes,
@@ -33,15 +68,16 @@ function authError(c: Context<AppEnv>, code: WireAuthErrorCode, message: string)
   return c.json({ error: { code, message } }, WIRE_AUTH_ERROR_STATUS[code] as ContentfulStatusCode);
 }
 
-export function authRoutes(ctx: StackContext, authOrigin: string): Hono<AppEnv> {
+export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const sweepExpiredTokens = createExpiredTokenSweeper(ctx.tokens, logger);
 
   // POST /auth/challenge — issues a nonce bound to the requested DID.
   // Unauthenticated: this is how a token is earned in the first place.
   app.post('/challenge', async (c) => {
     const body = await readJson<Partial<AuthChallengeRequest>>(c);
-    if (typeof body.did !== 'string' || !isValidDid(body.did)) {
-      return authError(c, 'invalid_did', 'Not a valid DID');
+    if (typeof body.did !== 'string' || !isDidKeyShaped(body.did)) {
+      return authError(c, 'invalid_did', 'Not a valid did:key');
     }
     const { nonce, expiresAt } = ctx.nonces.issue(body.did);
     const response: AuthChallengeResponse = { nonce, expiresAt: expiresAt.toISOString() };
@@ -52,8 +88,8 @@ export function authRoutes(ctx: StackContext, authOrigin: string): Hono<AppEnv> 
   // Unauthenticated for the same reason.
   app.post('/token', async (c) => {
     const body = await readJson<Partial<AuthTokenRequest>>(c);
-    if (typeof body.did !== 'string' || !isValidDid(body.did)) {
-      return authError(c, 'invalid_did', 'Not a valid DID');
+    if (typeof body.did !== 'string' || !isDidKeyShaped(body.did)) {
+      return authError(c, 'invalid_did', 'Not a valid did:key');
     }
     // Checked ahead of the signature so a nonce issued to a different DID
     // is refused as unknown_nonce even when the caller's own signature over
@@ -91,19 +127,40 @@ export function authRoutes(ctx: StackContext, authOrigin: string): Hono<AppEnv> 
     ).catch(() => false);
     if (!verified) return authError(c, 'invalid_signature', 'Signature does not verify');
 
+    // Reclaim expired rows before adding one. Throttled internally, so this
+    // is a no-op on all but the first handshake of each interval.
+    await sweepExpiredTokens();
+
     // Undelegated by construction: principalId and subjectId are both the
     // proven DID. Never let a client name its own subject.
     const expiresAt = new Date(Date.now() + AUTH_TOKEN_TTL_MS);
-    const { id, token } = await ctx.tokens.createToken(body.did, { expiresAt });
-    // Read the row back rather than trusting the value just computed — the
-    // store is the source of truth, same reasoning as POST /tokens.
-    const stored = (await ctx.tokens.listTokens()).find((t) => t.id === id)!;
+    const { token } = await ctx.tokens.createToken(body.did, {
+      expiresAt,
+      label: AUTH_TOKEN_LABEL,
+    });
+
+    // expiresAt is reported from the value just written, not read back via
+    // listTokens(): that read is an unpaginated scan of every token ever
+    // issued, which on an unauthenticated route makes each handshake cost
+    // more than the last. The store persists this Date unchanged (its
+    // schema holds epoch millis), so a read-back could only ever return
+    // what is already here. POST /tokens still reads back — it needs
+    // createdAt and label, which it does not compute, and it is owner-only.
     const response: AuthTokenResponse = {
       token,
-      expiresAt: stored.expiresAt?.toISOString(),
+      expiresAt: expiresAt.toISOString(),
       principalId: body.did,
       subjectId: body.did,
     };
+
+    // The one place a bearer token comes into existence without the owner
+    // doing anything, so it is the one place a log line is the only record
+    // that it happened. errorMiddleware already logs denied-but-verified
+    // requests; this is its counterpart on the granting side.
+    logger.info(
+      { requestId: c.get('requestId'), did: body.did, expiresAt: expiresAt.toISOString() },
+      'Issued a token via the DID challenge-response handshake',
+    );
     return c.json(response);
   });
 

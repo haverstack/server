@@ -170,6 +170,17 @@ The default is empty (no cross-origin access allowed). Set it to `*` only for fu
 
 Because the stack is designed to be accessed by many different kinds of apps, you may legitimately need a broad allowlist. The key risk to avoid is combining a wildcard origin with endpoints that accept bearer tokens — browsers will not send `Authorization` headers with credentialed cross-origin requests unless the origin is explicitly listed, so a wildcard does not grant unintended authenticated access from arbitrary origins.
 
+## The DID handshake is open by design
+
+`POST /auth/challenge` and `POST /auth/token` are unauthenticated: anyone who can reach the server can generate an Ed25519 keypair and obtain a bearer token for the `did:key` it derives. That is the point — the handshake proves _which_ DID is calling, so the owner can grant a DID by name ahead of time instead of handing out a shared secret out of band. It authorizes nothing on its own.
+
+Two consequences worth being deliberate about:
+
+- **A grant with no grantee is a grant to the public.** `grant(null, ...)` resolves for any authenticated entity, and with the handshake open that is anyone at all. See [Access Control](./api.md#access-control). Named grants (`grant(<did>, ...)`) are unaffected — those are the vouching mechanism.
+- **Rate limiting matters more than it used to.** A stranger's handshake writes a token row with a 7-day expiry. Expired rows are reclaimed, but live ones are bounded only by issuance rate × TTL, so the proxy-level rate limit configured above is what actually caps the table. The reverse-proxy examples in this guide already cover `/auth/*`; if you write your own, do not exempt it.
+
+Read access is unaffected either way: `GET /records`, `GET /records/:id` and `GET /types` already serve anonymous requests, subject to record-level permissions, and a token changes nothing about what they return.
+
 ## Public endpoints
 
 `GET /.well-known/stack` is intentionally public and unauthenticated. It exposes the owner entity ID, configured timezone, and capability list. This information is required by `@haverstack/adapter-api` to bootstrap a client connection. If your stack is private, ensure the endpoint is only reachable by intended clients (e.g. by network policy) rather than by auth-gating it.

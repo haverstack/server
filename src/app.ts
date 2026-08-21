@@ -75,7 +75,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
   app.route('/entity', entityRoutes(ctx));
   app.route('/tokens', tokenRoutes(ctx));
-  app.route('/auth', authRoutes(ctx, config.authOrigin));
+  app.route('/auth', authRoutes(ctx, config.authOrigin, logger));
 
   app.notFound((c) => wireError(c, 404, 'not_found', 'Not found'));
 

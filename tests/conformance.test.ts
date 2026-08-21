@@ -934,7 +934,7 @@ describe('auth handshake fixtures', () => {
   // that exact value directly into the nonce store rather than going
   // through the challenge endpoint.
   function seedFixtureNonce(ttlMs = 5 * 60 * 1000) {
-    t.ctx.nonces.seed(AUTH_FIXTURE_NONCE, AUTH_FIXTURE_DID, new Date(Date.now() + ttlMs));
+    t.ctx.nonces.seedForTesting(AUTH_FIXTURE_NONCE, AUTH_FIXTURE_DID, new Date(Date.now() + ttlMs));
   }
 
   const handled = new Set<string>();
