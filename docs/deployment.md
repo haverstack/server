@@ -164,7 +164,7 @@ Every other route (`GET /records/:id`, `POST /records`, `PATCH /records/:id`, et
 
 Raise `QUERY_TIMEOUT_MS` if your store is large enough that legitimate searches routinely take longer than the default, and raise `QUERY_WORKER_POOL_SIZE` if concurrent searches should run in parallel rather than queue behind each other — each pool worker is a full second (or third, ...) connection to the database, so size it against expected concurrent search load, not total request volume. Raise `QUERY_QUEUE_LIMIT` only if you would rather hold bursts than shed them; lower it to fail fast under overload.
 
-Note that `GET /records` is reachable without authentication, so anonymous callers can occupy pool workers. The deadline caps what any one of them can hold (a slot for at most `QUERY_TIMEOUT_MS`), but a public deployment expecting hostile traffic should rate-limit the query routes at the reverse proxy as well, alongside the other exposure considerations in [Public endpoints](#public-endpoints).
+Note that `GET /records` and `POST /records/query` are both reachable without authentication, so anonymous callers can occupy pool workers. The deadline caps what any one of them can hold (a slot for at most `QUERY_TIMEOUT_MS`), but a public deployment expecting hostile traffic should rate-limit the query routes at the reverse proxy as well, alongside the other exposure considerations in [Public endpoints](#public-endpoints).
 
 ---
 
@@ -199,7 +199,7 @@ Two consequences worth being deliberate about:
 - **A grant with no grantee is a grant to the public.** `grant(null, ...)` resolves for any authenticated entity, and with the handshake open that is anyone at all. See [Access Control](./api.md#access-control). Named grants (`grant(<did>, ...)`) are unaffected — those are the vouching mechanism.
 - **Rate limiting matters more than it used to.** A stranger's handshake writes a token row with a 7-day expiry. Expired rows are reclaimed, but live ones are bounded only by issuance rate × TTL, so the proxy-level rate limit configured above is what actually caps the table. The reverse-proxy examples in this guide already cover `/auth/*`; if you write your own, do not exempt it.
 
-Read access is unaffected either way: `GET /records`, `GET /records/:id` and `GET /types` already serve anonymous requests, subject to record-level permissions, and a token changes nothing about what they return.
+Read access is unaffected either way: `GET /records`, `POST /records/query`, `GET /records/:id` and `GET /types` already serve anonymous requests, subject to record-level permissions, and a token changes nothing about what they return.
 
 ## Public endpoints
 

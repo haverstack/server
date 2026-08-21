@@ -39,9 +39,12 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return auth ? stack.forSession(auth) : stack.asEntity(null);
   }
 
-  // POST /records/query — full query with content-field filters
+  // POST /records/query — full query with content-field filters. Optional
+  // auth, same as GET /records: it's a superset of the same query surface,
+  // so an anonymous caller gets the same public-record subset either way
+  // (docs/api.md lists both as Optional). See #49.
   // Registered before /:id patterns to avoid param capture on the literal "query" segment.
-  app.post('/query', requireAuth(), async (c) => {
+  app.post('/query', async (c) => {
     const auth = c.get('auth');
     const query = parseQueryBody(await readJson(c));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);

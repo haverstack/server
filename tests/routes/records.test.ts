@@ -262,6 +262,23 @@ describe('Records', () => {
       expect(d.records).toHaveLength(1);
       expect(d.total).toBeNull();
     });
+
+    it('anonymous query returns only public records', async () => {
+      await seedRecord(t.ctx, { body: 'private' });
+      await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'public' },
+        { permissions: [{ access: 'public' }] },
+      );
+      const { status, data } = await req(t.app, 'POST', '/records/query', {
+        body: { filter: { typeId: NOTE_TYPE_ID } },
+      });
+      expect(status).toBe(200);
+      const d = data as { records: Array<{ content: { body: string } }>; total: null };
+      expect(d.total).toBeNull();
+      expect(d.records).toHaveLength(1);
+      expect(d.records[0].content.body).toBe('public');
+    });
   });
 
   describe('PATCH /records/:id', () => {

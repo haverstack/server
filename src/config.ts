@@ -4,6 +4,7 @@ import { authOriginFromUrl } from '@haverstack/core/wire';
 const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB
 const DEFAULT_MAX_CONTENT_BYTES = 1 * 1024 * 1024; // 1 MB
 const DEFAULT_QUERY_TIMEOUT_MS = 10_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 const DEFAULT_QUERY_WORKER_POOL_SIZE = 2;
 // Each worker is a thread plus its own SQLite connection to the same file,
 // so an accidental extra zero here is expensive in a way the other limits
@@ -39,6 +40,7 @@ export type Config = {
   queryWorkerPoolSize: number;
   queryQueueLimit: number;
   seedCommonsTypes: boolean;
+  shutdownTimeoutMs: number;
 };
 
 export function loadConfig(): Config {
@@ -122,12 +124,18 @@ export function loadConfig(): Config {
     );
   }
 
-  // Required, not auto-detected: the DID challenge-response handshake signs
-  // a payload scoped to this server's own public origin, and that origin
-  // must come from configuration rather than a client-controlled request
-  // header (Host, X-Forwarded-Host) — deriving it from a header would let a
-  // client choose which origin it signs for, reopening the relay attack the
-  // binding exists to prevent. See docs/spec/wire-format.md § Authentication.
+  // Bounds how long shutdown() waits for in-flight/keep-alive connections to
+  // drain on server.close() before forcing them closed with
+  // closeAllConnections() and finishing the flush/close sequence anyway. See
+  // #49.
+  const shutdownTimeoutMs = parseInt(
+    optional('SHUTDOWN_TIMEOUT_MS', String(DEFAULT_SHUTDOWN_TIMEOUT_MS)),
+    10,
+  );
+  if (isNaN(shutdownTimeoutMs) || shutdownTimeoutMs < 1) {
+    throw new Error(`Invalid SHUTDOWN_TIMEOUT_MS: ${process.env['SHUTDOWN_TIMEOUT_MS']}`);
+  }
+
   // Opt-in: @haverstack/commons is Draft status (docs/commons/README.md in
   // haverstack/core reserves the right to change definitions in place until
   // there's an install base), and registering types is not free — they show
@@ -136,6 +144,12 @@ export function loadConfig(): Config {
   // on for every deployer.
   const seedCommonsTypes = optional('SEED_COMMONS_TYPES', 'false') === 'true';
 
+  // Required, not auto-detected: the DID challenge-response handshake signs
+  // a payload scoped to this server's own public origin, and that origin
+  // must come from configuration rather than a client-controlled request
+  // header (Host, X-Forwarded-Host) — deriving it from a header would let a
+  // client choose which origin it signs for, reopening the relay attack the
+  // binding exists to prevent. See docs/spec/wire-format.md § Authentication.
   const baseUrl = required('BASE_URL');
   let authOrigin: string;
   try {
@@ -165,5 +179,6 @@ export function loadConfig(): Config {
     queryWorkerPoolSize,
     queryQueueLimit,
     seedCommonsTypes,
+    shutdownTimeoutMs,
   };
 }
