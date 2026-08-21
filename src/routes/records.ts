@@ -37,15 +37,8 @@ function parseIfMatch(header: string | undefined): number | undefined {
 }
 
 const POSITIVE_INTEGER = /^\d+$/;
-const SORT_FIELDS: ReadonlySet<QuerySort['field']> = new Set([
-  'createdAt',
-  'updatedAt',
-  'version',
-]);
-const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set([
-  'asc',
-  'desc',
-]);
+const SORT_FIELDS: ReadonlySet<QuerySort['field']> = new Set(['createdAt', 'updatedAt', 'version']);
+const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set(['asc', 'desc']);
 
 /** Strict positive-integer parse for URL path/query params — rejects "1abc", "2.7", "-5", etc. */
 function parsePositiveInt(raw: string, label: string): number {
