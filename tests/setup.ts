@@ -83,6 +83,7 @@ export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: '
     queryTimeoutMs: 10_000,
     queryWorkerPoolSize: 1,
     queryQueueLimit: 64,
+    seedCommonsTypes: false,
     shutdownTimeoutMs: 10_000,
   };
 }

@@ -39,6 +39,7 @@ export type Config = {
   queryTimeoutMs: number;
   queryWorkerPoolSize: number;
   queryQueueLimit: number;
+  seedCommonsTypes: boolean;
   shutdownTimeoutMs: number;
 };
 
@@ -135,6 +136,14 @@ export function loadConfig(): Config {
     throw new Error(`Invalid SHUTDOWN_TIMEOUT_MS: ${process.env['SHUTDOWN_TIMEOUT_MS']}`);
   }
 
+  // Opt-in: @haverstack/commons is Draft status (docs/commons/README.md in
+  // haverstack/core reserves the right to change definitions in place until
+  // there's an install base), and registering types is not free — they show
+  // up in GET /types and every app's type cache. Off by default keeps that
+  // an explicit choice rather than something this reference server defaults
+  // on for every deployer.
+  const seedCommonsTypes = optional('SEED_COMMONS_TYPES', 'false') === 'true';
+
   // Required, not auto-detected: the DID challenge-response handshake signs
   // a payload scoped to this server's own public origin, and that origin
   // must come from configuration rather than a client-controlled request
@@ -169,6 +178,7 @@ export function loadConfig(): Config {
     queryTimeoutMs,
     queryWorkerPoolSize,
     queryQueueLimit,
+    seedCommonsTypes,
     shutdownTimeoutMs,
   };
 }
