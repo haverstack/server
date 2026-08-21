@@ -294,9 +294,9 @@ describe('handshake input hardening', () => {
       .prepare('SELECT COUNT(*) AS n FROM nonces')
       .get();
     expect(rows.n).toBe(0);
-    // Tight timeout on purpose: the bound exists because the did:key check
-    // costs O(n²) in the length, so losing it shows up as a hang, and a
-    // guard that takes minutes to fail is one nobody reads.
+    // Tight timeout on purpose: refusing this rests on core screening the
+    // length before it decodes, and a lost screen surfaces as a hang rather
+    // than a wrong answer.
   }, 5_000);
 
   // `null` is valid JSON but not a readable body: indexing a field off it

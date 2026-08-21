@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@haverstack/adapter-local": "^0.10.0",
-    "@haverstack/core": "^0.11.0",
+    "@haverstack/core": "^0.11.1",
     "@haverstack/wire-types": "^0.9.0",
     "@hono/node-server": "^2.1.1",
     "hono": "^4.13.3",

@@ -31,15 +31,6 @@ const AUTH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // everything the handshake handed out" would be an unanswerable question.
 const AUTH_TOKEN_LABEL = 'did-challenge';
 
-// Bounded before isValidDidKey() sees it: that check's base58 decode
-// accumulates a BigInt and so costs O(n²) in a length an unauthenticated
-// caller chooses. A real did:key is ~57 characters.
-const MAX_DID_KEY_LENGTH = 64;
-
-function isAcceptableDidKey(did: unknown): did is string {
-  return typeof did === 'string' && did.length <= MAX_DID_KEY_LENGTH && isValidDidKey(did);
-}
-
 /**
  * `{ error: { code, message } }` for the four handshake-specific codes,
  * deliberately outside WireErrorCode — no Stack operation has begun at
@@ -58,7 +49,7 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
   // Unauthenticated: this is how a token is earned in the first place.
   app.post('/challenge', async (c) => {
     const body = await readJson<Partial<AuthChallengeRequest>>(c);
-    if (!isAcceptableDidKey(body.did)) {
+    if (typeof body.did !== 'string' || !isValidDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
     }
     const { nonce, expiresAt } = ctx.nonces.issue(body.did);
@@ -70,7 +61,7 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
   // Unauthenticated for the same reason.
   app.post('/token', async (c) => {
     const body = await readJson<Partial<AuthTokenRequest>>(c);
-    if (!isAcceptableDidKey(body.did)) {
+    if (typeof body.did !== 'string' || !isValidDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
     }
     // Checked ahead of the signature so a nonce issued to a different DID

@@ -12,8 +12,8 @@ importers:
         specifier: ^0.10.0
         version: 0.10.0
       '@haverstack/core':
-        specifier: ^0.11.0
-        version: 0.11.0
+        specifier: ^0.11.1
+        version: 0.11.1
       '@haverstack/wire-types':
         specifier: ^0.9.0
         version: 0.9.0
@@ -271,8 +271,8 @@ packages:
   '@haverstack/conformance-fixtures@0.3.0':
     resolution: {integrity: sha512-CVuLTol0+gaN2xJRvcErbyHWvUXO4PR3+ViGIxQVu6tHthMWMv+XSiVcksdn10Fbir+fFmjYqMLxeCcr4c5fqQ==}
 
-  '@haverstack/core@0.11.0':
-    resolution: {integrity: sha512-ZhI268noYV0wB0WnXNrw0P1oxWMyN9WbgHgucSNF8sOzBbWGAD3dtETwhoNwDyohgrF9+NnOrFQDc9awVvMQ4w==}
+  '@haverstack/core@0.11.1':
+    resolution: {integrity: sha512-kNF8m8c/gQvjGqFa6WNNfOZzEdw+FRaya/olIK9u+cGG9Pzp62ynvHX+pCwYB5Q4Sg05ohmkVvidw/IKanssVQ==}
 
   '@haverstack/record-adapter-sqlite@0.3.0':
     resolution: {integrity: sha512-PCIxC8qy/rkKMsq815KGhR0APy8NBu3TCFgXugpPmQOiucUjr6FWLSnvYjhIbWGsuTAYUCMyvxevRN+SsUIZ3w==}
@@ -1258,26 +1258,26 @@ snapshots:
   '@haverstack/adapter-local@0.10.0':
     dependencies:
       '@haverstack/blob-adapter-disk': 0.9.0
-      '@haverstack/core': 0.11.0
+      '@haverstack/core': 0.11.1
       '@haverstack/record-adapter-sqlite': 0.3.0
 
   '@haverstack/blob-adapter-disk@0.9.0':
     dependencies:
-      '@haverstack/core': 0.11.0
+      '@haverstack/core': 0.11.1
 
   '@haverstack/conformance-fixtures@0.3.0':
     dependencies:
       '@haverstack/wire-types': 0.9.0
 
-  '@haverstack/core@0.11.0': {}
+  '@haverstack/core@0.11.1': {}
 
   '@haverstack/record-adapter-sqlite@0.3.0':
     dependencies:
-      '@haverstack/core': 0.11.0
+      '@haverstack/core': 0.11.1
 
   '@haverstack/wire-types@0.9.0':
     dependencies:
-      '@haverstack/core': 0.11.0
+      '@haverstack/core': 0.11.1
 
   '@hono/node-server@2.1.1(hono@4.13.3)':
     dependencies:
