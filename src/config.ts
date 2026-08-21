@@ -38,6 +38,7 @@ export type Config = {
   queryTimeoutMs: number;
   queryWorkerPoolSize: number;
   queryQueueLimit: number;
+  seedCommonsTypes: boolean;
 };
 
 export function loadConfig(): Config {
@@ -127,6 +128,14 @@ export function loadConfig(): Config {
   // header (Host, X-Forwarded-Host) — deriving it from a header would let a
   // client choose which origin it signs for, reopening the relay attack the
   // binding exists to prevent. See docs/spec/wire-format.md § Authentication.
+  // Opt-in: @haverstack/commons is Draft status (docs/commons/README.md in
+  // haverstack/core reserves the right to change definitions in place until
+  // there's an install base), and registering types is not free — they show
+  // up in GET /types and every app's type cache. Off by default keeps that
+  // an explicit choice rather than something this reference server defaults
+  // on for every deployer.
+  const seedCommonsTypes = optional('SEED_COMMONS_TYPES', 'false') === 'true';
+
   const baseUrl = required('BASE_URL');
   let authOrigin: string;
   try {
@@ -155,5 +164,6 @@ export function loadConfig(): Config {
     queryTimeoutMs,
     queryWorkerPoolSize,
     queryQueueLimit,
+    seedCommonsTypes,
   };
 }

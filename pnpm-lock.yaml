@@ -11,6 +11,9 @@ importers:
       '@haverstack/adapter-local':
         specifier: ^0.10.0
         version: 0.10.0
+      '@haverstack/commons':
+        specifier: ^0.3.0
+        version: 0.3.0
       '@haverstack/core':
         specifier: ^0.11.1
         version: 0.11.1
@@ -267,6 +270,9 @@ packages:
 
   '@haverstack/blob-adapter-disk@0.9.0':
     resolution: {integrity: sha512-/TLyuqzG6yfuAfSRGoMq0FxTryAE2DzYKId6pc4eqggYTeru6huHxHjmOwterVy2mt/CInpBmhF5W3j2pBMEdw==}
+
+  '@haverstack/commons@0.3.0':
+    resolution: {integrity: sha512-tqjbJJw9DvfgSxMWANrPXTLj22Skqq1SU+P8vFVJgtWqJvZLSJjpoPamyd7qacDnj4eYtv3ejpEMDJFv2dI3xg==}
 
   '@haverstack/conformance-fixtures@0.3.0':
     resolution: {integrity: sha512-CVuLTol0+gaN2xJRvcErbyHWvUXO4PR3+ViGIxQVu6tHthMWMv+XSiVcksdn10Fbir+fFmjYqMLxeCcr4c5fqQ==}
@@ -1262,6 +1268,10 @@ snapshots:
       '@haverstack/record-adapter-sqlite': 0.3.0
 
   '@haverstack/blob-adapter-disk@0.9.0':
+    dependencies:
+      '@haverstack/core': 0.11.1
+
+  '@haverstack/commons@0.3.0':
     dependencies:
       '@haverstack/core': 0.11.1
 

@@ -204,3 +204,9 @@ Read access is unaffected either way: `GET /records`, `GET /records/:id` and `GE
 ## Public endpoints
 
 `GET /.well-known/stack` is intentionally public and unauthenticated. It exposes the owner entity ID, configured timezone, and capability list. This information is required by `@haverstack/adapter-api` to bootstrap a client connection. If your stack is private, ensure the endpoint is only reachable by intended clients (e.g. by network policy) rather than by auth-gating it.
+
+## Schema Commons seeding
+
+`SEED_COMMONS_TYPES=true` registers the [Schema Commons](https://github.com/haverstack/core/blob/main/docs/commons/README.md) types (`org.haverstack/note`, `bookmark`, `task`, `contact`, `article`, `place`, `page`, `photo`) from `@haverstack/commons` on every boot, via `defineType()`, which is idempotent by construction — safe to leave on permanently, and safe to flip on for an already-running stack.
+
+It defaults to **off**. Registering a type is not free: it shows up in `GET /types` and gets cached by every app that talks to this stack, whether or not that app uses it. More importantly, `@haverstack/commons` is Draft status — the [governance doc](https://github.com/haverstack/core/blob/main/docs/commons/README.md) explicitly reserves the right to change a Draft type's definition in place, without a version bump, until there's an install base to break. Opting in is the honest posture for a package with that status; turning it on is a statement that you want this reference server to demonstrate commons interop, not a default every deployer should inherit silently.

@@ -108,6 +108,64 @@ describe('initStack bootstrap', () => {
     mismatched.nonces.close();
   });
 
+  it('does not register commons types when SEED_COMMONS_TYPES is unset', async () => {
+    dbPath = tempDbPath();
+    const config = testConfig(dbPath);
+
+    const ctx = await initStack(config, logger);
+    const types = await ctx.adapter.listTypes();
+    expect(types.some((t) => t.id.startsWith('org.haverstack/'))).toBe(false);
+    await ctx.queryWorker.close();
+    await ctx.stack.close();
+    await ctx.tokens.close();
+    ctx.nonces.close();
+  });
+
+  it('registers all eight commons types when SEED_COMMONS_TYPES is set', async () => {
+    dbPath = tempDbPath();
+    const config = { ...testConfig(dbPath), seedCommonsTypes: true };
+
+    const ctx = await initStack(config, logger);
+    const types = await ctx.adapter.listTypes();
+    const commonsIds = types.filter((t) => t.id.startsWith('org.haverstack/')).map((t) => t.id);
+    expect(commonsIds.sort()).toEqual(
+      [
+        'org.haverstack/article@1',
+        'org.haverstack/bookmark@1',
+        'org.haverstack/contact@1',
+        'org.haverstack/note@1',
+        'org.haverstack/page@1',
+        'org.haverstack/photo@1',
+        'org.haverstack/place@1',
+        'org.haverstack/task@1',
+      ].sort(),
+    );
+    await ctx.queryWorker.close();
+    await ctx.stack.close();
+    await ctx.tokens.close();
+    ctx.nonces.close();
+  });
+
+  it('re-seeding commons types on a later boot causes no createdAt churn', async () => {
+    dbPath = tempDbPath();
+    const config = { ...testConfig(dbPath), seedCommonsTypes: true };
+
+    const first = await initStack(config, logger);
+    const firstType = await first.adapter.getType('org.haverstack/note@1');
+    await first.queryWorker.close();
+    await first.stack.close();
+    await first.tokens.close();
+    first.nonces.close();
+
+    const second = await initStack({ ...config, entityId: null }, logger);
+    const secondType = await second.adapter.getType('org.haverstack/note@1');
+    expect(secondType?.createdAt).toEqual(firstType?.createdAt);
+    await second.queryWorker.close();
+    await second.stack.close();
+    await second.tokens.close();
+    second.nonces.close();
+  });
+
   it('creates the owner _entity record when OWNER_NAME is configured', async () => {
     dbPath = tempDbPath();
     const config = { ...testConfig(dbPath), ownerName: 'Jane Owner', ownerHandle: '@jane' };

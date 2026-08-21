@@ -1,4 +1,15 @@
 import { LocalAdapter, NativeTokenStore, defaultTokenStorePath } from '@haverstack/adapter-local';
+import {
+  ARTICLE,
+  BOOKMARK,
+  CONTACT,
+  NOTE,
+  PAGE,
+  PHOTO,
+  PLACE,
+  TASK,
+  defineCommonsTypes,
+} from '@haverstack/commons';
 import { Stack } from '@haverstack/core';
 import type { StackTokenStore } from '@haverstack/core/wire';
 import type { Logger } from 'pino';
@@ -61,6 +72,14 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
       ? { ownerProfile: { name: config.ownerName, handle: config.ownerHandle ?? undefined } }
       : undefined,
   );
+
+  // Opt-in (SEED_COMMONS_TYPES) — see config.ts. defineCommonsTypes() is a
+  // thin loop over stack.defineType(), which is idempotent by construction
+  // (an identical schema is a no-op preserving createdAt), so this is safe
+  // on every boot, same as the system-type seeding above.
+  if (config.seedCommonsTypes) {
+    await defineCommonsTypes(stack, [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, PHOTO]);
+  }
 
   // Composed as a separate part rather than sniffed off the adapter: auth
   // material lives in its own file beside stack.db (not inside the
