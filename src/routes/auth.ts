@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { verifyAuthChallenge, base64urlDecode } from '@haverstack/core/wire';
-import { isValidDid } from '@haverstack/core/did';
+import { isValidDidKey } from '@haverstack/core/did';
 import { WIRE_AUTH_ERROR_STATUS } from '@haverstack/wire-types';
 import type {
   AuthChallengeRequest,
@@ -31,31 +31,13 @@ const AUTH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // everything the handshake handed out" would be an unanswerable question.
 const AUTH_TOKEN_LABEL = 'did-challenge';
 
-// An Ed25519 did:key is "did:key:z" followed by base58btc over a 34-byte
-// payload (2-byte multicodec prefix + 32-byte key) — 46-48 characters, so
-// ~57 in total. 64 leaves headroom without leaving the field open-ended.
+// Bounded before isValidDidKey() sees it: that check's base58 decode
+// accumulates a BigInt and so costs O(n²) in a length an unauthenticated
+// caller chooses. A real did:key is ~57 characters.
 const MAX_DID_KEY_LENGTH = 64;
 
-/**
- * A cheap did:key gate for the two unauthenticated handshake routes.
- *
- * Not full validation — `verifyDidSignature()` still decodes the key and
- * settles whether the DID is real, and that is deliberately left where it
- * is. This answers a narrower question that has to be answered *before*
- * anything is stored: is this string even a candidate?
- *
- * `isValidDid()` alone is the generic W3C grammar, any method and any
- * length. Both are wrong here. Core can only verify did:key — it decodes
- * the public key straight out of the DID — so a did:web or did:plc could
- * never redeem the nonce a challenge would issue, and the unbounded
- * method-specific-id means a body-limit's worth of "DID" would otherwise
- * be written to a nonce row by an unauthenticated caller.
- *
- * Core has `isValidDidKey()` for exactly this, but does not export it from
- * `@haverstack/core/did`; if that is ever exported, delete this.
- */
-function isDidKeyShaped(did: string): boolean {
-  return did.length <= MAX_DID_KEY_LENGTH && did.startsWith('did:key:z') && isValidDid(did);
+function isAcceptableDidKey(did: unknown): did is string {
+  return typeof did === 'string' && did.length <= MAX_DID_KEY_LENGTH && isValidDidKey(did);
 }
 
 /**
@@ -76,7 +58,7 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
   // Unauthenticated: this is how a token is earned in the first place.
   app.post('/challenge', async (c) => {
     const body = await readJson<Partial<AuthChallengeRequest>>(c);
-    if (typeof body.did !== 'string' || !isDidKeyShaped(body.did)) {
+    if (!isAcceptableDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
     }
     const { nonce, expiresAt } = ctx.nonces.issue(body.did);
@@ -88,7 +70,7 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
   // Unauthenticated for the same reason.
   app.post('/token', async (c) => {
     const body = await readJson<Partial<AuthTokenRequest>>(c);
-    if (typeof body.did !== 'string' || !isDidKeyShaped(body.did)) {
+    if (!isAcceptableDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
     }
     // Checked ahead of the signature so a nonce issued to a different DID
