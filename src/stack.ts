@@ -4,6 +4,7 @@ import type { StackTokenStore } from '@haverstack/core/wire';
 import type { Logger } from 'pino';
 import type { Config } from './config.js';
 import { AuthNonceStore, defaultNonceStorePath } from './lib/nonceStore.js';
+import { QueryWorkerPool } from './lib/queryWorker/pool.js';
 
 export type StackContext = {
   adapter: LocalAdapter;
@@ -17,6 +18,10 @@ export type StackContext = {
   // DID challenge-response nonces — see AuthNonceStore. Also kept outside
   // the portable stack file, in its own sibling store beside the tokens.
   nonces: AuthNonceStore;
+  // Runs ScopedStack.query() off the request thread with a per-request
+  // deadline. See docs/spec/wire-format.md § Bounding query cost and
+  // src/lib/queryWorker/pool.ts.
+  queryWorker: QueryWorkerPool;
 };
 
 export async function initStack(config: Config, logger: Logger): Promise<StackContext> {
@@ -63,5 +68,16 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(config.dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(config.dbPath));
 
-  return { adapter, stack, tokens, nonces };
+  // Spawned only after the adapter above has opened (or created) and
+  // seeded stack.db — each worker opens its own connection to the same
+  // file, and seedSystemTypes()/ensureOwnerEntity() being idempotent is
+  // what makes that safe to race, but there's no reason to race it.
+  const queryWorker = new QueryWorkerPool({
+    init: { dbPath: config.dbPath },
+    poolSize: config.queryWorkerPoolSize,
+    queueLimit: config.queryQueueLimit,
+    logger,
+  });
+
+  return { adapter, stack, tokens, nonces, queryWorker };
 }

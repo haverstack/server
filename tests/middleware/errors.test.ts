@@ -29,6 +29,7 @@ describe('errorMiddleware — denied-but-verified logging', () => {
   });
 
   afterEach(async () => {
+    await ctx.queryWorker.close();
     await ctx.stack.close();
     await ctx.tokens.close();
     await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
@@ -76,6 +77,7 @@ describe('errorMiddleware — malformed JSON bodies', () => {
   });
 
   afterEach(async () => {
+    await ctx.queryWorker.close();
     await ctx.stack.close();
     await ctx.tokens.close();
     await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});

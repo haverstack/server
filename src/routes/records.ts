@@ -164,9 +164,18 @@ function parseQueryParams(url: URL): StackQuery {
 // Route factory
 // ---------------------------------------------------------------------------
 
-export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
+// Routes that can search a large index (POST /query, GET /) run through
+// the query worker pool with a deadline (docs/spec/wire-format.md §
+// Bounding query cost); every other route below still calls the main
+// thread's Stack/ScopedStack directly. Only full-text/content-field
+// search over a large store has unbounded cost — a get, create, or
+// patch by id is index-bound and already fast, and routing every Stack
+// call through the worker boundary would mean virtualizing the entire
+// ScopedStack API (including attachment byte streaming) for no bound
+// this issue is actually about. See src/lib/queryWorker/pool.ts.
+export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { stack } = ctx;
+  const { stack, queryWorker } = ctx;
   const ownerEntityId = stack.ownerEntityId;
 
   /** Scope to a session if authenticated, else the anonymous view. */
@@ -179,7 +188,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.post('/query', requireAuth(), async (c) => {
     const auth = c.get('auth');
     const query = parseQueryBody(await readJson(c));
-    const result = await scopeFor(auth).query(query);
+    const result = await queryWorker.query(auth, query, queryTimeoutMs);
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
@@ -196,7 +205,7 @@ export function recordRoutes(ctx: StackContext): Hono<AppEnv> {
   app.get('/', async (c) => {
     const auth = c.get('auth');
     const query = parseQueryParams(new URL(c.req.url));
-    const result = await scopeFor(auth).query(query);
+    const result = await queryWorker.query(auth, query, queryTimeoutMs);
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,

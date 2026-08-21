@@ -6,11 +6,16 @@ import type { Logger } from 'pino';
 import { initStack } from '../src/stack.js';
 import { testConfig, tempDbPath, logger, OTHER_ENTITY_ID } from './setup.js';
 
-// initStack() only ever calls logger.warn() — a minimal stub is enough,
-// and keeps the mock from silently missing calls to unmocked methods that
-// a full pino instance's prototype methods wouldn't survive a spread of.
+// A minimal stub, so the mock can't silently miss calls to unmocked
+// methods that a full pino instance's prototype methods wouldn't survive a
+// spread of. initStack() itself only calls logger.warn(), but the context
+// it returns owns a QueryWorkerPool that logs errors on its own schedule —
+// and an unstubbed method there surfaces as an uncaught TypeError from
+// inside a worker event handler, not as a failed assertion.
 function spyLogger(): Logger & { warn: ReturnType<typeof vi.fn> } {
-  return { warn: vi.fn() } as unknown as Logger & { warn: ReturnType<typeof vi.fn> };
+  return { warn: vi.fn(), error: vi.fn() } as unknown as Logger & {
+    warn: ReturnType<typeof vi.fn>;
+  };
 }
 
 // A second server process against the same DB_PATH must fail loudly at
@@ -29,6 +34,7 @@ describe('initStack double-open protection', () => {
     const config = testConfig(dbPath);
 
     const ctx = await initStack(config, logger);
+    await ctx.queryWorker.close();
     await ctx.stack.close();
 
     // Simulate another still-running process holding the lock: process.ppid
@@ -63,12 +69,14 @@ describe('initStack bootstrap', () => {
     const config = testConfig(dbPath);
 
     const ctx = await initStack(config, logger);
+    await ctx.queryWorker.close();
     await ctx.stack.close();
     await ctx.tokens.close();
     ctx.nonces.close();
 
     const reopened = await initStack({ ...config, entityId: null }, logger);
     expect(reopened.stack.ownerEntityId).toBe(config.entityId);
+    await reopened.queryWorker.close();
     await reopened.stack.close();
     await reopened.tokens.close();
     reopened.nonces.close();
@@ -79,6 +87,7 @@ describe('initStack bootstrap', () => {
     const config = testConfig(dbPath);
 
     const ctx = await initStack(config, logger);
+    await ctx.queryWorker.close();
     await ctx.stack.close();
     await ctx.tokens.close();
     ctx.nonces.close();
@@ -93,6 +102,7 @@ describe('initStack bootstrap', () => {
       }),
       expect.stringMatching(/does not match/),
     );
+    await mismatched.queryWorker.close();
     await mismatched.stack.close();
     await mismatched.tokens.close();
     mismatched.nonces.close();
@@ -107,6 +117,7 @@ describe('initStack bootstrap', () => {
       filter: { typeId: '_entity@1', content: { did: ctx.stack.ownerEntityId } },
     });
     expect(records[0]?.content).toMatchObject({ name: 'Jane Owner', handle: '@jane' });
+    await ctx.queryWorker.close();
     await ctx.stack.close();
     await ctx.tokens.close();
     ctx.nonces.close();
@@ -121,6 +132,7 @@ describe('initStack bootstrap', () => {
       filter: { typeId: '_entity@1', content: { did: ctx.stack.ownerEntityId } },
     });
     expect(records).toHaveLength(0);
+    await ctx.queryWorker.close();
     await ctx.stack.close();
     await ctx.tokens.close();
     ctx.nonces.close();

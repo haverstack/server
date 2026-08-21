@@ -3,6 +3,14 @@ import { authOriginFromUrl } from '@haverstack/core/wire';
 
 const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB
 const DEFAULT_MAX_CONTENT_BYTES = 1 * 1024 * 1024; // 1 MB
+const DEFAULT_QUERY_TIMEOUT_MS = 10_000;
+const DEFAULT_QUERY_WORKER_POOL_SIZE = 2;
+// Each worker is a thread plus its own SQLite connection to the same file,
+// so an accidental extra zero here is expensive in a way the other limits
+// aren't. The ceiling is a sanity bound, not a tuning recommendation.
+const MAX_QUERY_WORKER_POOL_SIZE = 32;
+const DEFAULT_QUERY_QUEUE_LIMIT = 64;
+const MAX_QUERY_QUEUE_LIMIT = 10_000;
 
 function required(name: string): string {
   const val = process.env[name];
@@ -27,6 +35,9 @@ export type Config = {
   authOrigin: string;
   maxAttachmentBytes: number;
   maxContentBytes: number;
+  queryTimeoutMs: number;
+  queryWorkerPoolSize: number;
+  queryQueueLimit: number;
 };
 
 export function loadConfig(): Config {
@@ -67,6 +78,49 @@ export function loadConfig(): Config {
     throw new Error(`Invalid MAX_CONTENT_BYTES: ${process.env['MAX_CONTENT_BYTES']}`);
   }
 
+  // Per docs/spec/wire-format.md § Bounding query cost: the deadline applied
+  // to a query *executing* on the query worker pool (see src/lib/queryWorker),
+  // past which the request is abandoned with 503 `timeout` rather than
+  // blocking on a query node:sqlite has no way to cancel from inside. Time a
+  // request spends queued for a worker is bounded by QUERY_QUEUE_LIMIT
+  // instead, so ordinary contention makes searches slow rather than failed.
+  const queryTimeoutMs = parseInt(
+    optional('QUERY_TIMEOUT_MS', String(DEFAULT_QUERY_TIMEOUT_MS)),
+    10,
+  );
+  if (isNaN(queryTimeoutMs) || queryTimeoutMs < 1) {
+    throw new Error(`Invalid QUERY_TIMEOUT_MS: ${process.env['QUERY_TIMEOUT_MS']}`);
+  }
+
+  const queryWorkerPoolSize = parseInt(
+    optional('QUERY_WORKER_POOL_SIZE', String(DEFAULT_QUERY_WORKER_POOL_SIZE)),
+    10,
+  );
+  if (
+    isNaN(queryWorkerPoolSize) ||
+    queryWorkerPoolSize < 1 ||
+    queryWorkerPoolSize > MAX_QUERY_WORKER_POOL_SIZE
+  ) {
+    throw new Error(
+      `Invalid QUERY_WORKER_POOL_SIZE: ${process.env['QUERY_WORKER_POOL_SIZE']} ` +
+        `(expected 1-${MAX_QUERY_WORKER_POOL_SIZE})`,
+    );
+  }
+
+  // How many searches may wait for a worker before the pool sheds load
+  // with 503 `timeout` instead of queueing further. This is what keeps
+  // "slow under contention" from becoming an unbounded queue.
+  const queryQueueLimit = parseInt(
+    optional('QUERY_QUEUE_LIMIT', String(DEFAULT_QUERY_QUEUE_LIMIT)),
+    10,
+  );
+  if (isNaN(queryQueueLimit) || queryQueueLimit < 1 || queryQueueLimit > MAX_QUERY_QUEUE_LIMIT) {
+    throw new Error(
+      `Invalid QUERY_QUEUE_LIMIT: ${process.env['QUERY_QUEUE_LIMIT']} ` +
+        `(expected 1-${MAX_QUERY_QUEUE_LIMIT})`,
+    );
+  }
+
   // Required, not auto-detected: the DID challenge-response handshake signs
   // a payload scoped to this server's own public origin, and that origin
   // must come from configuration rather than a client-controlled request
@@ -98,5 +152,8 @@ export function loadConfig(): Config {
     authOrigin,
     maxAttachmentBytes,
     maxContentBytes,
+    queryTimeoutMs,
+    queryWorkerPoolSize,
+    queryQueueLimit,
   };
 }
