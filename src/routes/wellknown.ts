@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
+import { WIRE_PROTOCOL_VERSION, AUTH_METHOD_DID_CHALLENGE } from '@haverstack/wire-types';
 import type { DiscoveryResponse } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
@@ -22,6 +22,11 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
         maxAttachmentBytes: config.maxAttachmentBytes,
         maxContentBytes: config.maxContentBytes,
       },
+      // The DID challenge-response handshake is always implemented by this
+      // server, so it's always advertised — a client holding a DID
+      // credential learns at open() that there's a handshake to perform,
+      // rather than discovering it as a 404 partway through one.
+      auth: { methods: [AUTH_METHOD_DID_CHALLENGE] },
     };
     return c.json(body);
   });

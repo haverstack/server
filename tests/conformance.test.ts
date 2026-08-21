@@ -37,6 +37,11 @@ import {
   restoreVersionFixtures,
   commitMigrationFixtures,
   errorResponseFixtures,
+  authChallengeFixtures,
+  authTokenFixtures,
+  authSequenceFixtures,
+  AUTH_FIXTURE_DID,
+  AUTH_FIXTURE_NONCE,
 } from '@haverstack/conformance-fixtures';
 import type { WireRecord } from '@haverstack/wire-types';
 import { generateId, hashSchema } from '@haverstack/core';
@@ -106,10 +111,6 @@ function assertCoverage(names: string[], handled: Set<string>, skipped: Set<stri
 // -------------------------------------------------------
 
 describe('discovery fixtures', () => {
-  // discovery-advertises-did-challenge-auth pins a deployment with the
-  // did-challenge handshake enabled — not yet implemented by this server
-  // (tracked separately under #53). A real gap, not a harness limitation.
-  const SKIPPED = new Set(['discovery-advertises-did-challenge-auth']);
   const handled = new Set<string>();
 
   test('discovery-declares-protocol-version-and-capabilities', async () => {
@@ -145,11 +146,21 @@ describe('discovery fixtures', () => {
     }
   });
 
+  test('discovery-advertises-did-challenge-auth', async () => {
+    const fixture = discoveryFixtures.find(
+      (f) => f.name === 'discovery-advertises-did-challenge-auth',
+    )!;
+    handled.add(fixture.name);
+    const { status, data } = await req(t.app, fixture.method, fixture.path);
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { auth?: { methods: string[] } }).auth).toEqual(fixture.responseBody!.auth);
+  });
+
   test('coverage', () => {
     assertCoverage(
       discoveryFixtures.map((f) => f.name),
       handled,
-      SKIPPED,
+      new Set(),
     );
   });
 });
@@ -909,5 +920,138 @@ describe('error response fixtures', () => {
       handled,
       SKIPPED,
     );
+  });
+});
+
+// -------------------------------------------------------
+// Auth: DID challenge-response handshake (#53)
+// -------------------------------------------------------
+
+describe('auth handshake fixtures', () => {
+  // Fixture-carried signatures are real Ed25519 signatures over one exact,
+  // fixed nonce value — this server generates its own random nonces via
+  // POST /auth/challenge, so authTokenFixtures/authSequenceFixtures seed
+  // that exact value directly into the nonce store rather than going
+  // through the challenge endpoint.
+  function seedFixtureNonce(ttlMs = 5 * 60 * 1000) {
+    t.ctx.nonces.seedForTesting(AUTH_FIXTURE_NONCE, AUTH_FIXTURE_DID, new Date(Date.now() + ttlMs));
+  }
+
+  const handled = new Set<string>();
+
+  test('auth-challenge-issues-nonce', async () => {
+    const fixture = authChallengeFixtures.find((f) => f.name === 'auth-challenge-issues-nonce')!;
+    handled.add(fixture.name);
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const d = data as { nonce: string; expiresAt: string };
+    // The nonce itself is server-generated and random — not compared
+    // literally — but must be base64url, per the same charset constraint
+    // buildAuthChallengePayload enforces on the signed payload.
+    expect(d.nonce).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(typeof d.expiresAt).toBe('string');
+    expect(new Date(d.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  test('auth-challenge-rejects-malformed-did', async () => {
+    const fixture = authChallengeFixtures.find(
+      (f) => f.name === 'auth-challenge-rejects-malformed-did',
+    )!;
+    handled.add(fixture.name);
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { error: { code: string } }).error.code).toBe('invalid_did');
+  });
+
+  test('auth-token-issues-bearer-token', async () => {
+    const fixture = authTokenFixtures.find((f) => f.name === 'auth-token-issues-bearer-token')!;
+    handled.add(fixture.name);
+    seedFixtureNonce();
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const d = data as { token: string; principalId: string; subjectId: string };
+    expect(typeof d.token).toBe('string');
+    expect(d.principalId).toBe(AUTH_FIXTURE_DID);
+    expect(d.subjectId).toBe(AUTH_FIXTURE_DID);
+  });
+
+  test('auth-token-rejects-foreign-signature', async () => {
+    const fixture = authTokenFixtures.find(
+      (f) => f.name === 'auth-token-rejects-foreign-signature',
+    )!;
+    handled.add(fixture.name);
+    seedFixtureNonce();
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { error: { code: string } }).error.code).toBe('invalid_signature');
+  });
+
+  test('auth-token-rejects-expired-nonce', async () => {
+    const fixture = authTokenFixtures.find((f) => f.name === 'auth-token-rejects-expired-nonce')!;
+    handled.add(fixture.name);
+    seedFixtureNonce(-1000); // already expired
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { error: { code: string } }).error.code).toBe('expired_nonce');
+  });
+
+  test('auth-token-rejects-nonce-issued-to-another-did', async () => {
+    const fixture = authTokenFixtures.find(
+      (f) => f.name === 'auth-token-rejects-nonce-issued-to-another-did',
+    )!;
+    handled.add(fixture.name);
+    // Nonce is bound to AUTH_FIXTURE_DID; the request signs as a different,
+    // valid DID with its own valid signature — still refused, since the
+    // nonce belongs to the DID it was issued for.
+    seedFixtureNonce();
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { error: { code: string } }).error.code).toBe('unknown_nonce');
+  });
+
+  test('auth-token-rejects-unknown-nonce', async () => {
+    const fixture = authTokenFixtures.find((f) => f.name === 'auth-token-rejects-unknown-nonce')!;
+    handled.add(fixture.name);
+    // No seeding — this fixture's nonce was never issued.
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { error: { code: string } }).error.code).toBe('unknown_nonce');
+  });
+
+  test('coverage: authChallengeFixtures + authTokenFixtures', () => {
+    assertCoverage(
+      [...authChallengeFixtures, ...authTokenFixtures].map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+
+  test('auth-nonce-is-single-use', async () => {
+    const sequence = authSequenceFixtures.find((f) => f.name === 'auth-nonce-is-single-use')!;
+    seedFixtureNonce();
+    for (const step of sequence.steps) {
+      const { status, data } = await req(t.app, step.method, step.path, {
+        body: step.requestBody,
+      });
+      expect(status).toBe(step.responseStatus);
+      const expected = step.responseBody as { error?: { code: string } } | undefined;
+      if (expected?.error) {
+        expect((data as { error: { code: string } }).error.code).toBe(expected.error.code);
+      }
+    }
   });
 });

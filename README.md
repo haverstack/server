@@ -12,7 +12,7 @@ Exposes a Haverstack stack over a REST API so apps can read and write records re
 
 ```sh
 cp .env.example .env
-# Edit .env — set OWNER_TOKEN and ENTITY_ID at minimum
+# Edit .env — set OWNER_TOKEN, ENTITY_ID, and BASE_URL at minimum
 pnpm install
 pnpm dev
 ```
@@ -27,6 +27,7 @@ The server listens on `PORT` (default `3000`). On first run it initializes a new
 docker run -d \
   -e OWNER_TOKEN=<secret> \
   -e ENTITY_ID=<your-entity-id> \
+  -e BASE_URL=https://stack.example.com \
   -p 3000:3000 \
   -v haverstack-data:/app/data \
   ghcr.io/haverstack/server:latest
@@ -42,19 +43,19 @@ Only one server process may hold a given `DB_PATH` at a time: a second process a
 
 All configuration is via environment variables. See `.env.example` for the full list.
 
-| Variable               | Required  | Default                                      | Description                                                                                                                                        |
-| ---------------------- | --------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OWNER_TOKEN`          | Yes       | —                                            | Break-glass bearer token for the stack owner. Treat like a password.                                                                               |
-| `ENTITY_ID`            | First run | —                                            | Owner entity ID — must be a DID (e.g. `did:key:z6Mk...`). Only needed when initializing a new DB.                                                  |
-| `OWNER_NAME`           | No        | —                                            | Owner's display name. When set, ensures the owner's `_entity` profile record exists.                                                               |
-| `OWNER_HANDLE`         | No        | —                                            | Owner's handle. Only used alongside `OWNER_NAME`.                                                                                                  |
-| `DB_PATH`              | No        | `/app/data/stack.db` (Docker) / `./stack.db` | Path to the SQLite database file.                                                                                                                  |
-| `PORT`                 | No        | `3000`                                       | Port to listen on.                                                                                                                                 |
-| `TIMEZONE`             | No        | — (none)                                     | IANA timezone. Only used on first run; omitted from discovery when unset.                                                                          |
-| `CORS_ORIGINS`         | No        | `` (none)                                    | Allowed origins, comma-separated or `*`.                                                                                                           |
-| `BASE_URL`             | No        | auto-detected                                | Canonical base URL of this server.                                                                                                                 |
-| `MAX_ATTACHMENT_BYTES` | No        | `52428800` (50 MB)                           | Maximum attachment upload size.                                                                                                                    |
-| `MAX_CONTENT_BYTES`    | No        | `1048576` (1 MB)                             | Maximum JSON request body size (records, patches, etc). See [Deployment: request body size limits](./docs/deployment.md#request-body-size-limits). |
+| Variable               | Required  | Default                                      | Description                                                                                                                                                    |
+| ---------------------- | --------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OWNER_TOKEN`          | Yes       | —                                            | Break-glass bearer token for the stack owner. Treat like a password.                                                                                           |
+| `ENTITY_ID`            | First run | —                                            | Owner entity ID — must be a DID (e.g. `did:key:z6Mk...`). Only needed when initializing a new DB.                                                              |
+| `OWNER_NAME`           | No        | —                                            | Owner's display name. When set, ensures the owner's `_entity` profile record exists.                                                                           |
+| `OWNER_HANDLE`         | No        | —                                            | Owner's handle. Only used alongside `OWNER_NAME`.                                                                                                              |
+| `DB_PATH`              | No        | `/app/data/stack.db` (Docker) / `./stack.db` | Path to the SQLite database file.                                                                                                                              |
+| `PORT`                 | No        | `3000`                                       | Port to listen on.                                                                                                                                             |
+| `TIMEZONE`             | No        | — (none)                                     | IANA timezone. Only used on first run; omitted from discovery when unset.                                                                                      |
+| `CORS_ORIGINS`         | No        | `` (none)                                    | Allowed origins, comma-separated or `*`.                                                                                                                       |
+| `BASE_URL`             | Yes       | —                                            | Canonical public base URL of this server. Signed/verified against by the DID challenge-response handshake — see [API reference](./docs/api.md#authentication). |
+| `MAX_ATTACHMENT_BYTES` | No        | `52428800` (50 MB)                           | Maximum attachment upload size.                                                                                                                                |
+| `MAX_CONTENT_BYTES`    | No        | `1048576` (1 MB)                             | Maximum JSON request body size (records, patches, etc). See [Deployment: request body size limits](./docs/deployment.md#request-body-size-limits).             |
 
 ---
 

@@ -1,4 +1,5 @@
 import { isValidDid } from '@haverstack/core/did';
+import { authOriginFromUrl } from '@haverstack/core/wire';
 
 const DEFAULT_MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024; // 50 MB
 const DEFAULT_MAX_CONTENT_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -22,7 +23,8 @@ export type Config = {
   timezone: string | undefined;
   ownerToken: string;
   corsOrigins: string;
-  baseUrl: string | null;
+  baseUrl: string;
+  authOrigin: string;
   maxAttachmentBytes: number;
   maxContentBytes: number;
 };
@@ -65,6 +67,24 @@ export function loadConfig(): Config {
     throw new Error(`Invalid MAX_CONTENT_BYTES: ${process.env['MAX_CONTENT_BYTES']}`);
   }
 
+  // Required, not auto-detected: the DID challenge-response handshake signs
+  // a payload scoped to this server's own public origin, and that origin
+  // must come from configuration rather than a client-controlled request
+  // header (Host, X-Forwarded-Host) — deriving it from a header would let a
+  // client choose which origin it signs for, reopening the relay attack the
+  // binding exists to prevent. See docs/spec/wire-format.md § Authentication.
+  const baseUrl = required('BASE_URL');
+  let authOrigin: string;
+  try {
+    authOrigin = authOriginFromUrl(baseUrl);
+  } catch (err) {
+    throw new Error(
+      `BASE_URL must be an absolute URL with an origin (e.g. "https://stack.example.com"), got: "${baseUrl}". ` +
+        (err instanceof Error ? err.message : String(err)),
+      { cause: err },
+    );
+  }
+
   return {
     port,
     dbPath,
@@ -74,7 +94,8 @@ export function loadConfig(): Config {
     timezone,
     ownerToken: required('OWNER_TOKEN'),
     corsOrigins: optional('CORS_ORIGINS', ''),
-    baseUrl: process.env['BASE_URL'] ?? null,
+    baseUrl,
+    authOrigin,
     maxAttachmentBytes,
     maxContentBytes,
   };

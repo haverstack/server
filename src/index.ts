@@ -29,6 +29,7 @@ async function main() {
       await ctx.stack.flush();
       await ctx.stack.close();
       await ctx.tokens.close();
+      ctx.nonces.close();
       logger.info('Clean shutdown complete');
       process.exit(0);
     });
