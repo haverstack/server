@@ -6,7 +6,14 @@ import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
-import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
+import type {
+  StackQuery,
+  RecordFilter,
+  QuerySort,
+  Association,
+  Permission,
+  TypeId,
+} from '@haverstack/core';
 
 const MAX_QUERY_LIMIT = 1000;
 
@@ -29,6 +36,77 @@ function parseIfMatch(header: string | undefined): number | undefined {
   return isNaN(n) ? undefined : n;
 }
 
+const POSITIVE_INTEGER = /^\d+$/;
+const SORT_FIELDS: ReadonlySet<QuerySort['field']> = new Set([
+  'createdAt',
+  'updatedAt',
+  'version',
+]);
+const SORT_DIRECTIONS: ReadonlySet<NonNullable<QuerySort['direction']>> = new Set([
+  'asc',
+  'desc',
+]);
+
+/** Strict positive-integer parse for URL path/query params — rejects "1abc", "2.7", "-5", etc. */
+function parsePositiveInt(raw: string, label: string): number {
+  if (!POSITIVE_INTEGER.test(raw)) throw new StackQueryError(`Invalid ${label}: "${raw}"`);
+  return parseInt(raw, 10);
+}
+
+/** Validate and clamp a `?limit=` query param: must be a positive integer, else 400. */
+function parseLimit(raw: string): number {
+  return Math.min(parsePositiveInt(raw, 'limit'), MAX_QUERY_LIMIT);
+}
+
+/** Validate a limit that already arrived as a JSON number (POST /records/query body). */
+function parseLimitValue(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw <= 0)
+    throw new StackQueryError(`Invalid limit: ${JSON.stringify(raw)}`);
+  return Math.min(raw, MAX_QUERY_LIMIT);
+}
+
+/** Parse a wire date value, throwing rather than silently dropping an invalid bound. */
+function requireDate(raw: unknown, label: string): Date {
+  const d = parseDate(raw);
+  if (!d) throw new StackQueryError(`Invalid ${label}: ${JSON.stringify(raw)}`);
+  return d;
+}
+
+function requireSortField(raw: unknown): QuerySort['field'] {
+  if (typeof raw !== 'string' || !SORT_FIELDS.has(raw as QuerySort['field']))
+    throw new StackQueryError(`Invalid sort field: ${JSON.stringify(raw)}`);
+  return raw as QuerySort['field'];
+}
+
+function requireSortDirection(raw: unknown): NonNullable<QuerySort['direction']> {
+  if (typeof raw !== 'string' || !SORT_DIRECTIONS.has(raw as NonNullable<QuerySort['direction']>))
+    throw new StackQueryError(`Invalid sort direction: ${JSON.stringify(raw)}`);
+  return raw as NonNullable<QuerySort['direction']>;
+}
+
+function requireString(raw: unknown, label: string): string {
+  if (typeof raw !== 'string') throw new StackQueryError(`Invalid ${label}: expected a string`);
+  return raw;
+}
+
+function requireStringOrArray(raw: unknown, label: string): string | string[] {
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw) && raw.every((v) => typeof v === 'string')) return raw as string[];
+  throw new StackQueryError(`Invalid ${label}: expected a string or array of strings`);
+}
+
+function requireStringArray(raw: unknown, label: string): string[] {
+  if (!Array.isArray(raw) || !raw.every((v) => typeof v === 'string'))
+    throw new StackQueryError(`Invalid ${label}: expected an array of strings`);
+  return raw as string[];
+}
+
+function requirePlainObject(raw: unknown, label: string): Record<string, unknown> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+    throw new StackQueryError(`Invalid ${label}: expected an object`);
+  return raw as Record<string, unknown>;
+}
+
 /** Convert wire ISO strings back to Date objects inside a StackQuery body. */
 function parseQueryBody(raw: unknown): StackQuery {
   if (!raw || typeof raw !== 'object') return {};
@@ -39,33 +117,46 @@ function parseQueryBody(raw: unknown): StackQuery {
     const f = body.filter as Record<string, unknown>;
     const filter: RecordFilter = {};
 
-    if (f.typeId !== undefined) filter.typeId = f.typeId as string | string[];
+    if (f.typeId !== undefined) filter.typeId = requireStringOrArray(f.typeId, 'filter.typeId');
     if (f.parentId !== undefined)
-      filter.parentId = f.parentId === null ? null : (f.parentId as string);
-    if (f.appId !== undefined) filter.appId = f.appId as string | string[];
-    if (f.entityId !== undefined) filter.entityId = f.entityId as string | string[];
-    if (f.principalId !== undefined) filter.principalId = f.principalId as string | string[];
-    if (f.tags !== undefined) filter.tags = f.tags as string[];
-    if (f.hasAttachment !== undefined) filter.hasAttachment = f.hasAttachment as string;
-    if (f.attachmentFileId !== undefined) filter.attachmentFileId = f.attachmentFileId as string;
-    if (f.relatedTo !== undefined)
-      filter.relatedTo = f.relatedTo as { recordId: string; label?: string };
-    if (f.content !== undefined) filter.content = f.content as Record<string, unknown>;
-    if (f.search !== undefined) filter.search = f.search as string;
+      filter.parentId = f.parentId === null ? null : requireString(f.parentId, 'filter.parentId');
+    if (f.appId !== undefined) filter.appId = requireStringOrArray(f.appId, 'filter.appId');
+    if (f.entityId !== undefined)
+      filter.entityId = requireStringOrArray(f.entityId, 'filter.entityId');
+    if (f.principalId !== undefined)
+      filter.principalId = requireStringOrArray(f.principalId, 'filter.principalId');
+    if (f.tags !== undefined) filter.tags = requireStringArray(f.tags, 'filter.tags');
+    if (f.hasAttachment !== undefined)
+      filter.hasAttachment = requireString(f.hasAttachment, 'filter.hasAttachment');
+    if (f.attachmentFileId !== undefined)
+      filter.attachmentFileId = requireString(f.attachmentFileId, 'filter.attachmentFileId');
+    if (f.relatedTo !== undefined) {
+      const r = requirePlainObject(f.relatedTo, 'filter.relatedTo');
+      filter.relatedTo = {
+        recordId: requireString(r.recordId, 'filter.relatedTo.recordId'),
+        ...(r.label !== undefined && { label: requireString(r.label, 'filter.relatedTo.label') }),
+      };
+    }
+    if (f.content !== undefined) filter.content = requirePlainObject(f.content, 'filter.content');
+    if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
     if (f.includeDeleted) filter.includeDeleted = true;
 
     if (f.createdAt) {
-      const r = f.createdAt as Record<string, string>;
+      const r = f.createdAt as Record<string, unknown>;
       filter.createdAt = {
-        ...(r.before && { before: parseDate(r.before) }),
-        ...(r.after && { after: parseDate(r.after) }),
+        ...(r.before !== undefined && {
+          before: requireDate(r.before, 'filter.createdAt.before'),
+        }),
+        ...(r.after !== undefined && { after: requireDate(r.after, 'filter.createdAt.after') }),
       };
     }
     if (f.updatedAt) {
-      const r = f.updatedAt as Record<string, string>;
+      const r = f.updatedAt as Record<string, unknown>;
       filter.updatedAt = {
-        ...(r.before && { before: parseDate(r.before) }),
-        ...(r.after && { after: parseDate(r.after) }),
+        ...(r.before !== undefined && {
+          before: requireDate(r.before, 'filter.updatedAt.before'),
+        }),
+        ...(r.after !== undefined && { after: requireDate(r.after, 'filter.updatedAt.after') }),
       };
     }
 
@@ -73,14 +164,14 @@ function parseQueryBody(raw: unknown): StackQuery {
   }
 
   if (body.sort) {
-    const s = body.sort as Record<string, string>;
+    const s = body.sort as Record<string, unknown>;
     query.sort = {
-      field: s.field as 'createdAt' | 'updatedAt' | 'version',
-      ...(s.direction && { direction: s.direction as 'asc' | 'desc' }),
+      field: requireSortField(s.field),
+      ...(s.direction !== undefined && { direction: requireSortDirection(s.direction) }),
     };
   }
 
-  if (typeof body.limit === 'number') query.limit = Math.min(body.limit, MAX_QUERY_LIMIT);
+  if (body.limit !== undefined) query.limit = parseLimitValue(body.limit);
   if (typeof body.cursor === 'string') query.cursor = body.cursor;
 
   return query;
@@ -128,8 +219,8 @@ function parseQueryParams(url: URL): StackQuery {
   const createdAfter = getOne(url, 'createdAfter');
   if (createdBefore || createdAfter) {
     filter.createdAt = {
-      ...(createdBefore && { before: new Date(createdBefore) }),
-      ...(createdAfter && { after: new Date(createdAfter) }),
+      ...(createdBefore && { before: requireDate(createdBefore, 'createdBefore') }),
+      ...(createdAfter && { after: requireDate(createdAfter, 'createdAfter') }),
     };
   }
 
@@ -137,8 +228,8 @@ function parseQueryParams(url: URL): StackQuery {
   const updatedAfter = getOne(url, 'updatedAfter');
   if (updatedBefore || updatedAfter) {
     filter.updatedAt = {
-      ...(updatedBefore && { before: new Date(updatedBefore) }),
-      ...(updatedAfter && { after: new Date(updatedAfter) }),
+      ...(updatedBefore && { before: requireDate(updatedBefore, 'updatedBefore') }),
+      ...(updatedAfter && { after: requireDate(updatedAfter, 'updatedAfter') }),
     };
   }
 
@@ -147,12 +238,16 @@ function parseQueryParams(url: URL): StackQuery {
   const query: StackQuery = {};
   if (Object.keys(filter).length) query.filter = filter;
 
-  const sort = getOne(url, 'sort') as 'createdAt' | 'updatedAt' | 'version' | null;
-  const direction = getOne(url, 'direction') as 'asc' | 'desc' | null;
-  if (sort) query.sort = { field: sort, ...(direction && { direction }) };
+  const sort = getOne(url, 'sort');
+  const direction = getOne(url, 'direction');
+  if (sort)
+    query.sort = {
+      field: requireSortField(sort),
+      ...(direction && { direction: requireSortDirection(direction) }),
+    };
 
   const limit = getOne(url, 'limit');
-  if (limit) query.limit = Math.min(parseInt(limit, 10), MAX_QUERY_LIMIT);
+  if (limit) query.limit = parseLimit(limit);
 
   const cursor = getOne(url, 'cursor');
   if (cursor) query.cursor = cursor;
@@ -384,8 +479,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   app.get('/:id/versions/:version', async (c) => {
     const id = c.req.param('id');
-    const vNum = parseInt(c.req.param('version'), 10);
-    if (isNaN(vNum)) throw new StackQueryError('Invalid version number');
+    const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth');
     const version = await scopeFor(auth).getVersion(id, vNum);
     if (!version) throw new StackNotFoundError('Version not found');
@@ -395,8 +489,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // POST /records/:id/restore/:version — creates new version, does not rewrite history
   app.post('/:id/restore/:version', requireAuth(), async (c) => {
     const id = c.req.param('id');
-    const vNum = parseInt(c.req.param('version'), 10);
-    if (isNaN(vNum)) throw new StackQueryError('Invalid version number');
+    const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth')!;
     const restored = await stack
       .forSession(auth)

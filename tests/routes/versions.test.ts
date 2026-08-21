@@ -54,6 +54,26 @@ describe('Versions', () => {
     expect(d.version).toBe(3);
   });
 
+  describe('malformed :version path param', () => {
+    it('GET /records/:id/versions/1abc is rejected rather than silently served as version 1', async () => {
+      const record = await createAndPatch();
+      const { status, data } = await req(t.app, 'GET', `/records/${record.id}/versions/1abc`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('POST /records/:id/restore/1abc is rejected rather than silently restoring version 1', async () => {
+      const record = await createAndPatch();
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/restore/1abc`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+  });
+
   describe('POST /records/:id/restore/:version — If-Match / optimistic concurrency', () => {
     it('succeeds when If-Match names the current version', async () => {
       const record = await createAndPatch();

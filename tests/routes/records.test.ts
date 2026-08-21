@@ -1055,6 +1055,147 @@ describe('Records', () => {
       expect(status).toBe(400);
       expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
+
+    function expectBadRequest(result: { status: number; data: unknown }) {
+      expect(result.status).toBe(400);
+      expect((result.data as { error: { code: string } }).error.code).toBe('bad_request');
+    }
+
+    describe('limit', () => {
+      it('GET /records?limit=abc does not silently become NaN', async () => {
+        expectBadRequest(await req(t.app, 'GET', '/records?limit=abc', { token: TEST_TOKEN }));
+      });
+
+      it('GET /records?limit=-5 is rejected, not passed through negative', async () => {
+        expectBadRequest(await req(t.app, 'GET', '/records?limit=-5', { token: TEST_TOKEN }));
+      });
+
+      it('GET /records?limit=2.7 is rejected, not truncated', async () => {
+        expectBadRequest(await req(t.app, 'GET', '/records?limit=2.7', { token: TEST_TOKEN }));
+      });
+
+      it('POST /records/query with limit: -5 is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', { token: TEST_TOKEN, body: { limit: -5 } }),
+        );
+      });
+
+      it('POST /records/query with limit: 2.7 is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', { token: TEST_TOKEN, body: { limit: 2.7 } }),
+        );
+      });
+
+      it('POST /records/query with a positive integer limit still succeeds', async () => {
+        const { status } = await req(t.app, 'POST', '/records/query', {
+          token: TEST_TOKEN,
+          body: { limit: 10 },
+        });
+        expect(status).toBe(200);
+      });
+    });
+
+    describe('date filters', () => {
+      it('GET /records?createdBefore=garbage is rejected rather than producing Invalid Date', async () => {
+        expectBadRequest(
+          await req(t.app, 'GET', '/records?createdBefore=garbage', { token: TEST_TOKEN }),
+        );
+      });
+
+      it('GET /records?updatedAfter=garbage is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'GET', '/records?updatedAfter=garbage', { token: TEST_TOKEN }),
+        );
+      });
+
+      it('POST /records/query with an invalid filter.createdAt.before 400s instead of dropping the bound', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { filter: { createdAt: { before: 'garbage' } } },
+          }),
+        );
+      });
+
+      it('POST /records/query with an invalid filter.updatedAt.after 400s instead of dropping the bound', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { filter: { updatedAt: { after: 'garbage' } } },
+          }),
+        );
+      });
+    });
+
+    describe('sort', () => {
+      it('GET /records?sort=bogus rejects an unknown sort field', async () => {
+        expectBadRequest(await req(t.app, 'GET', '/records?sort=bogus', { token: TEST_TOKEN }));
+      });
+
+      it('GET /records?sort=createdAt&direction=bogus rejects an unknown direction', async () => {
+        expectBadRequest(
+          await req(t.app, 'GET', '/records?sort=createdAt&direction=bogus', {
+            token: TEST_TOKEN,
+          }),
+        );
+      });
+
+      it('POST /records/query with sort.field: "bogus" is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { sort: { field: 'bogus' } },
+          }),
+        );
+      });
+
+      it('POST /records/query with sort.direction: "bogus" is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { sort: { field: 'createdAt', direction: 'bogus' } },
+          }),
+        );
+      });
+    });
+
+    describe('filter shape', () => {
+      it('POST /records/query with filter.tags as a non-array is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { filter: { tags: 'not-an-array' } },
+          }),
+        );
+      });
+
+      it('POST /records/query with a mixed-type filter.tags array is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { filter: { tags: ['ok', 5] } },
+          }),
+        );
+      });
+
+      it('POST /records/query with filter.content as a non-object is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { filter: { content: 'not-an-object' } },
+          }),
+        );
+      });
+
+      it('POST /records/query with filter.typeId as a non-string, non-array is rejected', async () => {
+        expectBadRequest(
+          await req(t.app, 'POST', '/records/query', {
+            token: TEST_TOKEN,
+            body: { filter: { typeId: 5 } },
+          }),
+        );
+      });
+    });
   });
 
   describe('Payload too large', () => {
