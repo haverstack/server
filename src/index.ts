@@ -1,8 +1,9 @@
 import { serve } from '@hono/node-server';
 import pino from 'pino';
 import { loadConfig } from './config.js';
-import { initStack } from './stack.js';
+import { initStack, type StackContext } from './stack.js';
 import { createApp } from './app.js';
+import { createShutdownHandler } from './shutdown.js';
 
 const logger = pino({
   level: process.env['LOG_LEVEL'] ?? 'info',
@@ -12,9 +13,15 @@ const logger = pino({
       : undefined,
 });
 
+// Set once initStack() resolves, so the fatal-error handler below can flush
+// even when the crash happens after startup (e.g. mid-request). Left
+// undefined for a crash during startup itself, since there's nothing to
+// flush yet.
+let ctx: StackContext | undefined;
+
 async function main() {
   const config = loadConfig();
-  const ctx = await initStack(config, logger);
+  ctx = await initStack(config, logger);
   const app = createApp(ctx, config, logger);
 
   logger.info({ dbPath: config.dbPath }, 'Stack initialized');
@@ -23,24 +30,26 @@ async function main() {
     logger.info({ port: info.port }, 'Server listening');
   });
 
-  const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'Shutting down');
-    server.close(async () => {
-      await ctx.queryWorker.close();
-      await ctx.stack.flush();
-      await ctx.stack.close();
-      await ctx.tokens.close();
-      ctx.nonces.close();
-      logger.info('Clean shutdown complete');
-      process.exit(0);
-    });
+  const shutdown = createShutdownHandler(server, ctx, logger, config.shutdownTimeoutMs);
+  const onSignal = (signal: string) => {
+    shutdown(signal)
+      .then(() => process.exit(0))
+      .catch((err) => {
+        logger.error({ err }, 'Error during shutdown');
+        process.exit(1);
+      });
   };
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+  process.on('SIGINT', () => onSignal('SIGINT'));
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   logger.error({ err }, 'Fatal startup error');
+  if (ctx) {
+    await ctx.stack.flush().catch((flushErr) => {
+      logger.error({ err: flushErr }, 'Failed to flush during fatal-error shutdown');
+    });
+  }
   process.exit(1);
 });

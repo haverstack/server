@@ -59,6 +59,7 @@ All configuration is via environment variables. See `.env.example` for the full 
 | `QUERY_TIMEOUT_MS`       | No        | `10000` (10s)                                | Execution deadline for a `GET /records` or `POST /records/query` search, timed from when it reaches a worker. Exceeding it answers `503` (code `timeout`). See [Deployment: bounding query cost](./docs/deployment.md#bounding-query-cost). |
 | `QUERY_WORKER_POOL_SIZE` | No        | `2`                                          | Number of worker threads a slow search can run on without blocking other requests (max 32). See [Deployment: bounding query cost](./docs/deployment.md#bounding-query-cost).                                                                |
 | `QUERY_QUEUE_LIMIT`      | No        | `64`                                         | Searches allowed to queue for a worker before the server sheds load with `503` (code `timeout`). See [Deployment: bounding query cost](./docs/deployment.md#bounding-query-cost).                                                           |
+| `SHUTDOWN_TIMEOUT_MS`    | No        | `10000` (10s)                                | How long shutdown waits for open connections to drain before forcing them closed and finishing cleanup anyway.                                                                                                                              |
 
 ---
 
