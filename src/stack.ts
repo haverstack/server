@@ -72,11 +72,12 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
   // seeded stack.db — each worker opens its own connection to the same
   // file, and seedSystemTypes()/ensureOwnerEntity() being idempotent is
   // what makes that safe to race, but there's no reason to race it.
-  const queryWorker = new QueryWorkerPool(
-    { dbPath: config.dbPath, timezone: config.timezone },
-    config.queryWorkerPoolSize,
+  const queryWorker = new QueryWorkerPool({
+    init: { dbPath: config.dbPath },
+    poolSize: config.queryWorkerPoolSize,
+    queueLimit: config.queryQueueLimit,
     logger,
-  );
+  });
 
   return { adapter, stack, tokens, nonces, queryWorker };
 }

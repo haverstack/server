@@ -2,21 +2,50 @@
  * Main-thread side of the query worker boundary. Owns a small, fixed-size
  * pool of workers (src/lib/queryWorker/worker.ts), each with its own
  * LocalAdapter connection to the same stack.db, and dispatches
- * ScopedStack.query() calls to them with a per-request deadline.
+ * ScopedStack.query() calls to them.
  *
- * node:sqlite exposes no `sqlite3_interrupt` equivalent (checked against
- * Node 22's DatabaseSync — its prototype has no interrupt method), so a
- * query that outlives its deadline can't be cancelled in place. The only
- * lever is termination: the pool answers the caller with StackTimeoutError
- * the moment the deadline passes, then best-effort terminates the worker
- * that was running it and replaces it, so a stuck query costs one worker
- * slot rather than wedging the pool. Terminating mid-write is safe —
- * SQLite's WAL journaling means an uncommitted transaction is simply
- * absent after the file is reopened (see docs/spec/adapters.md's
- * snapshot-then-mutate recovery, which already assumes a writer can die
- * mid-transaction) — but query() is the only method routed through this
- * pool today; see the module doc in src/routes/records.ts for why writes
- * and by-id reads stay on the main thread.
+ * Two separate bounds, deliberately not one:
+ *
+ *   - `deadlineMs` bounds **execution**, and its clock starts when a
+ *     request is handed to a worker — not when it was accepted here. That
+ *     is the only thing that needs bounding: node:sqlite exposes no
+ *     `sqlite3_interrupt` equivalent (checked against Node 22's
+ *     DatabaseSync — its prototype has no interrupt method), so a query
+ *     already inside the engine can't be cancelled in place. Time spent
+ *     waiting behind other searches is not that, so queueing makes a
+ *     request slow, never failed — the pre-pool behavior, minus the part
+ *     where a slow search also stalled every unrelated route.
+ *
+ *   - `queueLimit` bounds **the wait**, so "slow" can't quietly become
+ *     "unbounded" (in latency or in retained memory). Past it the pool
+ *     sheds load explicitly with StackTimeoutError — a 503 that says
+ *     "retryable, the server declined to keep queueing," which is honest
+ *     about overload in a way a silently growing queue is not.
+ *
+ * When a query does outlive its execution deadline the only lever left is
+ * termination: the caller is answered with StackTimeoutError at once, and
+ * the worker running it is terminated and replaced, so a stuck query costs
+ * one worker slot rather than wedging the pool. That recycle is immediate
+ * and un-throttled, because it is deliberate and already rate-limited by
+ * construction — at most `poolSize` terminations per `deadlineMs`.
+ *
+ * An *unexpected* death (a crash, a worker that throws on startup) is the
+ * opposite case and gets exponential backoff: respawning a worker that
+ * fails to boot — an unreadable or missing DB_PATH, say — as fast as the
+ * loop allows would spin threads and flood logs forever. After
+ * MAX_CONSECUTIVE_SPAWN_FAILURES the pool reports itself unhealthy and
+ * fails queries fast with the underlying spawn error, so a fatal
+ * misconfiguration surfaces as itself instead of as a pile of timeouts.
+ * Respawns continue at the capped interval, so the pool heals on its own
+ * once the cause clears.
+ *
+ * Terminating mid-write is safe — SQLite's WAL journaling means an
+ * uncommitted transaction is simply absent after the file is reopened (see
+ * docs/spec/adapters.md's snapshot-then-mutate recovery, which already
+ * assumes a writer can die mid-transaction) — but query() is the only
+ * method routed through this pool today; see the module doc in
+ * src/routes/records.ts for why writes and by-id reads stay on the main
+ * thread.
  */
 import { Worker } from 'node:worker_threads';
 import type { StackQuery, QueryResult, TokenSession } from '@haverstack/core';
@@ -33,16 +62,40 @@ const RUNNING_FROM_SOURCE = import.meta.url.endsWith('.ts');
 const WORKER_URL = new URL(RUNNING_FROM_SOURCE ? './worker.ts' : './worker.js', import.meta.url);
 const WORKER_EXEC_ARGV = RUNNING_FROM_SOURCE ? ['--import', 'tsx'] : [];
 
+/** Backoff schedule for respawning a worker that died unexpectedly. */
+const RESPAWN_BASE_DELAY_MS = 100;
+const RESPAWN_MAX_DELAY_MS = 30_000;
+/** Consecutive unexpected deaths after which the pool reports itself unhealthy. */
+const MAX_CONSECUTIVE_SPAWN_FAILURES = 5;
+
 type Pending = {
   resolve: (result: QueryResult) => void;
   reject: (err: Error) => void;
-  timer: NodeJS.Timeout;
+  deadlineMs: number;
+  /** The execution clock. Null while the request is still queued. */
+  timer: NodeJS.Timeout | null;
 };
 
 type Slot = {
-  worker: Worker;
+  /** Null while the worker is dead and its respawn is pending. */
+  worker: Worker | null;
   /** id of the request currently running on this worker, or null if idle. */
   busyWith: number | null;
+  respawnTimer: NodeJS.Timeout | null;
+};
+
+export type QueryWorkerPoolOptions = {
+  init: QueryWorkerInit;
+  poolSize: number;
+  /** Maximum requests waiting for a slot before the pool sheds load. */
+  queueLimit: number;
+  logger: Logger;
+  /**
+   * Worker entry point. Defaults to this directory's worker; overridable
+   * so tests can drive the pool with a fixture worker whose timing they
+   * control, rather than inferring pool behavior from real query latency.
+   */
+  workerUrl?: URL;
 };
 
 export class QueryWorkerPool {
@@ -52,18 +105,43 @@ export class QueryWorkerPool {
   private readonly waiting: Array<{ id: number; req: QueryRequest }> = [];
   private nextId = 1;
   private closed = false;
+  private consecutiveFailures = 0;
+  private lastFailure: Error | null = null;
 
-  constructor(
-    private readonly init: QueryWorkerInit,
-    private readonly poolSize: number,
-    private readonly logger: Logger,
-  ) {
-    for (let i = 0; i < poolSize; i++) this.slots.push(this.spawnSlot());
+  private readonly init: QueryWorkerInit;
+  private readonly queueLimit: number;
+  private readonly logger: Logger;
+  private readonly workerUrl: URL;
+
+  constructor(opts: QueryWorkerPoolOptions) {
+    this.init = opts.init;
+    this.queueLimit = opts.queueLimit;
+    this.logger = opts.logger;
+    this.workerUrl = opts.workerUrl ?? WORKER_URL;
+    for (let i = 0; i < opts.poolSize; i++) {
+      const slot: Slot = { worker: null, busyWith: null, respawnTimer: null };
+      this.slots.push(slot);
+      this.startWorker(slot);
+    }
   }
 
-  private spawnSlot(): Slot {
-    const worker = new Worker(WORKER_URL, { workerData: this.init, execArgv: WORKER_EXEC_ARGV });
-    const slot: Slot = { worker, busyWith: null };
+  /**
+   * True once every recent spawn attempt has failed — a standing fault
+   * (bad DB_PATH, unreadable file) rather than one unlucky crash.
+   */
+  private get unhealthy(): boolean {
+    return this.consecutiveFailures >= MAX_CONSECUTIVE_SPAWN_FAILURES;
+  }
+
+  private startWorker(slot: Slot): void {
+    if (this.closed) return;
+    slot.respawnTimer = null;
+    const worker = new Worker(this.workerUrl, {
+      workerData: this.init,
+      execArgv: WORKER_EXEC_ARGV,
+    });
+    slot.worker = worker;
+    slot.busyWith = null;
     worker.on('message', (msg: QueryResponse) => this.handleMessage(slot, msg));
     worker.on('error', (err: Error) => this.handleWorkerDeath(slot, err));
     worker.on('exit', (code) => {
@@ -71,72 +149,133 @@ export class QueryWorkerPool {
         this.handleWorkerDeath(slot, new Error(`query worker exited with code ${code}`));
       }
     });
-    return slot;
+    // postMessage before a worker finishes booting is fine — worker_threads
+    // queues it until the thread installs its listener.
+    this.drainWaiting(slot);
   }
 
   private handleMessage(slot: Slot, msg: QueryResponse): void {
+    // A worker that answers is a working worker: clear any standing
+    // failure state so an earlier rough patch can't leave the pool
+    // permanently marked unhealthy.
+    this.consecutiveFailures = 0;
+    this.lastFailure = null;
     slot.busyWith = null;
     const pending = this.pending.get(msg.id);
     // Already timed out (and rejected) before the worker answered — the
     // late reply just frees the slot, above.
     if (pending) {
       this.pending.delete(msg.id);
-      clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       if (msg.ok) pending.resolve(msg.result);
       else pending.reject(msg.wire ? deserializeError(msg.wire.body) : new Error(msg.message));
     }
     this.drainWaiting(slot);
   }
 
-  /** A worker crashed or exited unexpectedly — not a deadline timeout, which handles its own replacement. */
+  /**
+   * A worker crashed or exited on its own — not a deadline recycle, which
+   * is deliberate and handled by recycleSlot() without backoff.
+   */
   private handleWorkerDeath(slot: Slot, err: Error): void {
     const failedId = slot.busyWith;
     if (failedId !== null) {
       const pending = this.pending.get(failedId);
       if (pending) {
         this.pending.delete(failedId);
-        clearTimeout(pending.timer);
+        if (pending.timer) clearTimeout(pending.timer);
         pending.reject(err);
       }
     }
-    this.logger.error({ err }, 'Query worker died unexpectedly; replacing it');
-    this.replaceSlot(slot);
+    this.teardown(slot);
+    this.consecutiveFailures++;
+    this.lastFailure = err;
+    const delay = Math.min(
+      RESPAWN_BASE_DELAY_MS * 2 ** (this.consecutiveFailures - 1),
+      RESPAWN_MAX_DELAY_MS,
+    );
+    this.logger.error(
+      { err, consecutiveFailures: this.consecutiveFailures, retryInMs: delay },
+      'Query worker died unexpectedly; respawning after backoff',
+    );
+    // Nothing is going to serve the queue any time soon — answer it with
+    // the real cause instead of letting it wait out a fault that isn't
+    // going to clear on its own.
+    if (this.unhealthy) this.failQueued(err);
+    this.scheduleRespawn(slot, delay);
   }
 
-  private replaceSlot(slot: Slot): void {
-    const idx = this.slots.indexOf(slot);
-    if (idx === -1) return; // already replaced (e.g. closed)
-    slot.worker.removeAllListeners();
-    void slot.worker.terminate().catch(() => {});
-    this.slots[idx] = this.spawnSlot();
-    this.drainWaiting(this.slots[idx]);
+  /** Deliberate recycle after a deadline: capacity is restored at once, no backoff. */
+  private recycleSlot(slot: Slot): void {
+    if (this.closed) return;
+    this.teardown(slot);
+    this.startWorker(slot);
   }
 
-  private drainWaiting(slot: Slot): void {
-    if (slot.busyWith !== null || this.closed) return;
-    const next = this.waiting.shift();
-    if (!next) return;
-    // The request may have already timed out while queued.
-    if (!this.pending.has(next.id)) return this.drainWaiting(slot);
-    slot.busyWith = next.id;
-    slot.worker.postMessage(next.req);
+  private teardown(slot: Slot): void {
+    const worker = slot.worker;
+    slot.worker = null;
+    slot.busyWith = null;
+    if (!worker) return;
+    worker.removeAllListeners();
+    void worker.terminate().catch(() => {});
   }
 
-  private dispatch(req: QueryRequest): void {
-    const idle = this.slots.find((s) => s.busyWith === null);
-    if (idle) {
-      idle.busyWith = req.id;
-      idle.worker.postMessage(req);
-    } else {
-      this.waiting.push({ id: req.id, req });
+  private scheduleRespawn(slot: Slot, delay: number): void {
+    if (this.closed) return;
+    if (slot.respawnTimer) clearTimeout(slot.respawnTimer);
+    slot.respawnTimer = setTimeout(() => this.startWorker(slot), delay);
+    // A pending respawn must not by itself keep the process alive.
+    slot.respawnTimer.unref();
+  }
+
+  private failQueued(err: Error): void {
+    for (const { id } of this.waiting.splice(0)) {
+      const pending = this.pending.get(id);
+      if (!pending) continue;
+      this.pending.delete(id);
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(err);
     }
   }
 
+  private drainWaiting(slot: Slot): void {
+    if (this.closed || !slot.worker || slot.busyWith !== null) return;
+    // Looped, not recursive: a long run of already-abandoned queue entries
+    // shouldn't cost stack depth.
+    for (;;) {
+      const next = this.waiting.shift();
+      if (!next) return;
+      const pending = this.pending.get(next.id);
+      // Abandoned while queued (pool went unhealthy, or close()).
+      if (!pending) continue;
+      this.startExecution(slot, next.id, next.req, pending);
+      return;
+    }
+  }
+
+  /** Hand a request to a worker and start its execution clock — see the module doc. */
+  private startExecution(slot: Slot, id: number, req: QueryRequest, pending: Pending): void {
+    pending.timer = setTimeout(() => this.onDeadline(id), pending.deadlineMs);
+    slot.busyWith = id;
+    slot.worker!.postMessage(req);
+  }
+
+  private onDeadline(id: number): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+    pending.reject(
+      new StackTimeoutError(`Query exceeded the ${pending.deadlineMs}ms execution deadline`),
+    );
+    const slot = this.slots.find((s) => s.busyWith === id);
+    if (slot) this.recycleSlot(slot);
+  }
+
   /**
-   * Run a query on the pool, honoring `deadlineMs` from the moment it's
-   * accepted here (queue wait counts against the budget, not just
-   * execution) — a request that never reaches a worker before its
-   * deadline is answered from the queue, without ever touching one.
+   * Run a query on the pool. `deadlineMs` bounds execution only; a request
+   * that waits for a slot waits without penalty, until the queue itself is
+   * full.
    */
   query(
     session: TokenSession | null,
@@ -144,37 +283,49 @@ export class QueryWorkerPool {
     deadlineMs: number,
   ): Promise<QueryResult> {
     if (this.closed) return Promise.reject(new Error('Query worker pool is closed'));
+    // A standing spawn fault is a server fault, not a slow query: report
+    // the cause rather than making every caller wait out a deadline.
+    if (this.unhealthy) {
+      return Promise.reject(this.lastFailure ?? new Error('Query worker pool is unavailable'));
+    }
+    if (this.waiting.length >= this.queueLimit) {
+      return Promise.reject(
+        new StackTimeoutError(
+          `Query queue is full (${this.queueLimit} waiting); the server is shedding load rather than queueing further`,
+        ),
+      );
+    }
     const id = this.nextId++;
     const req: QueryRequest = { id, session, query: stackQuery };
     return new Promise<QueryResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new StackTimeoutError(`Query exceeded the ${deadlineMs}ms deadline`));
-        const slot = this.slots.find((s) => s.busyWith === id);
-        if (slot) this.replaceSlot(slot);
-        else {
-          // Still queued, never dispatched — drop it from the waiting list.
-          const wIdx = this.waiting.findIndex((w) => w.id === id);
-          if (wIdx !== -1) this.waiting.splice(wIdx, 1);
-        }
-      }, deadlineMs);
-      this.pending.set(id, { resolve, reject, timer });
-      this.dispatch(req);
+      const pending: Pending = { resolve, reject, deadlineMs, timer: null };
+      this.pending.set(id, pending);
+      const idle = this.slots.find((s) => s.worker !== null && s.busyWith === null);
+      if (idle) this.startExecution(idle, id, req, pending);
+      else this.waiting.push({ id, req });
     });
   }
 
   async close(): Promise<void> {
     this.closed = true;
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(new Error('Query worker pool is closing'));
     }
     this.pending.clear();
     this.waiting.length = 0;
     await Promise.all(
-      this.slots.map((slot) => {
-        slot.worker.removeAllListeners();
-        return slot.worker.terminate();
+      this.slots.map(async (slot) => {
+        if (slot.respawnTimer) {
+          clearTimeout(slot.respawnTimer);
+          slot.respawnTimer = null;
+        }
+        const worker = slot.worker;
+        slot.worker = null;
+        slot.busyWith = null;
+        if (!worker) return;
+        worker.removeAllListeners();
+        await worker.terminate();
       }),
     );
   }

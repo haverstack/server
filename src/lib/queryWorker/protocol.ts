@@ -10,10 +10,14 @@
 import type { StackQuery, QueryResult, TokenSession } from '@haverstack/core';
 import type { WireError } from '@haverstack/wire-types';
 
-/** Passed as `workerData` when a query worker is spawned. */
+/**
+ * Passed as `workerData` when a query worker is spawned. dbPath is the
+ * whole of it: a worker calls LocalAdapter.open(), which reads timezone
+ * (and the rest of the stack config) out of the database itself — only
+ * the initialize path takes one as input, and workers never initialize.
+ */
 export type QueryWorkerInit = {
   dbPath: string;
-  timezone?: string;
 };
 
 export type QueryRequest = {

@@ -57,11 +57,12 @@ export async function createTestContext(
   const stack = await Stack.create(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(dbPath));
-  const queryWorker = new QueryWorkerPool(
-    { dbPath, ...(opts.timezone !== undefined && { timezone: opts.timezone }) },
-    1,
+  const queryWorker = new QueryWorkerPool({
+    init: { dbPath },
+    poolSize: 1,
+    queueLimit: 64,
     logger,
-  );
+  });
   return { adapter, stack, tokens, nonces, queryWorker };
 }
 
@@ -81,6 +82,7 @@ export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: '
     maxContentBytes: 1 * 1024 * 1024,
     queryTimeoutMs: 10_000,
     queryWorkerPoolSize: 1,
+    queryQueueLimit: 64,
   };
 }
 
