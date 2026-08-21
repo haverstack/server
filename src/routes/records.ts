@@ -4,160 +4,16 @@ import type { StackContext } from '../stack.js';
 import type { ScopedStack, TokenSession } from '@haverstack/core';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
-import { parseDate, serializeRecord, serializeVersion } from '@haverstack/wire-types';
+import { parseQueryBody, parseQueryParams, parsePositiveInt } from '../lib/queryParsing.js';
+import { serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
-import type { StackQuery, RecordFilter, Association, Permission, TypeId } from '@haverstack/core';
-
-const MAX_QUERY_LIMIT = 1000;
-
-// ---------------------------------------------------------------------------
-// Query parsing helpers
-// ---------------------------------------------------------------------------
-
-function getAll(url: URL, key: string): string[] {
-  return url.searchParams.getAll(key);
-}
-
-function getOne(url: URL, key: string): string | null {
-  return url.searchParams.get(key);
-}
+import type { Association, Permission, TypeId } from '@haverstack/core';
 
 /** Parse an `If-Match: "5"` header into the version number for `ifVersion`. */
 function parseIfMatch(header: string | undefined): number | undefined {
   if (!header) return undefined;
   const n = parseInt(header.replace(/^"|"$/g, ''), 10);
   return isNaN(n) ? undefined : n;
-}
-
-/** Convert wire ISO strings back to Date objects inside a StackQuery body. */
-function parseQueryBody(raw: unknown): StackQuery {
-  if (!raw || typeof raw !== 'object') return {};
-  const body = raw as Record<string, unknown>;
-  const query: StackQuery = {};
-
-  if (body.filter) {
-    const f = body.filter as Record<string, unknown>;
-    const filter: RecordFilter = {};
-
-    if (f.typeId !== undefined) filter.typeId = f.typeId as string | string[];
-    if (f.parentId !== undefined)
-      filter.parentId = f.parentId === null ? null : (f.parentId as string);
-    if (f.appId !== undefined) filter.appId = f.appId as string | string[];
-    if (f.entityId !== undefined) filter.entityId = f.entityId as string | string[];
-    if (f.principalId !== undefined) filter.principalId = f.principalId as string | string[];
-    if (f.tags !== undefined) filter.tags = f.tags as string[];
-    if (f.hasAttachment !== undefined) filter.hasAttachment = f.hasAttachment as string;
-    if (f.attachmentFileId !== undefined) filter.attachmentFileId = f.attachmentFileId as string;
-    if (f.relatedTo !== undefined)
-      filter.relatedTo = f.relatedTo as { recordId: string; label?: string };
-    if (f.content !== undefined) filter.content = f.content as Record<string, unknown>;
-    if (f.search !== undefined) filter.search = f.search as string;
-    if (f.includeDeleted) filter.includeDeleted = true;
-
-    if (f.createdAt) {
-      const r = f.createdAt as Record<string, string>;
-      filter.createdAt = {
-        ...(r.before && { before: parseDate(r.before) }),
-        ...(r.after && { after: parseDate(r.after) }),
-      };
-    }
-    if (f.updatedAt) {
-      const r = f.updatedAt as Record<string, string>;
-      filter.updatedAt = {
-        ...(r.before && { before: parseDate(r.before) }),
-        ...(r.after && { after: parseDate(r.after) }),
-      };
-    }
-
-    query.filter = filter;
-  }
-
-  if (body.sort) {
-    const s = body.sort as Record<string, string>;
-    query.sort = {
-      field: s.field as 'createdAt' | 'updatedAt' | 'version',
-      ...(s.direction && { direction: s.direction as 'asc' | 'desc' }),
-    };
-  }
-
-  if (typeof body.limit === 'number') query.limit = Math.min(body.limit, MAX_QUERY_LIMIT);
-  if (typeof body.cursor === 'string') query.cursor = body.cursor;
-
-  return query;
-}
-
-/** Build a StackQuery from GET /records URL search params. */
-function parseQueryParams(url: URL): StackQuery {
-  const filter: RecordFilter = {};
-
-  const typeIds = getAll(url, 'typeId');
-  if (typeIds.length) filter.typeId = typeIds.length === 1 ? typeIds[0] : typeIds;
-
-  const parentId = getOne(url, 'parentId');
-  if (parentId !== null) filter.parentId = parentId === 'null' ? null : parentId;
-
-  const appIds = getAll(url, 'appId');
-  if (appIds.length) filter.appId = appIds.length === 1 ? appIds[0] : appIds;
-
-  const entityIds = getAll(url, 'entityId');
-  if (entityIds.length) filter.entityId = entityIds.length === 1 ? entityIds[0] : entityIds;
-
-  const principalIds = getAll(url, 'principalId');
-  if (principalIds.length)
-    filter.principalId = principalIds.length === 1 ? principalIds[0] : principalIds;
-
-  const tags = getAll(url, 'tag');
-  if (tags.length) filter.tags = tags;
-
-  const hasAttachment = getOne(url, 'hasAttachment');
-  if (hasAttachment) filter.hasAttachment = hasAttachment;
-
-  const attachmentFileId = getOne(url, 'attachmentFileId');
-  if (attachmentFileId) filter.attachmentFileId = attachmentFileId;
-
-  const relatedTo = getOne(url, 'relatedTo');
-  if (relatedTo) {
-    const label = getOne(url, 'relatedToLabel');
-    filter.relatedTo = { recordId: relatedTo, ...(label && { label }) };
-  }
-
-  const search = getOne(url, 'search');
-  if (search) filter.search = search;
-
-  const createdBefore = getOne(url, 'createdBefore');
-  const createdAfter = getOne(url, 'createdAfter');
-  if (createdBefore || createdAfter) {
-    filter.createdAt = {
-      ...(createdBefore && { before: new Date(createdBefore) }),
-      ...(createdAfter && { after: new Date(createdAfter) }),
-    };
-  }
-
-  const updatedBefore = getOne(url, 'updatedBefore');
-  const updatedAfter = getOne(url, 'updatedAfter');
-  if (updatedBefore || updatedAfter) {
-    filter.updatedAt = {
-      ...(updatedBefore && { before: new Date(updatedBefore) }),
-      ...(updatedAfter && { after: new Date(updatedAfter) }),
-    };
-  }
-
-  if (getOne(url, 'includeDeleted') === 'true') filter.includeDeleted = true;
-
-  const query: StackQuery = {};
-  if (Object.keys(filter).length) query.filter = filter;
-
-  const sort = getOne(url, 'sort') as 'createdAt' | 'updatedAt' | 'version' | null;
-  const direction = getOne(url, 'direction') as 'asc' | 'desc' | null;
-  if (sort) query.sort = { field: sort, ...(direction && { direction }) };
-
-  const limit = getOne(url, 'limit');
-  if (limit) query.limit = Math.min(parseInt(limit, 10), MAX_QUERY_LIMIT);
-
-  const cursor = getOne(url, 'cursor');
-  if (cursor) query.cursor = cursor;
-
-  return query;
 }
 
 // ---------------------------------------------------------------------------
@@ -384,8 +240,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   app.get('/:id/versions/:version', async (c) => {
     const id = c.req.param('id');
-    const vNum = parseInt(c.req.param('version'), 10);
-    if (isNaN(vNum)) throw new StackQueryError('Invalid version number');
+    const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth');
     const version = await scopeFor(auth).getVersion(id, vNum);
     if (!version) throw new StackNotFoundError('Version not found');
@@ -395,8 +250,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // POST /records/:id/restore/:version — creates new version, does not rewrite history
   app.post('/:id/restore/:version', requireAuth(), async (c) => {
     const id = c.req.param('id');
-    const vNum = parseInt(c.req.param('version'), 10);
-    if (isNaN(vNum)) throw new StackQueryError('Invalid version number');
+    const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth')!;
     const restored = await stack
       .forSession(auth)
