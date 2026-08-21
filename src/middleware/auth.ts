@@ -16,16 +16,25 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
 
   return async (c, next) => {
     const header = c.req.header('Authorization');
-    if (header?.startsWith('Bearer ')) {
+    if (header === undefined) {
+      c.set('auth', null);
+    } else if (!header.startsWith('Bearer ')) {
+      // Present but not a bearer credential (e.g. `Basic ...`, or missing
+      // the space) — a client that sent *something* must not be silently
+      // downgraded to anonymous. See #44.
+      return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+    } else {
       const token = header.slice(7);
       if (safeCompare(token, ownerToken)) {
         c.set('auth', { principalId: ownerEntityId, subjectId: ownerEntityId });
       } else {
         const session = await ctx.tokens.lookupToken(token);
+        // Unknown, expired, or revoked — distinct from "no credential was
+        // offered" and must not be treated as anonymous on optional-auth
+        // routes. See #44.
+        if (!session) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
         c.set('auth', session);
       }
-    } else {
-      c.set('auth', null);
     }
     await next();
   };
