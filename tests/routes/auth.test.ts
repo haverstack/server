@@ -11,6 +11,8 @@ import {
   type TestApp,
 } from '../setup.js';
 
+const NOTE_TYPE_ID = 'com.example.test/note@1';
+
 async function challengeAndSign(
   t: TestApp,
   keypair: DidKeypair,
@@ -380,5 +382,68 @@ describe('handshake token bookkeeping', () => {
       body: { did: owner.did, nonce, signature: base64urlEncode(ownerSig) },
     });
     expect(status).toBe(200);
+  });
+});
+
+// #44: a present-but-invalid credential must 401, not be silently
+// downgraded to anonymous — that's the dangerous shape on optional-auth
+// routes, where it would otherwise surface as a 200 with the public-only
+// subset instead of telling the caller its session is dead.
+describe('invalid bearer credentials', () => {
+  let t: TestApp;
+  beforeEach(async () => {
+    t = await buildTestApp();
+    await t.ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
+      body: { kind: 'text' as const, required: true as const },
+    });
+    await t.ctx.stack.create(
+      NOTE_TYPE_ID,
+      { body: 'public content' },
+      { permissions: [{ access: 'public' }] },
+    );
+  });
+  afterEach(async () => {
+    await t.cleanup();
+  });
+
+  it('rejects an unknown token on an optional-auth route with 401, not an anonymous 200', async () => {
+    const { status, data } = await req(t.app, 'GET', '/records', { token: 'not-a-real-token' });
+    expect(status).toBe(401);
+    expect((data as { error: { code: string } }).error.code).toBe('unauthorized');
+  });
+
+  it('rejects an expired token on an optional-auth route with 401', async () => {
+    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID, {
+      expiresAt: new Date(Date.now() - 1000),
+    });
+    const { status } = await req(t.app, 'GET', '/records', { token });
+    expect(status).toBe(401);
+  });
+
+  it('rejects a revoked token on an optional-auth route with 401', async () => {
+    const { id, token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    await t.ctx.tokens.revokeToken(id);
+    const { status } = await req(t.app, 'GET', '/records', { token });
+    expect(status).toBe(401);
+  });
+
+  it('rejects a malformed Authorization header (non-Bearer scheme) with 401', async () => {
+    const { status } = await req(t.app, 'GET', '/records', {
+      headers: { Authorization: 'Basic dXNlcjpwYXNz' },
+    });
+    expect(status).toBe(401);
+  });
+
+  // No credential at all is a different state from a bad one — it must
+  // still serve the public subset, not be swept up by the fix above.
+  it('still serves the public subset with no Authorization header at all', async () => {
+    const { status, data } = await req(t.app, 'GET', '/records');
+    expect(status).toBe(200);
+    expect((data as { records: unknown[] }).records.length).toBe(1);
+  });
+
+  it('rejects an unknown token on a requireAuth() route with 401 too', async () => {
+    const { status } = await req(t.app, 'GET', '/entity', { token: 'not-a-real-token' });
+    expect(status).toBe(401);
   });
 });
