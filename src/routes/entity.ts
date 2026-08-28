@@ -47,7 +47,16 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = await resolveOwnerRecordId();
     const record = id ? await stack.forSession(auth).get(id) : null;
     if (!record) {
-      cachedOwnerRecordId = null;
+      // get() now returns null both for "doesn't exist" and "exists but
+      // this caller can't read it" (the anti-oracle rule — see #79), so a
+      // non-owner's null says nothing about whether the card is actually
+      // gone. Only the owner's own null is a reliable deletion signal;
+      // evicting the cache on anyone else's denial would force a
+      // re-resolve query on every subsequent forbidden GET for a card that
+      // never moved.
+      const ownerActingAlone =
+        auth.principalId === ownerEntityId && auth.subjectId === ownerEntityId;
+      if (ownerActingAlone) cachedOwnerRecordId = null;
       throw new StackNotFoundError('Entity record not found');
     }
     return c.json(serializeRecord(record));
@@ -64,6 +73,9 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
         .forSession(auth)
         .update(id, (body.content ?? {}) as Record<string, unknown>);
     } catch (err) {
+      // requireOwner() above already restricts this handler to the owner
+      // acting alone, so unlike GET's, a StackNotFoundError here can only
+      // mean the card is genuinely gone — never a permission denial.
       if (err instanceof StackNotFoundError) cachedOwnerRecordId = null;
       throw err;
     }

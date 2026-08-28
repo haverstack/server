@@ -19,13 +19,16 @@ describe('Associations', () => {
     return t.ctx.stack.create(TYPE_ID, { text: 'Hello' });
   }
 
-  it('POST adds a tag association', async () => {
+  it('POST adds a tag association and answers with the updated record', async () => {
     const record = await seedRecord();
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
       body: { kind: 'tag', label: 'starred' },
     });
-    expect(status).toBe(204);
+    expect(status).toBe(200);
+    expect((data as Record<string, unknown>).associations).toEqual([
+      { kind: 'tag', label: 'starred' },
+    ]);
   });
 
   it('GET returns all associations', async () => {
@@ -53,14 +56,15 @@ describe('Associations', () => {
     expect(assocs.every((a) => a.kind === 'tag')).toBe(true);
   });
 
-  it('POST .../associations/delete removes an association', async () => {
+  it('POST .../associations/delete removes an association and answers with the updated record', async () => {
     const record = await seedRecord();
     await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
       token: TEST_TOKEN,
       body: { kind: 'tag', label: 'starred' },
     });
-    expect(status).toBe(204);
+    expect(status).toBe(200);
+    expect((data as Record<string, unknown>).associations).toBeUndefined();
     const after = await t.ctx.adapter.getRecord(record.id);
     expect(after?.associations?.some((a) => a.label === 'starred')).toBeFalsy();
   });
@@ -73,7 +77,7 @@ describe('Associations', () => {
         body: { kind: 'tag', label: 'starred' },
         headers: { 'If-Match': `"${record.version}"` },
       });
-      expect(status).toBe(204);
+      expect(status).toBe(200);
     });
 
     it('POST /associations returns 412 version_conflict on an If-Match mismatch', async () => {
@@ -96,7 +100,7 @@ describe('Associations', () => {
         body: { kind: 'tag', label: 'starred' },
         headers: { 'If-Match': `"${current!.version}"` },
       });
-      expect(status).toBe(204);
+      expect(status).toBe(200);
     });
 
     it('POST /associations/delete returns 412 version_conflict on an If-Match mismatch', async () => {

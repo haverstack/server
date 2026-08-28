@@ -61,11 +61,33 @@ describe('GET /entity', () => {
     expect(content.name).toBe('Test Entity');
   });
 
-  it('returns 403 for a non-owner authenticated entity', async () => {
+  it('returns 404, not 403, for a non-owner authenticated entity (anti-oracle rule)', async () => {
     await seedEntityRecord(t.ctx);
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
     const { status } = await req(t.app, 'GET', '/entity', { token });
-    expect(status).toBe(403);
+    expect(status).toBe(404);
+  });
+
+  it("a non-owner's denial does not evict the cached owner record id", async () => {
+    await seedEntityRecord(t.ctx);
+    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const querySpy = vi.spyOn(t.ctx.stack, 'query');
+
+    // Populate the cache, then have a non-owner get denied against it. The
+    // denied request may itself run a query internally to evaluate the
+    // permission grant — that's unrelated to the id cache this test is
+    // pinning down, so only the *delta* across it matters below.
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+    const { status: deniedStatus } = await req(t.app, 'GET', '/entity', { token });
+    expect(deniedStatus).toBe(404);
+    const countAfterDenial = querySpy.mock.calls.length;
+
+    // The card was never deleted, so a well-behaved cache doesn't re-resolve
+    // it on the next request — a non-owner's null read() is ambiguous
+    // (denied vs. gone) and must not be trusted to evict a valid entry. A
+    // stale eviction would show up here as an extra query call.
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
+    expect(querySpy.mock.calls.length).toBe(countAfterDenial);
   });
 
   it('returns 401 for an unauthenticated request', async () => {

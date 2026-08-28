@@ -160,7 +160,15 @@ describe('discovery fixtures', () => {
     assertCoverage(
       discoveryFixtures.map((f) => f.name),
       handled,
-      new Set(),
+      new Set([
+        // This server has no change feed yet — no src/routes/changes.ts, no
+        // `changes` key in discovery. Advertising one before GET /changes
+        // exists would be worse than not advertising it at all (clients call
+        // supportsChangeFeed() and fail locally when absent). Land with #82
+        // (GET /changes) and #83 (discovery advertisement) — see #78.
+        'discovery-advertises-a-change-feed',
+        'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
+      ]),
     );
   });
 });
@@ -371,6 +379,31 @@ describe('patchContent fixtures', () => {
     expect(d.version).toBe(fixture.responseBody!.version);
   });
 
+  test('patch-record-restamps-the-actor', async () => {
+    const fixture = patchContentFixtures.find((f) => f.name === 'patch-record-restamps-the-actor')!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'original' },
+      {
+        entityId: TEST_ENTITY_ID,
+        permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: true }],
+      },
+    );
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token,
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const d = data as Record<string, unknown>;
+    expect(d.content).toEqual(fixture.responseBody!.content);
+    // Authorship (entityId) is untouched by a non-author write; updatedBy
+    // moves to the requester who made this edit.
+    expect(d.entityId).toBe(TEST_ENTITY_ID);
+    expect(d.updatedBy).toBe(CONTRIBUTOR_ID);
+  });
+
   test('coverage', () => {
     assertCoverage(
       patchContentFixtures.map((f) => f.name),
@@ -549,8 +582,11 @@ describe('setPermissions fixtures', () => {
       body: fixture.requestBody,
     });
     expect(status).toBe(fixture.responseStatus);
-    const anon = await req(t.app, 'GET', `/records/${record.id}`);
-    expect(anon.status).toBe(403);
+    // Anonymous can't tell "made private" from "never existed" (#79's
+    // anti-oracle rule) — 404 + WWW-Authenticate, not 403.
+    const anon = await t.app.request(`/records/${record.id}`);
+    expect(anon.status).toBe(404);
+    expect(anon.headers.get('WWW-Authenticate')).toBe('Bearer');
   });
 
   test('coverage', () => {
@@ -763,11 +799,38 @@ describe('error response fixtures', () => {
     }
   }
 
-  test('error-permission-denied — write without a grant', async () => {
+  test('error-permission-denied — can read, no write grant', async () => {
     const fixture = find('error-permission-denied');
+    // Readability is what earns the 403 (see error-not-found-record-the-
+    // requester-cannot-read below) — a write-only-denied requester still
+    // needs an explicit read grant, or this would hit the anti-oracle 404
+    // instead of the permission check this fixture pins.
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'x' },
+      { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+    );
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-not-found-record-the-requester-cannot-read — the anti-oracle rule', async () => {
+    const fixture = find('error-not-found-record-the-requester-cannot-read');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-validation-permission-write-without-read', async () => {
+    const fixture = find('error-validation-permission-write-without-read');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(
+      fixture,
+      TEST_TOKEN,
+      `/records/${record.id}/permissions`,
+    );
     expectError(status, data, fixture);
   });
 

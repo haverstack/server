@@ -107,10 +107,11 @@ describe('Records', () => {
       expect(status).toBe(404);
     });
 
-    it('anonymous gets 403 for a private record', async () => {
+    it('anonymous gets 404 + WWW-Authenticate for a private record, not 403', async () => {
       const record = await seedRecord(t.ctx);
-      const { status } = await req(t.app, 'GET', `/records/${record.id}`);
-      expect(status).toBe(403);
+      const res = await t.app.request(`/records/${record.id}`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('WWW-Authenticate')).toBe('Bearer');
     });
 
     it('anonymous can read a public record', async () => {
@@ -139,11 +140,14 @@ describe('Records', () => {
       expect(status).toBe(200);
     });
 
-    it('entity without a grant gets 403', async () => {
+    it('entity without a grant gets 404, not 403, and no WWW-Authenticate (already authenticated)', async () => {
       const record = await seedRecord(t.ctx);
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
-      const { status } = await req(t.app, 'GET', `/records/${record.id}`, { token });
-      expect(status).toBe(403);
+      const res = await t.app.request(`/records/${record.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(res.status).toBe(404);
+      expect(res.headers.get('WWW-Authenticate')).toBeNull();
     });
   });
 
@@ -325,10 +329,13 @@ describe('Records', () => {
   });
 
   describe('DELETE /records/:id', () => {
-    it('soft-deletes by default', async () => {
+    it('soft-deletes by default, answering with the deleted record', async () => {
       const record = await seedRecord(t.ctx);
-      const { status } = await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
-      expect(status).toBe(204);
+      const { status, data } = await req(t.app, 'DELETE', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(200);
+      expect((data as Record<string, unknown>).deletedAt).toBeDefined();
       const after = await t.ctx.adapter.getRecord(record.id);
       expect(after?.deletedAt).toBeDefined();
     });
@@ -352,7 +359,7 @@ describe('Records', () => {
       );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status } = await req(t.app, 'DELETE', `/records/${record.id}`, { token });
-      expect(status).toBe(204);
+      expect(status).toBe(200);
       const after = await t.ctx.adapter.getRecord(record.id);
       expect(after?.deletedAt).toBeDefined();
     });
@@ -377,7 +384,7 @@ describe('Records', () => {
         token: TEST_TOKEN,
         headers: { 'If-Match': `"${record.version}"` },
       });
-      expect(status).toBe(204);
+      expect(status).toBe(200);
     });
 
     it('returns 412 version_conflict on an If-Match mismatch, leaving the record untouched', async () => {
@@ -499,10 +506,21 @@ describe('Records', () => {
       expect(status).toBe(403);
     });
 
-    it('returns 403 when non-owner tries to soft-DELETE a grant record', async () => {
-      const [grantRecord] = await t.ctx.stack.grant(OTHER_ENTITY_ID, [
-        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
-      ]);
+    it('returns 403 when non-owner tries to soft-DELETE a grant record, even with direct write permission on it', async () => {
+      // stack.grant() doesn't give the grantee read access to the grant
+      // record itself, only to what it grants — which would now 404 under
+      // the anti-oracle rule rather than exercise the write-protection fence
+      // this test targets. Set an explicit read+write permission directly on
+      // the grant record instead (same approach as the PATCH sibling above)
+      // so the requester can read it, and the refusal proven here is really
+      // "_grant records refuse deletion" rather than "can't read it".
+      const grantRecord = await t.ctx.stack.create(
+        GRANT_TYPE_ID,
+        { typeId: NOTE_TYPE_ID, actions: ['read-own'] },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        },
+      );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
 
       const { status } = await req(t.app, 'DELETE', `/records/${grantRecord.id}`, { token });
@@ -532,7 +550,7 @@ describe('Records', () => {
       const { status } = await req(t.app, 'DELETE', `/records/${grantRecord.id}`, {
         token: TEST_TOKEN,
       });
-      expect(status).toBe(204);
+      expect(status).toBe(200);
       const after = await t.ctx.adapter.getRecord(grantRecord.id);
       expect(after?.deletedAt).toBeDefined();
     });
@@ -942,15 +960,16 @@ describe('Records', () => {
   });
 
   describe('PUT/GET /records/:id/permissions', () => {
-    it('PUT replaces permissions and returns 204 with no body', async () => {
+    it('PUT replaces permissions and returns the updated record', async () => {
       const record = await seedRecord(t.ctx);
       const res = await t.app.request(`/records/${record.id}/permissions`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ permissions: [{ access: 'public' }] }),
       });
-      expect(res.status).toBe(204);
-      expect(await res.text()).toBe('');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { permissions: unknown[] };
+      expect(body.permissions).toEqual([{ access: 'public' }]);
 
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status: anonStatus } = await req(t.app, 'GET', `/records/${record.id}`);
@@ -969,8 +988,12 @@ describe('Records', () => {
         token: TEST_TOKEN,
         body: { permissions: [] },
       });
-      const { status } = await req(t.app, 'GET', `/records/${record.id}`);
-      expect(status).toBe(403);
+      // Anonymous can no longer tell "made private" from "never existed" —
+      // the anti-oracle rule (#79) — so this is 404 + WWW-Authenticate, not
+      // 403 or a bodyless 401.
+      const res = await t.app.request(`/records/${record.id}`);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('WWW-Authenticate')).toBe('Bearer');
     });
 
     it('GET returns the current permissions', async () => {
@@ -1009,7 +1032,7 @@ describe('Records', () => {
         body: { permissions: [{ access: 'public' }] },
         headers: { 'If-Match': `"${record.version}"` },
       });
-      expect(status).toBe(204);
+      expect(status).toBe(200);
     });
 
     it('PUT returns 412 version_conflict on an If-Match mismatch', async () => {

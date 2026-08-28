@@ -144,16 +144,19 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json(serializeRecord(updated));
   });
 
-  // DELETE /records/:id  (?hard=true for permanent)
+  // DELETE /records/:id  (?hard=true for permanent). A soft delete bumps
+  // the version like any other mutation, so it answers with the record it
+  // produced (carrying deletedAt); a hard delete leaves nothing to answer
+  // with, so that one stays 204.
   app.delete('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
+    const session = stack.forSession(auth);
 
-    await stack
-      .forSession(auth)
-      .delete(id, { hard, ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    return c.body(null, 204);
+    await session.delete(id, { hard, ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    if (hard) return c.body(null, 204);
+    return c.json(serializeRecord((await session.get(id))!));
   });
 
   // POST /records/:id/undelete — reverses a soft delete; idempotent
@@ -183,10 +186,11 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth')!;
     const body = await readJson<{ permissions: Permission[] }>(c);
     if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
-    await stack
-      .forSession(auth)
-      .setPermissions(id, body.permissions, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    return c.body(null, 204);
+    const session = stack.forSession(auth);
+    await session.setPermissions(id, body.permissions, {
+      ifVersion: parseIfMatch(c.req.header('If-Match')),
+    });
+    return c.json(serializeRecord((await session.get(id))!));
   });
 
   // ------------------------------------------------------------------
@@ -211,10 +215,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth')!;
     const body = await readJson<Association>(c);
     if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
-    await stack
-      .forSession(auth)
-      .associate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    return c.body(null, 204);
+    const session = stack.forSession(auth);
+    await session.associate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    return c.json(serializeRecord((await session.get(id))!));
   });
 
   // POST, not DELETE — a DELETE request body has no defined semantics
@@ -224,10 +227,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<Association>(c);
-    await stack
-      .forSession(auth)
-      .dissociate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    return c.body(null, 204);
+    const session = stack.forSession(auth);
+    await session.dissociate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    return c.json(serializeRecord((await session.get(id))!));
   });
 
   // ------------------------------------------------------------------
