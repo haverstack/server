@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Logger } from 'pino';
 import type { StackContext } from '../src/stack.js';
 import { createShutdownHandler, type ShutdownServer } from '../src/shutdown.js';
+import { ChangeStreamRegistry } from '../src/lib/changeStreams.js';
 
 function fakeLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
@@ -19,6 +20,7 @@ function fakeCtx(): StackContext {
     queryWorker: {
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as StackContext['queryWorker'],
+    changeStreams: new ChangeStreamRegistry(),
   };
 }
 
@@ -87,6 +89,17 @@ describe('createShutdownHandler', () => {
     expect(logger.warn).toHaveBeenCalled();
     expect(ctx.queryWorker.close).toHaveBeenCalled();
     expect(ctx.stack.flush).toHaveBeenCalled();
+  });
+
+  it('closes every open change-feed stream before waiting on server.close()', async () => {
+    const server: ShutdownServer = { close: (cb) => cb() };
+    const ctx = fakeCtx();
+    const closeStream = vi.fn();
+    ctx.changeStreams.add(closeStream);
+
+    await createShutdownHandler(server, ctx, fakeLogger(), 10_000)('SIGTERM');
+
+    expect(closeStream).toHaveBeenCalled();
   });
 
   it('tolerates a server with no closeAllConnections (e.g. Http2Server typings)', async () => {

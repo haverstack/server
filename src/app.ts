@@ -11,6 +11,7 @@ import { errorMiddleware } from './middleware/errors.js';
 import { wellknownRoutes } from './routes/wellknown.js';
 import { healthRoutes } from './routes/health.js';
 import { recordRoutes } from './routes/records.js';
+import { changeRoutes } from './routes/changes.js';
 import { typeRoutes } from './routes/types.js';
 import { attachmentRoutes } from './routes/attachments.js';
 import { entityRoutes } from './routes/entity.js';
@@ -40,7 +41,12 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
             ? config.corsOrigins.split(',').map((s) => s.trim())
             : [],
       allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
-      allowHeaders: ['Authorization', 'Content-Type', 'Content-Disposition'],
+      // Last-Event-ID: a browser client resuming GET /changes sends it as a
+      // plain request header (fetch, not EventSource, per the feed's own
+      // no-token-in-the-URL rule) — omitted from the preflight allowlist,
+      // a cross-origin resume attempt never reaches the route that answers
+      // it with `reset`.
+      allowHeaders: ['Authorization', 'Content-Type', 'Content-Disposition', 'Last-Event-ID'],
       exposeHeaders: ['X-Request-Id', 'Content-Disposition'],
     }),
   );
@@ -71,6 +77,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/.well-known', wellknownRoutes(ctx, config));
   app.route('/health', healthRoutes());
   app.route('/records', recordRoutes(ctx, config.queryTimeoutMs));
+  app.route('/changes', changeRoutes(ctx, config));
   app.route('/types', typeRoutes(ctx));
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
   app.route('/entity', entityRoutes(ctx));
