@@ -40,6 +40,8 @@ import {
   authChallengeFixtures,
   authTokenFixtures,
   authSequenceFixtures,
+  changeFeedFixtures,
+  changeFeedSequenceFixtures,
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
 } from '@haverstack/conformance-fixtures';
@@ -981,6 +983,47 @@ describe('error response fixtures', () => {
     assertCoverage(
       errorResponseFixtures.map((f) => f.name),
       handled,
+      SKIPPED,
+    );
+  });
+});
+
+// -------------------------------------------------------
+// Change feed (#78): no src/routes/changes.ts yet, so every fixture below
+// is necessarily skipped rather than dispatched. This block's value is the
+// coverage gate — it fails loudly the moment core adds, removes, or
+// renames a change-feed fixture nobody updated these SKIPPED reasons for.
+//
+// A change-feed fixture isn't a request/response pair like every other
+// block here: it pins an ordered stream of frames a connection sees,
+// optionally across mutations made while it's open. tests/changeFeedClient.ts
+// carries the streaming dispatch helper (SSEDecoder + openChangeFeed) that
+// #82 dispatches these fixtures through, once GET /changes exists to
+// dispatch them against.
+// -------------------------------------------------------
+
+describe('changeFeed fixtures', () => {
+  // GET /changes doesn't exist yet — land the dispatch block in #82.
+  const SKIPPED = new Set(changeFeedFixtures.map((f) => f.name));
+
+  test('coverage', () => {
+    assertCoverage(
+      changeFeedFixtures.map((f) => f.name),
+      new Set(),
+      SKIPPED,
+    );
+  });
+});
+
+describe('changeFeed sequence fixtures', () => {
+  // Both stay skipped even once #82 lands GET /changes — resume support
+  // (Last-Event-ID / ?since=, the per-session buffer) is #84's work.
+  const SKIPPED = new Set(changeFeedSequenceFixtures.map((f) => f.name));
+
+  test('coverage', () => {
+    assertCoverage(
+      changeFeedSequenceFixtures.map((f) => f.name),
+      new Set(),
       SKIPPED,
     );
   });
