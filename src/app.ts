@@ -44,7 +44,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
       exposeHeaders: ['X-Request-Id', 'Content-Disposition'],
     }),
   );
-  app.onError(errorMiddleware(logger));
+  app.onError(errorMiddleware(logger, ctx.stack));
   app.use(authMiddleware(config.ownerToken, ctx));
 
   // Cap request body size globally — not per-prefix, so a route added later

@@ -13,10 +13,16 @@ import type { StackContext } from '../../src/stack.js';
 import { rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-function spyLogger(): Logger & { warn: ReturnType<typeof vi.fn> } {
-  return { warn: vi.fn(), error: vi.fn(), info: vi.fn() } as unknown as Logger & {
-    warn: ReturnType<typeof vi.fn>;
-  };
+function spyLogger(): Logger & {
+  warn: ReturnType<typeof vi.fn>;
+  debug: ReturnType<typeof vi.fn>;
+} {
+  return {
+    warn: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  } as unknown as Logger & { warn: ReturnType<typeof vi.fn>; debug: ReturnType<typeof vi.fn> };
 }
 
 describe('errorMiddleware — denied-but-verified logging', () => {
@@ -64,6 +70,77 @@ describe('errorMiddleware — denied-but-verified logging', () => {
     const { status } = await req(app, 'GET', '/tokens', { token: TEST_TOKEN });
     expect(status).toBe(200);
     expect(warn.warn).not.toHaveBeenCalled();
+  });
+});
+
+const NOTE_TYPE_ID = 'com.example.test/note@1';
+
+describe('errorMiddleware — refusal logging (StackNotFoundError)', () => {
+  let dbPath: string;
+  let ctx: StackContext;
+
+  beforeEach(async () => {
+    dbPath = tempDbPath();
+    ctx = await createTestContext(dbPath);
+    await ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
+      body: { kind: 'text' as const, required: true as const },
+    });
+  });
+
+  afterEach(async () => {
+    await ctx.queryWorker.close();
+    await ctx.stack.close();
+    await ctx.tokens.close();
+    await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('logs existed: true for a verified requester denied read on an existing record', async () => {
+    const record = await ctx.stack.create(NOTE_TYPE_ID, { body: 'private' });
+    const { token } = await ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const debug = spyLogger();
+    const app = createApp(ctx, testConfig(dbPath), debug);
+
+    const { status } = await req(app, 'GET', `/records/${record.id}`, { token });
+    expect(status).toBe(404);
+    expect(debug.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalId: OTHER_ENTITY_ID,
+        subjectId: OTHER_ENTITY_ID,
+        recordId: record.id,
+        existed: true,
+        check: 'read',
+      }),
+      expect.stringMatching(/refus/i),
+    );
+  });
+
+  it('logs existed: false for a verified requester on a genuinely missing record', async () => {
+    const { token } = await ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const debug = spyLogger();
+    const app = createApp(ctx, testConfig(dbPath), debug);
+
+    const { status } = await req(app, 'GET', '/records/nonexistent', { token });
+    expect(status).toBe(404);
+    expect(debug.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalId: OTHER_ENTITY_ID,
+        subjectId: OTHER_ENTITY_ID,
+        recordId: 'nonexistent',
+        existed: false,
+        check: 'read',
+      }),
+      expect.stringMatching(/refus/i),
+    );
+  });
+
+  it('does not log for an anonymous 404 on a private record', async () => {
+    const record = await ctx.stack.create(NOTE_TYPE_ID, { body: 'private' });
+    const debug = spyLogger();
+    const app = createApp(ctx, testConfig(dbPath), debug);
+
+    const { status } = await req(app, 'GET', `/records/${record.id}`);
+    expect(status).toBe(404);
+    expect(debug.debug).not.toHaveBeenCalled();
   });
 });
 
