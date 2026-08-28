@@ -33,6 +33,15 @@ export function errorMiddleware(logger: Logger): ErrorHandler<AppEnv> {
           'Denied a verified requester',
         );
       }
+      // An anonymous requester gets the same 404 for a private record as for
+      // a missing one (docs/spec/wire-format.md § Server implementation
+      // checklist): a bare 403 or 401 here would confirm the record exists
+      // to a caller who presented no credential at all. `WWW-Authenticate`
+      // keeps the login prompt reachable without reopening that
+      // distinction — RFC 7235's standard scheme for a bearer-token API is
+      // `Bearer` (RFC 6750 §3), not the higher-level `did-challenge`
+      // exchange discovery advertises for obtaining that token.
+      if (wire.status === 404 && !auth) c.header('WWW-Authenticate', 'Bearer');
       return c.json(wire.body, wire.status as ContentfulStatusCode);
     }
     logger.error({ err, requestId: c.get('requestId') }, 'Unhandled request error');
