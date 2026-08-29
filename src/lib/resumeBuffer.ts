@@ -111,21 +111,37 @@ export type ResumeBufferKeyParts = {
  * order-independent on the parts of `filter` that don't carry order of
  * their own (`typeId`/`kinds` are matched as sets, not sequences, so
  * re-sending them in a different order must key the same buffer).
+ *
+ * Two filters that mean different things must never key the same buffer.
+ * A buffer opens exactly one `ScopedStack.subscribe()`, carrying the
+ * filter of whichever connection minted it, so a collision hands one of
+ * the two colliding connections the *other's* filter: either a silent gap
+ * (events it asked for and never hears about, with no `reset` to tell it
+ * so) or frames outside its filter, which "filtering is exact, not
+ * advisory" forbids. See docs/spec/wire-format.md § Change feed.
+ *
+ * Hence an object rather than a positional array: `JSON.stringify` drops
+ * an undefined *property* but renders an undefined *array element* as
+ * `null`, which collapsed "no parentId filter" onto `parentId: null`
+ * ("root records only" — a filter the wire format defines) when both were
+ * array slots. Absent is now encoded as an absent key, which no present
+ * value can imitate. Key order is fixed by construction below.
  */
 export function resumeBufferKey(parts: ResumeBufferKeyParts): string {
-  const typeId = parts.filter.typeId
-    ? [...(Array.isArray(parts.filter.typeId) ? parts.filter.typeId : [parts.filter.typeId])].sort()
+  const { filter } = parts;
+  const typeId = filter.typeId
+    ? [...(Array.isArray(filter.typeId) ? filter.typeId : [filter.typeId])].sort()
     : undefined;
-  const kinds = parts.filter.kinds ? [...parts.filter.kinds].sort() : undefined;
-  return JSON.stringify([
-    parts.principalId,
-    parts.subjectId,
-    typeId,
-    parts.filter.parentId,
-    parts.filter.entityId,
-    kinds,
-    parts.includeRecords,
-  ]);
+  const kinds = filter.kinds ? [...filter.kinds].sort() : undefined;
+  return JSON.stringify({
+    principalId: parts.principalId,
+    subjectId: parts.subjectId,
+    includeRecords: parts.includeRecords,
+    ...(typeId !== undefined && { typeId }),
+    ...(filter.parentId !== undefined && { parentId: filter.parentId }),
+    ...(filter.entityId !== undefined && { entityId: filter.entityId }),
+    ...(kinds !== undefined && { kinds }),
+  });
 }
 
 export type ResumeBufferRegistryOptions = {
@@ -145,6 +161,14 @@ export class ResumeBufferRegistry {
   private readonly buffers = new Map<string, ResumeBuffer>();
   private readonly unsubscribes = new Map<string, Unsubscribe>();
   private readonly evictionTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * Buffers whose subscription is still opening. A key lands in `buffers`
+   * only once its `ScopedStack.subscribe()` has resolved, so this is what
+   * keeps two connections arriving in the same tick from opening two
+   * subscriptions for one key — they await the same attempt and share
+   * whichever way it settles.
+   */
+  private readonly acquiring = new Map<string, Promise<ResumeBuffer>>();
 
   constructor(private readonly opts: ResumeBufferRegistryOptions) {}
 
@@ -152,6 +176,12 @@ export class ResumeBufferRegistry {
    * Get this key's buffer, creating one and opening its scoped subscription
    * if none is currently retained. `subscribeToStack` is called at most
    * once per buffer instance.
+   *
+   * A failed subscription registers nothing: the next connection on this
+   * key retries it. Registering a buffer that nothing is feeding would
+   * hand every later connection on that key a `ready` frame followed by
+   * permanent silence — a gap with no `reset` to announce it, which is
+   * the one failure the feed contract calls untrustworthy.
    */
   async acquire(
     key: string,
@@ -165,21 +195,34 @@ export class ResumeBufferRegistry {
       return existing;
     }
 
-    const buffer = new ResumeBuffer(this.opts.depth);
-    this.buffers.set(key, buffer);
-    buffer.liveCount = 1;
-    // Registered before the promise settles is fine either way — the
-    // handler closes over `buffer`, not over the unsubscribe function this
-    // call eventually returns, so nothing here depends on ordering between
-    // the two.
-    const unsubscribe = await subscribeToStack((change) => {
-      buffer.append(change);
-    });
-    // A concurrent release() + eviction could in principle have already
-    // dropped this key before subscribeToStack() resolved; re-store to be
-    // sure the unsubscribe we now hold is reachable for cleanup either way.
-    this.unsubscribes.set(key, unsubscribe);
-    return buffer;
+    const inFlight = this.acquiring.get(key);
+    if (inFlight) {
+      const buffer = await inFlight;
+      buffer.liveCount += 1;
+      return buffer;
+    }
+
+    const attempt = (async () => {
+      const buffer = new ResumeBuffer(this.opts.depth);
+      // Awaited before either map is touched — the handler closes over
+      // `buffer`, so anything the stack emits while this is in flight is
+      // already being recorded by the time the buffer becomes reachable.
+      const unsubscribe = await subscribeToStack((change) => {
+        buffer.append(change);
+      });
+      this.buffers.set(key, buffer);
+      this.unsubscribes.set(key, unsubscribe);
+      return buffer;
+    })();
+    this.acquiring.set(key, attempt);
+
+    try {
+      const buffer = await attempt;
+      buffer.liveCount += 1;
+      return buffer;
+    } finally {
+      this.acquiring.delete(key);
+    }
   }
 
   /** Detach one connection from this key's buffer, starting its retention countdown once none remain. */
@@ -215,6 +258,7 @@ export class ResumeBufferRegistry {
   closeAll(): void {
     for (const timer of this.evictionTimers.values()) clearTimeout(timer);
     this.evictionTimers.clear();
+    this.acquiring.clear();
     for (const unsubscribe of this.unsubscribes.values()) unsubscribe();
     this.unsubscribes.clear();
     this.buffers.clear();

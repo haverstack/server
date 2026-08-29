@@ -55,10 +55,10 @@ import {
   testConfig,
   TEST_TOKEN,
   TEST_ENTITY_ID,
+  logger,
   type TestApp,
 } from './setup.js';
 import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
-import { wellknownRoutes } from '../src/routes/wellknown.js';
 import { changeRoutes } from '../src/routes/changes.js';
 import { authMiddleware } from '../src/middleware/auth.js';
 import type { AppEnv } from '../src/types.js';
@@ -126,6 +126,15 @@ function assertCoverage(names: string[], handled: Set<string>, skipped: Set<stri
 // -------------------------------------------------------
 
 describe('discovery fixtures', () => {
+  const SKIPPED = new Set([
+    // Describes a conformant server that neither resumes nor includes
+    // records. This server does both — #84 mints and honors cursors, #82
+    // honors `?include=record` — so the only way to produce this response
+    // would be an override that lets discovery contradict the route beside
+    // it, on a field clients are entitled to act on without asking again.
+    // The shape is exercised by whichever implementation actually has it.
+    'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
+  ]);
   const handled = new Set<string>();
 
   test('discovery-declares-protocol-version-and-capabilities', async () => {
@@ -186,35 +195,11 @@ describe('discovery fixtures', () => {
     expect(changes!.records).toBe(true);
   });
 
-  test('discovery-advertises-a-feed-that-neither-resumes-nor-includes-records', async () => {
-    const fixture = discoveryFixtures.find(
-      (f) => f.name === 'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
-    )!;
-    handled.add(fixture.name);
-    // Both flags false is fully conformant, but this server always honors
-    // both resume and `?include=record` — it has no real deployer toggle
-    // for either (see WellknownRouteOptions in src/routes/wellknown.ts).
-    // Build a standalone app that passes the test-only overrides directly,
-    // the same way tests/routes/changes.test.ts bypasses createApp() to
-    // pass ChangeRouteOptions createApp() has no way to thread through.
-    const app = new Hono<AppEnv>();
-    app.route(
-      '/.well-known',
-      wellknownRoutes(t.ctx, testConfig(t.dbPath), {
-        changeFeedRecords: false,
-        changeFeedResume: false,
-      }),
-    );
-    const { status, data } = await req(app, fixture.method, fixture.path);
-    expect(status).toBe(fixture.responseStatus);
-    expect((data as { changes?: unknown }).changes).toEqual(fixture.responseBody!.changes);
-  });
-
   test('coverage', () => {
     assertCoverage(
       discoveryFixtures.map((f) => f.name),
       handled,
-      new Set(),
+      SKIPPED,
     );
   });
 });
@@ -1292,7 +1277,10 @@ describe('changeFeed fixtures', () => {
     // `changeFeedResume: false` app above.
     const resumeDisabledApp = new Hono<AppEnv>();
     resumeDisabledApp.use(authMiddleware(testConfig(t.dbPath).ownerToken, t.ctx));
-    resumeDisabledApp.route('/', changeRoutes(t.ctx, testConfig(t.dbPath), { resume: false }));
+    resumeDisabledApp.route(
+      '/',
+      changeRoutes(t.ctx, testConfig(t.dbPath), logger, { resume: false }),
+    );
     const conn = await openChangeFeed(resumeDisabledApp, '/', {
       token: TEST_TOKEN,
       headers: { 'Last-Event-ID': 'AA3f1R' },
@@ -1395,7 +1383,7 @@ describe('changeFeed sequence fixtures', () => {
     resumeApp.use(authMiddleware(config.ownerToken, t.ctx));
     resumeApp.route(
       '/changes',
-      changeRoutes(t.ctx, config, { resume: true, resumeRetentionMs: 10 }),
+      changeRoutes(t.ctx, config, logger, { resume: true, resumeRetentionMs: 10 }),
     );
 
     const first = await openChangeFeed(resumeApp, fixture.steps[0]!.path, { token: TEST_TOKEN });

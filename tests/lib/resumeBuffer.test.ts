@@ -119,6 +119,42 @@ describe('resumeBufferKey', () => {
     const keys = new Set([anon, authed, filtered, withRecords]);
     expect(keys.size).toBe(4);
   });
+
+  // A buffer opens one subscription carrying the filter of whichever
+  // connection minted it, so a collision here hands one of the two the
+  // other's filter — a silent gap in one direction, frames outside the
+  // filter in the other. `parentId` is the case a positional
+  // JSON.stringify got wrong: `undefined` renders as `null` inside an
+  // array, so "no parentId filter" and `parentId: null` collapsed onto
+  // one key.
+  it('distinguishes an absent parentId filter from parentId: null', () => {
+    const base = { principalId: null, subjectId: null, includeRecords: false };
+    const unfiltered = resumeBufferKey({ ...base, filter: {} });
+    const rootsOnly = resumeBufferKey({ ...base, filter: { parentId: null } });
+    const oneParent = resumeBufferKey({ ...base, filter: { parentId: 'rec-1' } });
+
+    expect(new Set([unfiltered, rootsOnly, oneParent]).size).toBe(3);
+  });
+
+  it('distinguishes an absent filter field from every value that field can hold', () => {
+    const base = { principalId: null, subjectId: null, includeRecords: false };
+    expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
+      resumeBufferKey({ ...base, filter: { entityId: 'e1' } }),
+    );
+    expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
+      resumeBufferKey({ ...base, filter: { typeId: [] } }),
+    );
+    expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
+      resumeBufferKey({ ...base, filter: { kinds: [] } }),
+    );
+  });
+
+  it("does not let one field's value imitate another's", () => {
+    const base = { principalId: null, subjectId: null, includeRecords: false };
+    expect(resumeBufferKey({ ...base, filter: { parentId: 'x' } })).not.toBe(
+      resumeBufferKey({ ...base, filter: { entityId: 'x' } }),
+    );
+  });
 });
 
 describe('ResumeBufferRegistry', () => {
@@ -213,5 +249,69 @@ describe('ResumeBufferRegistry', () => {
 
     expect(unsubscribeA).toHaveBeenCalledTimes(1);
     expect(unsubscribeB).toHaveBeenCalledTimes(1);
+  });
+
+  // Registering a buffer nothing is feeding would answer every later
+  // connection on that key with `ready` and then permanent silence — a gap
+  // with no `reset` to announce it.
+  it('registers nothing when the subscription fails, and retries on the next acquire', async () => {
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const failing = vi.fn(async () => {
+      throw new Error('adapter unavailable');
+    });
+
+    await expect(registry.acquire('k', failing)).rejects.toThrow('adapter unavailable');
+
+    const unsubscribe = vi.fn();
+    const healthy = subscribeStub(unsubscribe);
+    const buffer = await registry.acquire('k', healthy);
+
+    expect(healthy).toHaveBeenCalledTimes(1);
+    expect(buffer.liveCount).toBe(1);
+
+    // And the retried buffer is genuinely fed and genuinely releasable.
+    registry.release('k');
+    expect(buffer.liveCount).toBe(0);
+  });
+
+  it('opens one subscription for two acquires that race on the same key', async () => {
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    let resolveSubscribe!: (u: Unsubscribe) => void;
+    const subscribe = vi.fn(
+      () =>
+        new Promise<Unsubscribe>((resolve) => {
+          resolveSubscribe = resolve;
+        }),
+    );
+
+    const first = registry.acquire('k', subscribe);
+    const second = registry.acquire('k', subscribe);
+    resolveSubscribe(() => {});
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(a).toBe(b);
+    expect(a.liveCount).toBe(2);
+  });
+
+  it('fails both racing acquires when the shared subscription fails, then retries', async () => {
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    let rejectSubscribe!: (err: Error) => void;
+    const failing = vi.fn(
+      () =>
+        new Promise<Unsubscribe>((_resolve, reject) => {
+          rejectSubscribe = reject;
+        }),
+    );
+
+    const first = registry.acquire('k', failing);
+    const second = registry.acquire('k', failing);
+    rejectSubscribe(new Error('adapter unavailable'));
+    await expect(first).rejects.toThrow('adapter unavailable');
+    await expect(second).rejects.toThrow('adapter unavailable');
+
+    const healthy = subscribeStub();
+    await registry.acquire('k', healthy);
+    expect(healthy).toHaveBeenCalledTimes(1);
   });
 });
