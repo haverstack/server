@@ -22,11 +22,15 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
     "sortableFields": ["createdAt", "updatedAt", "version"],
     "maxAttachmentBytes": 52428800,
     "maxContentBytes": 1048576
-  }
+  },
+  "auth": { "methods": ["did-challenge"] },
+  "changes": { "transports": ["sse"], "resume": false, "records": true }
 }
 ```
 
 `version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.maxAttachmentBytes` and `maxContentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
+
+`changes` is a top-level field, not part of `capabilities` — a client checks it and fails locally at `open()` rather than discovering a missing feed as a 404 partway through a connection. `transports` lists what it speaks (`sse` is the only one this version defines); `resume` is `false` until cursors exist; `records` is `true` because `GET /changes` already honors `?include=record` unconditionally. Both `resume` and `records` false is also a fully conformant response — see [Change feed](#change-feed) below.
 
 ## Authentication
 

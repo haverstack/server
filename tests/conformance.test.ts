@@ -20,6 +20,7 @@
  * fixture this file hasn't been told about — that's what makes this an
  * acceptance gate rather than a snapshot of today's fixture list.
  */
+import { Hono } from 'hono';
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
 import {
   discoveryFixtures,
@@ -48,8 +49,17 @@ import {
 import type { WireRecord } from '@haverstack/wire-types';
 import { generateId, hashSchema } from '@haverstack/core';
 import type { Association } from '@haverstack/core';
-import { buildTestApp, req, TEST_TOKEN, TEST_ENTITY_ID, type TestApp } from './setup.js';
+import {
+  buildTestApp,
+  req,
+  testConfig,
+  TEST_TOKEN,
+  TEST_ENTITY_ID,
+  type TestApp,
+} from './setup.js';
 import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
+import { wellknownRoutes } from '../src/routes/wellknown.js';
+import type { AppEnv } from '../src/types.js';
 
 /**
  * Fixture ids embed a fixed, long-past timestamp (they were authored once
@@ -159,19 +169,48 @@ describe('discovery fixtures', () => {
     expect((data as { auth?: { methods: string[] } }).auth).toEqual(fixture.responseBody!.auth);
   });
 
+  test('discovery-advertises-a-change-feed', async () => {
+    const fixture = discoveryFixtures.find((f) => f.name === 'discovery-advertises-a-change-feed')!;
+    handled.add(fixture.name);
+    const { status, data } = await req(t.app, fixture.method, fixture.path);
+    expect(status).toBe(fixture.responseStatus);
+    const changes = (data as { changes?: Record<string, unknown> }).changes;
+    expect(changes).toBeDefined();
+    expect(changes!.transports).toEqual(['sse']);
+    // resume/records mirror this server's own actual support, not the
+    // fixture's illustrative `resume: true` — #84 flips resume once cursors
+    // exist. This server already honors `?include=record` (#82), so records
+    // is true.
+    expect(changes!.resume).toBe(false);
+    expect(changes!.records).toBe(true);
+  });
+
+  test('discovery-advertises-a-feed-that-neither-resumes-nor-includes-records', async () => {
+    const fixture = discoveryFixtures.find(
+      (f) => f.name === 'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
+    )!;
+    handled.add(fixture.name);
+    // Both flags false is fully conformant, but this server always honors
+    // `?include=record` — it has no real toggle for it (see
+    // WellknownRouteOptions in src/routes/wellknown.ts). Build a standalone
+    // app that passes the test-only override directly, the same way
+    // tests/routes/changes.test.ts bypasses createApp() to pass
+    // ChangeRouteOptions createApp() has no way to thread through.
+    const app = new Hono<AppEnv>();
+    app.route(
+      '/.well-known',
+      wellknownRoutes(t.ctx, testConfig(t.dbPath), { changeFeedRecords: false }),
+    );
+    const { status, data } = await req(app, fixture.method, fixture.path);
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { changes?: unknown }).changes).toEqual(fixture.responseBody!.changes);
+  });
+
   test('coverage', () => {
     assertCoverage(
       discoveryFixtures.map((f) => f.name),
       handled,
-      new Set([
-        // This server has no change feed yet — no src/routes/changes.ts, no
-        // `changes` key in discovery. Advertising one before GET /changes
-        // exists would be worse than not advertising it at all (clients call
-        // supportsChangeFeed() and fail locally when absent). Land with #82
-        // (GET /changes) and #83 (discovery advertisement) — see #78.
-        'discovery-advertises-a-change-feed',
-        'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
-      ]),
+      new Set(),
     );
   });
 });

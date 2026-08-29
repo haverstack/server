@@ -1,6 +1,9 @@
+import { Hono } from 'hono';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { WIRE_PROTOCOL_VERSION } from '@haverstack/wire-types';
-import { buildTestApp, req, TEST_ENTITY_ID, type TestApp } from '../setup.js';
+import { buildTestApp, req, testConfig, TEST_ENTITY_ID, type TestApp } from '../setup.js';
+import { wellknownRoutes } from '../../src/routes/wellknown.js';
+import type { AppEnv } from '../../src/types.js';
 
 describe('GET /.well-known/stack', () => {
   let t: TestApp;
@@ -47,6 +50,35 @@ describe('GET /.well-known/stack', () => {
     const { data } = await req(t.app, 'GET', '/.well-known/stack');
     expect((data as { auth?: { methods: string[] } }).auth).toEqual({
       methods: ['did-challenge'],
+    });
+  });
+
+  it('advertises the change feed', async () => {
+    const { data } = await req(t.app, 'GET', '/.well-known/stack');
+    expect((data as { changes?: unknown }).changes).toEqual({
+      transports: ['sse'],
+      // Not yet: #84 mints cursors.
+      resume: false,
+      // Already: GET /changes honors ?include=record unconditionally (#82).
+      records: true,
+    });
+  });
+
+  it('can advertise a feed that neither resumes nor includes records', async () => {
+    // This server has no real deployer-facing toggle for `records` — GET
+    // /changes always honors ?include=record. changeFeedRecords is a
+    // test-only override on wellknownRoutes() itself for exercising the
+    // (fully conformant) records: false branch of the wire contract.
+    const app = new Hono<AppEnv>();
+    app.route(
+      '/.well-known',
+      wellknownRoutes(t.ctx, testConfig(t.dbPath), { changeFeedRecords: false }),
+    );
+    const { data } = await req(app, 'GET', '/.well-known/stack');
+    expect((data as { changes?: unknown }).changes).toEqual({
+      transports: ['sse'],
+      resume: false,
+      records: false,
     });
   });
 });
