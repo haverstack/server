@@ -59,6 +59,18 @@ describe('GET /changes', () => {
       });
       expect(status).toBe(400);
     });
+
+    it('rejects a charset-invalid cursor locally, as a 400, rather than as a reset frame', async () => {
+      // isValidSeq() only ever allows base64url — a space is never in that
+      // alphabet. Refused before the SSE stream even opens, not treated as
+      // a resumable-but-unrecognized cursor (#84).
+      const { status, data } = await req(t.app, 'GET', '/changes', {
+        token: TEST_TOKEN,
+        headers: { 'Last-Event-ID': 'not a valid cursor' },
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBeDefined();
+    });
   });
 
   it('never honors a bearer token passed as a query parameter', async () => {
@@ -162,4 +174,151 @@ describe('GET /changes', () => {
   // internally regardless of whether the test itself ever reads the body,
   // so the backpressure an integration test would need to simulate a
   // stalled client never actually reaches the route.
+
+  describe('resume (#84)', () => {
+    // The changeFeedSequenceFixtures dispatch in tests/conformance.test.ts
+    // covers the documented resume/reset contract itself (what a missed
+    // change and an expired cursor look like on the wire). These cover
+    // scenarios the shared fixtures don't reach: a grant revoked during the
+    // gap, a purge in the gap (not re-checkable, by design), overflow, and
+    // a cursor whose buffer doesn't match the reconnect's own filter.
+
+    it('drops a backlog frame whose grant was revoked during the gap, but still replays an unrelated one', async () => {
+      const recordA = await t.ctx.stack.create(
+        NOTE_TYPE,
+        { title: 'a' },
+        { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+      );
+      const recordB = await t.ctx.stack.create(
+        NOTE_TYPE,
+        { title: 'b' },
+        { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+      );
+      const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+
+      const conn = await openChangeFeed(t.app, '/changes', { token });
+      let cursor: string;
+      try {
+        const [ready] = await conn.waitForFrames(1);
+        cursor = (ready.data as { seq: string }).seq;
+      } finally {
+        await conn.close();
+      }
+
+      // While disconnected: edit recordA (still readable at that moment,
+      // so it's buffered), then revoke recordA's grant, then edit recordB
+      // (still readable throughout).
+      await t.ctx.stack.update(recordA.id, { title: 'a, edited' });
+      await t.ctx.stack.setPermissions(recordA.id, []);
+      await t.ctx.stack.update(recordB.id, { title: 'b, edited' });
+
+      const resumed = await openChangeFeed(t.app, '/changes', {
+        token,
+        headers: { 'Last-Event-ID': cursor },
+      });
+      try {
+        const [ready, frame] = await resumed.waitForFrames(2);
+        expect(ready.event).toBe('ready');
+        expect(frame.event).toBe('record');
+        // recordA's edit is missing from the replay — only recordB's
+        // arrives — proving it was dropped rather than merely reordered.
+        expect((frame.data as { recordId: string }).recordId).toBe(recordB.id);
+        await expect(resumed.waitForFrames(3, 300)).rejects.toThrow();
+      } finally {
+        await resumed.close();
+      }
+    });
+
+    it('replays a purge from the gap unconditionally — not re-checkable, so never dropped', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'to be purged' });
+
+      const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      let cursor: string;
+      try {
+        const [ready] = await conn.waitForFrames(1);
+        cursor = (ready.data as { seq: string }).seq;
+      } finally {
+        await conn.close();
+      }
+
+      await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token: TEST_TOKEN });
+
+      const resumed = await openChangeFeed(t.app, '/changes', {
+        token: TEST_TOKEN,
+        headers: { 'Last-Event-ID': cursor },
+      });
+      try {
+        const [, frame] = await resumed.waitForFrames(2);
+        const data = frame.data as Record<string, unknown>;
+        expect(data.kind).toBe('purged');
+        expect(data.recordId).toBe(record.id);
+      } finally {
+        await resumed.close();
+      }
+    });
+
+    it('answers overflow once depth eviction has dropped what a reconnect would need', async () => {
+      const app = testChangesApp(t.ctx, testConfig(t.dbPath), { resumeBufferDepth: 2 });
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original' });
+
+      const conn = await openChangeFeed(app, '/', { token: TEST_TOKEN });
+      let cursor: string;
+      try {
+        const [ready] = await conn.waitForFrames(1);
+        cursor = (ready.data as { seq: string }).seq;
+      } finally {
+        await conn.close();
+      }
+
+      // Three edits while disconnected against a depth-2 buffer: the first
+      // is evicted before the reconnect ever asks for it. The buffer's own
+      // subscription delivers asynchronously (core serializes a scoped
+      // delivery through its own permission-check chain), so give each
+      // append a moment to land before relying on the eviction it causes.
+      for (const title of ['v2', 'v3', 'v4']) {
+        await t.ctx.stack.update(record.id, { title });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      const resumed = await openChangeFeed(app, '/', {
+        token: TEST_TOKEN,
+        headers: { 'Last-Event-ID': cursor },
+      });
+      try {
+        const [, reset] = await resumed.waitForFrames(2);
+        expect(reset.event).toBe('reset');
+        expect((reset.data as { reason: string }).reason).toBe('overflow');
+      } finally {
+        await resumed.close();
+      }
+    });
+
+    it('resets rather than resumes when a cursor names a buffer for a different filter', async () => {
+      const conn = await openChangeFeed(t.app, `/changes?typeId=${encodeURIComponent(NOTE_TYPE)}`, {
+        token: TEST_TOKEN,
+      });
+      let cursor: string;
+      try {
+        const [ready] = await conn.waitForFrames(1);
+        cursor = (ready.data as { seq: string }).seq;
+      } finally {
+        await conn.close();
+      }
+
+      // Same session, same cursor value, but no typeId filter this time —
+      // a different key, so a different buffer. The cursor's embedded
+      // buffer id can't match it.
+      const resumed = await openChangeFeed(t.app, '/changes', {
+        token: TEST_TOKEN,
+        headers: { 'Last-Event-ID': cursor },
+      });
+      try {
+        const [, reset] = await resumed.waitForFrames(2);
+        expect(reset.event).toBe('reset');
+        expect((reset.data as { reason: string }).reason).toBe('cursor_expired');
+      } finally {
+        await resumed.close();
+      }
+    });
+  });
 });

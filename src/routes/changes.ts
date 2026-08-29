@@ -12,9 +12,11 @@ import type {
   RecordChange,
 } from '@haverstack/core';
 import { StackQueryError } from '@haverstack/core';
-import { serializeChange } from '@haverstack/wire-types';
+import { serializeChange, isValidSeq } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import { FrameGate } from '../lib/frameGate.js';
+import { decodeCursor } from '../lib/resumeCursor.js';
+import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
 
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 
@@ -33,11 +35,26 @@ const DEFAULT_SESSION_CHECK_MS = 30_000;
 // something can't repair it either, so silently dropping is worse than
 // disconnecting.
 const DEFAULT_MAX_PENDING_FRAMES = 1000;
+// Per-buffer ring depth and how long a buffer keeps being fed after its
+// last connection disconnects — see src/lib/resumeBuffer.ts. Not part of
+// the wire contract either: a client never learns these numbers, only
+// their consequence (`overflow` or `cursor_expired`).
+const DEFAULT_RESUME_BUFFER_DEPTH = 1000;
+const DEFAULT_RESUME_RETENTION_MS = 5 * 60 * 1000;
 
 export type ChangeRouteOptions = {
   keepaliveMs?: number;
   sessionCheckMs?: number;
   maxPendingFrames?: number;
+  /**
+   * Whether a presented cursor is honored at all. Default true. Exists
+   * only so a test can exercise the `resume: false` branch of the wire
+   * contract (see WellknownRouteOptions.changeFeedResume) — there's no
+   * real deployer lever here once #84 lands.
+   */
+  resume?: boolean;
+  resumeBufferDepth?: number;
+  resumeRetentionMs?: number;
 };
 
 /** Parse GET /changes' query params into a ChangeFilter. Exact, not advisory. */
@@ -74,13 +91,13 @@ function parseIncludeRecord(url: URL): boolean {
 }
 
 /**
- * A connection presenting a cursor this server can't honor. Resume isn't
- * implemented yet (#84) — every connection ships `resume: false` and
- * answers `reset` here, which is fully conformant: a client's repair is the
- * same reconcile-by-query work as a fresh connection.
+ * Raw cursor text presented on this connection, if any — `Last-Event-ID`
+ * takes priority over `?since=` (a browser EventSource-style reconnect
+ * sends the header; `?since=` exists for a client whose transport can't
+ * set one). Not yet validated or decoded — see isValidSeq()/decodeCursor().
  */
-function presentedCursor(c: Context<AppEnv>, url: URL): boolean {
-  return c.req.header('Last-Event-ID') !== undefined || url.searchParams.get('since') !== null;
+function presentedCursorRaw(c: Context<AppEnv>, url: URL): string | undefined {
+  return c.req.header('Last-Event-ID') ?? url.searchParams.get('since') ?? undefined;
 }
 
 export function changeRoutes(
@@ -92,6 +109,11 @@ export function changeRoutes(
   const keepaliveMs = opts.keepaliveMs ?? DEFAULT_KEEPALIVE_MS;
   const sessionCheckMs = opts.sessionCheckMs ?? DEFAULT_SESSION_CHECK_MS;
   const maxPendingFrames = opts.maxPendingFrames ?? DEFAULT_MAX_PENDING_FRAMES;
+  const resumeEnabled = opts.resume ?? true;
+  const resumeBuffers = new ResumeBufferRegistry({
+    depth: opts.resumeBufferDepth ?? DEFAULT_RESUME_BUFFER_DEPTH,
+    retentionMs: opts.resumeRetentionMs ?? DEFAULT_RESUME_RETENTION_MS,
+  });
 
   /** Scope to a session if authenticated, else the anonymous (public-only) view. */
   function scopeFor(auth: TokenSession | null): ScopedStack {
@@ -110,7 +132,16 @@ export function changeRoutes(
     const auth = c.get('auth');
     const filter = parseChangeFilter(url);
     const includeRecords = parseIncludeRecord(url);
-    const resetOnConnect = presentedCursor(c, url);
+    const presentedRaw = presentedCursorRaw(c, url);
+
+    // A charset-invalid cursor is refused locally rather than treated as a
+    // cache miss — it isn't a value this (or any conformant) server could
+    // ever have minted, so there's nothing to reconcile by resuming from
+    // it. isValidSeq() is the same rule this server's own minted cursors
+    // are held to on the way out.
+    if (resumeEnabled && presentedRaw !== undefined && !isValidSeq(presentedRaw)) {
+      throw new StackQueryError(`Invalid cursor: "${presentedRaw}"`);
+    }
 
     // Never accepted: a bearer token is read only from the Authorization
     // header (authMiddleware), never from a query param — the feed is
@@ -127,22 +158,100 @@ export function changeRoutes(
       const unregister = ctx.changeStreams.add(() => resolveDone());
 
       const gate = new FrameGate(maxPendingFrames, () => resolveDone());
-      function send(event: string, data: unknown): void {
-        gate.send(() => stream.writeSSE({ event, data: JSON.stringify(data) }));
+      function send(event: string, data: unknown, id?: string): void {
+        gate.send(() =>
+          stream.writeSSE({ event, data: JSON.stringify(data), ...(id !== undefined && { id }) }),
+        );
       }
 
-      send('ready', {});
-      if (resetOnConnect) {
-        const reason: ChangeResetReason = 'not_supported';
-        send('reset', { reason });
-      }
+      let unsubscribe: () => void;
 
-      const unsubscribe = await scopeFor(auth).subscribe(
-        (change: RecordChange) => {
-          send('record', serializeChange(change));
-        },
-        { filter, includeRecords },
-      );
+      if (!resumeEnabled) {
+        // `resume: false` — a discovery-conformant server that mints no
+        // cursors at all. Exists only for WellknownRouteOptions'
+        // matching test toggle; every connection here is answered exactly
+        // as #82 shipped it.
+        send('ready', {});
+        if (presentedRaw !== undefined) {
+          const reason: ChangeResetReason = 'not_supported';
+          send('reset', { reason });
+        }
+        unsubscribe = await scopeFor(auth).subscribe(
+          (change: RecordChange) => {
+            send('record', serializeChange(change));
+          },
+          { filter, includeRecords },
+        );
+      } else {
+        const key = resumeBufferKey({
+          principalId: auth?.principalId ?? null,
+          subjectId: auth?.subjectId ?? null,
+          filter,
+          includeRecords,
+        });
+        const scoped = scopeFor(auth);
+        const buffer = await resumeBuffers.acquire(key, (onChange) =>
+          scoped.subscribe(onChange, { filter, includeRecords }),
+        );
+
+        // Attached before anything below reads or awaits, so nothing this
+        // connection is owed can land in the gap between "what the backlog
+        // snapshot covers" and "what the live buffer starts reporting" —
+        // there isn't one. `replaying` buffers what arrives live while the
+        // (possibly awaited, permission-rechecking) backlog replay below is
+        // still in flight, so a change appended mid-replay can never be
+        // sent out of order ahead of an older, still-pending backlog frame.
+        let replaying = true;
+        const queued: ResumeEntry[] = [];
+        const detachLive = buffer.subscribeLive((entry) => {
+          if (replaying) queued.push(entry);
+          else send('record', entry.frame, entry.frame.seq);
+        });
+
+        let resetReason: ChangeResetReason | undefined;
+        let backlog: ResumeEntry[] = [];
+        if (presentedRaw !== undefined) {
+          const decoded = decodeCursor(presentedRaw);
+          if (!decoded || decoded.bufferId !== buffer.id) {
+            // Unrecognized outright, or names a buffer instance that isn't
+            // this key's current one (evicted past its retention window,
+            // or minted for a filter this cursor doesn't actually match).
+            resetReason = 'cursor_expired';
+          } else {
+            const outcome = buffer.entriesAfter(decoded.n);
+            if (outcome.status === 'ok') backlog = outcome.entries;
+            else resetReason = outcome.status;
+          }
+        }
+
+        send('ready', { seq: buffer.headCursor() });
+
+        if (resetReason) {
+          send('reset', { reason: resetReason });
+        } else {
+          for (const entry of backlog) {
+            // Purge frames aren't re-checkable — the mutation-time decision
+            // is the only one that will ever exist (docs/spec/events.md,
+            // quoted on issue #84). A non-purge frame's record ID is still
+            // in hand, so a grant revoked during the gap is caught here.
+            if (!entry.isPurge) {
+              const stillReadable = await scoped.get(entry.recordId);
+              if (!stillReadable) continue;
+            }
+            send('record', entry.frame, entry.frame.seq);
+          }
+        }
+
+        replaying = false;
+        for (const entry of queued) {
+          send('record', entry.frame, entry.frame.seq);
+        }
+
+        unsubscribe = () => {
+          detachLive();
+          resumeBuffers.release(key);
+        };
+      }
 
       const keepalive = setInterval(() => {
         void stream.write(': keepalive\n\n');

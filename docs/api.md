@@ -24,13 +24,13 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
     "maxContentBytes": 1048576
   },
   "auth": { "methods": ["did-challenge"] },
-  "changes": { "transports": ["sse"], "resume": false, "records": true }
+  "changes": { "transports": ["sse"], "resume": true, "records": true }
 }
 ```
 
 `version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.maxAttachmentBytes` and `maxContentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
 
-`changes` is a top-level field, not part of `capabilities` — a client checks it and fails locally at `open()` rather than discovering a missing feed as a 404 partway through a connection. `transports` lists what it speaks (`sse` is the only one this version defines); `resume` is `false` until cursors exist; `records` is `true` because `GET /changes` already honors `?include=record` unconditionally. Both `resume` and `records` false is also a fully conformant response — see [Change feed](#change-feed) below.
+`changes` is a top-level field, not part of `capabilities` — a client checks it and fails locally at `open()` rather than discovering a missing feed as a 404 partway through a connection. `transports` lists what it speaks (`sse` is the only one this version defines); `resume` is `true` — `GET /changes` mints and honors resume cursors; `records` is `true` because `GET /changes` already honors `?include=record` unconditionally. Both `resume` and `records` false is also a fully conformant response for a server that doesn't implement either — see [Change feed](#change-feed) below.
 
 ## Authentication
 
@@ -121,7 +121,9 @@ Both query endpoints' response envelope is `{ records, cursor, total }`. `total`
 
 `GET /changes` opens a Server-Sent Events connection scoped exactly like `GET /records` — an authenticated requester sees what their session may read, an anonymous one sees only public records — via the same `canRead` predicate `get()`/`query()` answer with. Every connection gets a `ready` frame first, always, before anything else: it's what makes subscribe-then-query gap-free, since a client that awaits it before querying knows every later change reaches it as a frame.
 
-This server mints no resume cursors (`resume: false`): `ready` never carries a `seq`, and a connection presenting `Last-Event-ID` or `?since=` gets a `reset` frame (`reason: "not_supported"`) right after `ready`, rather than resuming. A client's repair is the same either way — reconcile by querying `GET /records` / `POST /records/query`.
+This server mints resume cursors: `ready` carries the current head as `seq`, and every `record` frame carries that same value as its SSE `id:`. A reconnect presenting `Last-Event-ID` (or the equivalent `?since=`) resumes from there — receiving exactly the changes it missed, never one it already has — or gets a `reset` frame naming why it can't: `cursor_expired` for a cursor this server no longer recognizes (its buffer aged out, or was minted for different query params — a cursor is self-describing, so a mismatch is detectable rather than silently resumed against the wrong stream), or `overflow` for a recognized buffer that has already dropped what a full resume would need. A cursor outside the base64url alphabet is refused locally as a `400`, before the connection ever opens, rather than answered with a `reset` — it isn't a value this server could ever have minted, so there's nothing to reconcile by resuming from it.
+
+Resume is per-connection state, not global: each distinct (session, filter) pairing gets its own buffer, retained for a bounded time and depth past the last connection using it — long enough for an ordinary reconnect, not indefinitely. A gap resumption can't close is exactly what `reset` exists for; a client's repair is the same either way — reconcile by querying `GET /records` / `POST /records/query`. A `purged` frame in a replayed backlog is never re-checked against current permissions (there is no record left to check, and the mutation-time decision is the only one that will ever exist); every other replayed frame is.
 
 Query parameters, all optional and composable: `typeId` (repeatable, matched by baseId so a type-version bump never orphans a subscription), `parentId` (`"null"` selects root records, same as `GET /records`), `entityId` (the record's author, not who made the change), `kind` (repeatable: `created`, `changed`, `deleted`, `purged`), `include=record` (attach the record as of the change; ignored for `kind=purged`). Filtering is exact, not advisory — a filtered connection never receives a frame outside its filter, and an unrecognized `kind` or `include` value is a `400`.
 
