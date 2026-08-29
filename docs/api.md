@@ -109,6 +109,26 @@ Removing an association is `POST /records/:id/associations/delete`, not a body-b
 
 Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
 
+## Change feed
+
+| Method | Path       | Auth     | Description                                         |
+| ------ | ---------- | -------- | --------------------------------------------------- |
+| GET    | `/changes` | Optional | Live stream of record changes (`text/event-stream`) |
+
+`GET /changes` opens a Server-Sent Events connection scoped exactly like `GET /records` — an authenticated requester sees what their session may read, an anonymous one sees only public records — via the same `canRead` predicate `get()`/`query()` answer with. Every connection gets a `ready` frame first, always, before anything else: it's what makes subscribe-then-query gap-free, since a client that awaits it before querying knows every later change reaches it as a frame.
+
+This server mints no resume cursors (`resume: false`): `ready` never carries a `seq`, and a connection presenting `Last-Event-ID` or `?since=` gets a `reset` frame (`reason: "not_supported"`) right after `ready`, rather than resuming. A client's repair is the same either way — reconcile by querying `GET /records` / `POST /records/query`.
+
+Query parameters, all optional and composable: `typeId` (repeatable, matched by baseId so a type-version bump never orphans a subscription), `parentId` (`"null"` selects root records, same as `GET /records`), `entityId` (the record's author, not who made the change), `kind` (repeatable: `created`, `changed`, `deleted`, `purged`), `include=record` (attach the record as of the change; ignored for `kind=purged`). Filtering is exact, not advisory — a filtered connection never receives a frame outside its filter, and an unrecognized `kind` or `include` value is a `400`.
+
+Every change (`event: record`) carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `op` names the exact verb (`create`, `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`) for a consumer that distinguishes, say, a reshare from an edit. A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
+
+A record this connection may not read produces no frame at all — not an empty or redacted one — the same reasoning that keeps a scoped query's `total` null: the existence of a change is itself a disclosure.
+
+`: keepalive` comment lines go out on an otherwise-idle connection periodically, same as any SSE comment — a conforming client ignores them. A connection whose bearer token is revoked or expires is closed by the server rather than left delivering on stale authority; a reconnect gets the same `401` every other endpoint already answers with. A connection that falls too far behind (more in-flight frames than it's draining) is also closed rather than queued without bound — a client that can't tell it missed something can't repair it either, so the server disconnects instead of silently dropping a frame.
+
+This server is single-process: `GET /changes` reports only writes made through this same process's `Stack`. A second process pointed at the same underlying storage would see nothing from this endpoint — worth knowing before running more than one instance against one stack.
+
 ## Types
 
 | Method | Path         | Auth       | Description               |

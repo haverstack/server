@@ -49,6 +49,7 @@ import type { WireRecord } from '@haverstack/wire-types';
 import { generateId, hashSchema } from '@haverstack/core';
 import type { Association } from '@haverstack/core';
 import { buildTestApp, req, TEST_TOKEN, TEST_ENTITY_ID, type TestApp } from './setup.js';
+import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
 
 /**
  * Fixture ids embed a fixed, long-past timestamp (they were authored once
@@ -989,27 +990,269 @@ describe('error response fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Change feed (#78): no src/routes/changes.ts yet, so every fixture below
-// is necessarily skipped rather than dispatched. This block's value is the
-// coverage gate — it fails loudly the moment core adds, removes, or
-// renames a change-feed fixture nobody updated these SKIPPED reasons for.
+// Change feed (#82): a change-feed fixture isn't a request/response pair
+// like every other block here — it pins an ordered stream of frames a
+// connection sees, optionally across mutations made while it's open.
+// tests/changeFeedClient.ts (openChangeFeed/SSEDecoder, built in #81)
+// dispatches those against this server's real GET /changes.
 //
-// A change-feed fixture isn't a request/response pair like every other
-// block here: it pins an ordered stream of frames a connection sees,
-// optionally across mutations made while it's open. tests/changeFeedClient.ts
-// carries the streaming dispatch helper (SSEDecoder + openChangeFeed) that
-// #82 dispatches these fixtures through, once GET /changes exists to
-// dispatch them against.
+// Same targeted-field discipline as every other block: a fixture's `seq`
+// and record ids/timestamps are illustrative, not literal. This server
+// mints no cursors (`resume: false` — resume is #84), so `ready` never
+// carries `seq` and no frame ever carries an `id:` — asserted structurally
+// below rather than deep-equated against a fixture's placeholder cursor.
 // -------------------------------------------------------
 
+function frameData(frame: DecodedFrame): Record<string, unknown> {
+  return frame.data as Record<string, unknown>;
+}
+
 describe('changeFeed fixtures', () => {
-  // GET /changes doesn't exist yet — land the dispatch block in #82.
-  const SKIPPED = new Set(changeFeedFixtures.map((f) => f.name));
+  const handled = new Set<string>();
+  const SKIPPED = new Set([
+    // Pins a client obligation (ignore an unrecognized SSE event name), by
+    // injecting a synthetic `type` frame between `ready` and the `record`
+    // frame it expects. This server's v1 implementation never emits an
+    // unrecognized frame — there's nothing server-side for this fixture to
+    // exercise until a later minor adds one.
+    'change-feed-unknown-frame-names-are-ignored',
+  ]);
+
+  test('change-feed-ready-leads-every-connection', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-ready-leads-every-connection',
+    )!;
+    handled.add(fixture.name);
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      expect(conn.status).toBe(fixture.responseStatus);
+      const [ready] = await conn.waitForFrames(1);
+      expect(ready.event).toBe('ready');
+      expect(ready.id).toBeUndefined();
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-created-frame', async () => {
+    const fixture = changeFeedFixtures.find((f) => f.name === 'change-feed-created-frame')!;
+    handled.add(fixture.name);
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      const { data: created } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE, content: { title: 'Hello' } },
+      });
+      const recordId = (created as { id: string }).id;
+      const [, frame] = await conn.waitForFrames(2);
+      expect(frame.event).toBe('record');
+      expect(frame.id).toBeUndefined();
+      const data = frameData(frame);
+      expect(data.kind).toBe('created');
+      expect(data.op).toBe('create');
+      expect(data.recordId).toBe(recordId);
+      expect(data.typeId).toBe(NOTE_TYPE);
+      expect(data.version).toBe(1);
+      expect((data.actor as { entityId: string }).entityId).toBe(TEST_ENTITY_ID);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-changed-frame-names-the-verb', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-changed-frame-names-the-verb',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'original' },
+      { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: true }] },
+    );
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token,
+        body: { title: 'edited by a contributor' },
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.kind).toBe('changed');
+      expect(data.op).toBe('update');
+      expect(data.recordId).toBe(record.id);
+      expect((data.actor as { entityId: string }).entityId).toBe(CONTRIBUTOR_ID);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-deleted-frame-is-not-terminal', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-deleted-frame-is-not-terminal',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.kind).toBe('deleted');
+      expect(data.op).toBe('delete');
+      expect(data.recordId).toBe(record.id);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-purged-frame-carries-nothing-about-the-record', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-purged-frame-carries-nothing-about-the-record',
+    )!;
+    handled.add(fixture.name);
+    const parent = await t.ctx.stack.create(NOTE_TYPE, { title: 'parent' });
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'to be purged' },
+      { parentId: parent.id, entityId: CONTRIBUTOR_ID },
+    );
+    const conn = await openChangeFeed(t.app, '/changes?include=record', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token: TEST_TOKEN });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.kind).toBe('purged');
+      expect(data.op).toBe('hard-delete');
+      expect(data.recordId).toBe(record.id);
+      expect(data.typeId).toBe(NOTE_TYPE);
+      expect('record' in data).toBe(false);
+      expect('parentId' in data).toBe(false);
+      // Owner-acting-alone is the only way to reach hard delete, and a
+      // purge stamps nothing on a record that no longer exists — the actor
+      // is the requester, never the record's own author (CONTRIBUTOR_ID).
+      expect((data.actor as { entityId: string }).entityId).toBe(TEST_ENTITY_ID);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-include-record-carries-the-body', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-include-record-carries-the-body',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original' });
+    const conn = await openChangeFeed(t.app, '/changes?include=record', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { title: 'Updated title' },
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      const wireRecord = data.record as { id: string; content: { title: string } };
+      expect(wireRecord.id).toBe(record.id);
+      expect(wireRecord.content).toEqual({ title: 'Updated title' });
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-unreadable-record-produces-no-frame', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-unreadable-record-produces-no-frame',
+    )!;
+    handled.add(fixture.name);
+    const privateRecord = await t.ctx.stack.create(NOTE_TYPE, { title: 'private' }); // owner-only
+    const sharedRecord = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'shared' },
+      { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+    );
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const conn = await openChangeFeed(t.app, '/changes', { token });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PATCH', `/records/${privateRecord.id}`, {
+        token: TEST_TOKEN,
+        body: { title: 'still private' },
+      });
+      await req(t.app, 'PATCH', `/records/${sharedRecord.id}`, {
+        token: TEST_TOKEN,
+        body: { title: 'shared, updated' },
+      });
+      // Exactly one more frame — the readable record's — proves the
+      // private edit produced none rather than merely arriving later.
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.recordId).toBe(sharedRecord.id);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-typeid-filter-matches-by-baseid', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-typeid-filter-matches-by-baseid',
+    )!;
+    handled.add(fixture.name);
+    const note = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const comment = await t.ctx.stack.create(COMMENT_TYPE, { body: 'unrelated' });
+    const conn = await openChangeFeed(t.app, `/changes?typeId=${encodeURIComponent(NOTE_TYPE)}`, {
+      token: TEST_TOKEN,
+    });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PATCH', `/records/${comment.id}`, {
+        token: TEST_TOKEN,
+        body: { body: 'still unrelated' },
+      });
+      await req(t.app, 'POST', `/records/${note.id}/migrate`, {
+        token: TEST_TOKEN,
+        body: { toTypeId: NOTE_TYPE_V2, content: { title: 'Hello', pinned: false } },
+      });
+      // Exactly one more frame — the migration — proves the unrelated
+      // type's edit was filtered out rather than merely arriving later.
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.recordId).toBe(note.id);
+      expect(data.typeId).toBe(NOTE_TYPE_V2);
+      expect(data.op).toBe('migrate');
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-reset-when-no-cursor-is-honored', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-reset-when-no-cursor-is-honored',
+    )!;
+    handled.add(fixture.name);
+    const conn = await openChangeFeed(t.app, '/changes', {
+      token: TEST_TOKEN,
+      headers: { 'Last-Event-ID': 'AA3f1R' },
+    });
+    try {
+      expect(conn.status).toBe(fixture.responseStatus);
+      const [ready, reset] = await conn.waitForFrames(2);
+      expect(ready.event).toBe('ready');
+      expect(reset.event).toBe('reset');
+      expect(frameData(reset).reason).toBe('not_supported');
+    } finally {
+      await conn.close();
+    }
+  });
 
   test('coverage', () => {
     assertCoverage(
       changeFeedFixtures.map((f) => f.name),
-      new Set(),
+      handled,
       SKIPPED,
     );
   });

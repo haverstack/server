@@ -16,6 +16,7 @@ import type { Logger } from 'pino';
 import type { Config } from './config.js';
 import { AuthNonceStore, defaultNonceStorePath } from './lib/nonceStore.js';
 import { QueryWorkerPool } from './lib/queryWorker/pool.js';
+import { ChangeStreamRegistry } from './lib/changeStreams.js';
 
 export type StackContext = {
   adapter: LocalAdapter;
@@ -33,6 +34,9 @@ export type StackContext = {
   // deadline. See docs/spec/wire-format.md § Bounding query cost and
   // src/lib/queryWorker/pool.ts.
   queryWorker: QueryWorkerPool;
+  // Open GET /changes SSE connections, so shutdown can end them promptly
+  // rather than waiting out the drain timeout. See src/lib/changeStreams.ts.
+  changeStreams: ChangeStreamRegistry;
 };
 
 export async function initStack(config: Config, logger: Logger): Promise<StackContext> {
@@ -98,5 +102,5 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
     logger,
   });
 
-  return { adapter, stack, tokens, nonces, queryWorker };
+  return { adapter, stack, tokens, nonces, queryWorker, changeStreams: new ChangeStreamRegistry() };
 }

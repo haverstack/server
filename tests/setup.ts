@@ -12,6 +12,7 @@ import type { Config } from '../src/config.js';
 import type { StackContext } from '../src/stack.js';
 import { AuthNonceStore, defaultNonceStorePath } from '../src/lib/nonceStore.js';
 import { QueryWorkerPool } from '../src/lib/queryWorker/pool.js';
+import { ChangeStreamRegistry } from '../src/lib/changeStreams.js';
 import type { Hono } from 'hono';
 import type { AppEnv } from '../src/app.js';
 
@@ -63,7 +64,7 @@ export async function createTestContext(
     queueLimit: 64,
     logger,
   });
-  return { adapter, stack, tokens, nonces, queryWorker };
+  return { adapter, stack, tokens, nonces, queryWorker, changeStreams: new ChangeStreamRegistry() };
 }
 
 export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {
