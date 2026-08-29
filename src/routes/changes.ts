@@ -18,7 +18,7 @@ import type { Logger } from 'pino';
 import { safeCompare } from '../middleware/auth.js';
 import { FrameGate } from '../lib/frameGate.js';
 import { decodeCursor } from '../lib/resumeCursor.js';
-import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
+import { resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
 
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 
@@ -37,13 +37,6 @@ const DEFAULT_SESSION_CHECK_MS = 30_000;
 // something can't repair it either, so silently dropping is worse than
 // disconnecting.
 const DEFAULT_MAX_PENDING_FRAMES = 1000;
-// Per-buffer ring depth and how long a buffer keeps being fed after its
-// last connection disconnects — see src/lib/resumeBuffer.ts. Not part of
-// the wire contract either: a client never learns these numbers, only
-// their consequence (`overflow` or `cursor_expired`).
-const DEFAULT_RESUME_BUFFER_DEPTH = 1000;
-const DEFAULT_RESUME_RETENTION_MS = 5 * 60 * 1000;
-
 export type ChangeRouteOptions = {
   keepaliveMs?: number;
   sessionCheckMs?: number;
@@ -55,8 +48,6 @@ export type ChangeRouteOptions = {
    * real deployer lever here once #84 lands.
    */
   resume?: boolean;
-  resumeBufferDepth?: number;
-  resumeRetentionMs?: number;
 };
 
 /** Parse GET /changes' query params into a ChangeFilter. Exact, not advisory. */
@@ -113,10 +104,10 @@ export function changeRoutes(
   const sessionCheckMs = opts.sessionCheckMs ?? DEFAULT_SESSION_CHECK_MS;
   const maxPendingFrames = opts.maxPendingFrames ?? DEFAULT_MAX_PENDING_FRAMES;
   const resumeEnabled = opts.resume ?? true;
-  const resumeBuffers = new ResumeBufferRegistry({
-    depth: opts.resumeBufferDepth ?? DEFAULT_RESUME_BUFFER_DEPTH,
-    retentionMs: opts.resumeRetentionMs ?? DEFAULT_RESUME_RETENTION_MS,
-  });
+  // Owned by StackContext, not minted here: a buffer outlives the
+  // connection that created it, so its lifetime belongs to the process
+  // rather than to this router. See src/stack.ts.
+  const resumeBuffers = ctx.resumeBuffers;
 
   /** Scope to a session if authenticated, else the anonymous (public-only) view. */
   function scopeFor(auth: TokenSession | null): ScopedStack {

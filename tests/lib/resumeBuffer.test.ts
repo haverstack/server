@@ -163,7 +163,7 @@ describe('ResumeBufferRegistry', () => {
   }
 
   it('opens a subscription once per key and reuses the same buffer on a second acquire', async () => {
-    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000, maxBuffers: 512 });
     const subscribe = subscribeStub();
 
     const first = await registry.acquire('key', subscribe);
@@ -174,7 +174,7 @@ describe('ResumeBufferRegistry', () => {
   });
 
   it('feeds the buffer from the subscription handler', async () => {
-    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000, maxBuffers: 512 });
     let handler!: (c: RecordChange) => void;
     const buffer = await registry.acquire('key', async (onChange) => {
       handler = onChange;
@@ -189,7 +189,7 @@ describe('ResumeBufferRegistry', () => {
   });
 
   it('keeps the buffer retained across a release/reacquire within the retention window', async () => {
-    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000, maxBuffers: 512 });
     const subscribe = subscribeStub();
     const first = await registry.acquire('key', subscribe);
     registry.release('key');
@@ -203,7 +203,7 @@ describe('ResumeBufferRegistry', () => {
     vi.useFakeTimers();
     try {
       const unsubscribe = vi.fn();
-      const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 1000 });
+      const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 1000, maxBuffers: 512 });
       const subscribe = subscribeStub(unsubscribe);
 
       const first = await registry.acquire('key', subscribe);
@@ -224,7 +224,7 @@ describe('ResumeBufferRegistry', () => {
     vi.useFakeTimers();
     try {
       const unsubscribe = vi.fn();
-      const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 1000 });
+      const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 1000, maxBuffers: 512 });
       const subscribe = subscribeStub(unsubscribe);
 
       await registry.acquire('key', subscribe); // liveCount 1
@@ -241,7 +241,7 @@ describe('ResumeBufferRegistry', () => {
   it('closeAll tears down every retained buffer immediately', async () => {
     const unsubscribeA = vi.fn();
     const unsubscribeB = vi.fn();
-    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000, maxBuffers: 512 });
     await registry.acquire('a', subscribeStub(unsubscribeA));
     await registry.acquire('b', subscribeStub(unsubscribeB));
 
@@ -255,7 +255,7 @@ describe('ResumeBufferRegistry', () => {
   // connection on that key with `ready` and then permanent silence — a gap
   // with no `reset` to announce it.
   it('registers nothing when the subscription fails, and retries on the next acquire', async () => {
-    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000, maxBuffers: 512 });
     const failing = vi.fn(async () => {
       throw new Error('adapter unavailable');
     });
@@ -275,7 +275,7 @@ describe('ResumeBufferRegistry', () => {
   });
 
   it('opens one subscription for two acquires that race on the same key', async () => {
-    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000, maxBuffers: 512 });
     let resolveSubscribe!: (u: Unsubscribe) => void;
     const subscribe = vi.fn(
       () =>
@@ -295,7 +295,7 @@ describe('ResumeBufferRegistry', () => {
   });
 
   it('fails both racing acquires when the shared subscription fails, then retries', async () => {
-    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000 });
+    const registry = new ResumeBufferRegistry({ depth: 10, retentionMs: 10_000, maxBuffers: 512 });
     let rejectSubscribe!: (err: Error) => void;
     const failing = vi.fn(
       () =>
@@ -313,5 +313,68 @@ describe('ResumeBufferRegistry', () => {
     const healthy = subscribeStub();
     await registry.acquire('k', healthy);
     expect(healthy).toHaveBeenCalledTimes(1);
+  });
+
+  describe('the buffer ceiling', () => {
+    // A buffer's key includes the connection's filter, which is
+    // client-supplied on a route that serves anonymous callers, so without
+    // a ceiling one caller can leave arbitrarily many buffers collecting —
+    // each holding an open subscription every write fans out through — for
+    // the whole retention window after it has gone.
+    it('drops the longest-disconnected buffers once over the limit', async () => {
+      const registry = new ResumeBufferRegistry({
+        depth: 10,
+        retentionMs: 10_000,
+        maxBuffers: 2,
+      });
+      const unsubscribes = [vi.fn(), vi.fn(), vi.fn()];
+
+      // Disconnected oldest-first, so 'a' is the one with the least
+      // retention window left to lose.
+      for (const [i, key] of ['a', 'b', 'c'].entries()) {
+        await registry.acquire(key, subscribeStub(unsubscribes[i]));
+        registry.release(key);
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      }
+
+      expect(unsubscribes[0]).toHaveBeenCalledTimes(1);
+      expect(unsubscribes[1]).not.toHaveBeenCalled();
+      expect(unsubscribes[2]).not.toHaveBeenCalled();
+    });
+
+    it('never evicts a buffer that still has a live connection', async () => {
+      const registry = new ResumeBufferRegistry({
+        depth: 10,
+        retentionMs: 10_000,
+        maxBuffers: 1,
+      });
+      const held = vi.fn();
+      const idle = vi.fn();
+
+      await registry.acquire('held', subscribeStub(held)); // stays connected
+      await registry.acquire('idle', subscribeStub(idle));
+      registry.release('idle');
+      // Over the limit, and the only eviction candidate is 'idle'.
+      await registry.acquire('third', subscribeStub());
+
+      expect(held).not.toHaveBeenCalled();
+      expect(idle).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets an evicted key be acquired again, with a fresh buffer identity', async () => {
+      const registry = new ResumeBufferRegistry({
+        depth: 10,
+        retentionMs: 10_000,
+        maxBuffers: 1,
+      });
+      const first = await registry.acquire('a', subscribeStub());
+      registry.release('a');
+      await registry.acquire('b', subscribeStub()); // evicts 'a'
+
+      const second = await registry.acquire('a', subscribeStub());
+      // A different buffer id is what makes the old cursor answerable as
+      // `cursor_expired` rather than silently resumed against a new stream.
+      expect(second.id).not.toBe(first.id);
+    });
   });
 });

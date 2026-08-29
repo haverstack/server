@@ -12,6 +12,18 @@ const DEFAULT_QUERY_WORKER_POOL_SIZE = 2;
 const MAX_QUERY_WORKER_POOL_SIZE = 32;
 const DEFAULT_QUERY_QUEUE_LIMIT = 64;
 const MAX_QUERY_QUEUE_LIMIT = 10_000;
+// GET /changes' resume buffers. Depth and retention decide what a
+// reconnect can recover; the buffer count decides what the server spends
+// holding that open for everyone at once. See docs/deployment.md §
+// Bounding change-feed cost.
+const DEFAULT_CHANGE_BUFFER_DEPTH = 1000;
+const DEFAULT_CHANGE_BUFFER_RETENTION_MS = 5 * 60 * 1000;
+const DEFAULT_CHANGE_BUFFER_LIMIT = 512;
+// Each buffer holds an open ScopedStack.subscribe() that every write fans
+// out through, plus up to `depth` frames — with ?include=record, up to
+// `depth` record bodies. As with the worker pool, the ceiling is a sanity
+// bound rather than a tuning recommendation.
+const MAX_CHANGE_BUFFER_LIMIT = 100_000;
 
 function required(name: string): string {
   const val = process.env[name];
@@ -39,6 +51,9 @@ export type Config = {
   queryTimeoutMs: number;
   queryWorkerPoolSize: number;
   queryQueueLimit: number;
+  changeBufferDepth: number;
+  changeBufferRetentionMs: number;
+  changeBufferLimit: number;
   seedCommonsTypes: boolean;
   shutdownTimeoutMs: number;
 };
@@ -124,6 +139,52 @@ export function loadConfig(): Config {
     );
   }
 
+  // A resume buffer's ring depth: how many changes a reconnect can recover
+  // before the answer becomes `overflow` instead. Raise it for clients that
+  // reconnect after long gaps on a busy stack; each entry is one serialized
+  // frame, and with ?include=record that frame carries a record body.
+  const changeBufferDepth = parseInt(
+    optional('CHANGE_BUFFER_DEPTH', String(DEFAULT_CHANGE_BUFFER_DEPTH)),
+    10,
+  );
+  if (isNaN(changeBufferDepth) || changeBufferDepth < 1) {
+    throw new Error(`Invalid CHANGE_BUFFER_DEPTH: ${process.env['CHANGE_BUFFER_DEPTH']}`);
+  }
+
+  // How long a buffer keeps collecting after its last connection drops —
+  // the window in which a reconnect can still be answered from it rather
+  // than with `cursor_expired`.
+  const changeBufferRetentionMs = parseInt(
+    optional('CHANGE_BUFFER_RETENTION_MS', String(DEFAULT_CHANGE_BUFFER_RETENTION_MS)),
+    10,
+  );
+  if (isNaN(changeBufferRetentionMs) || changeBufferRetentionMs < 1) {
+    throw new Error(
+      `Invalid CHANGE_BUFFER_RETENTION_MS: ${process.env['CHANGE_BUFFER_RETENTION_MS']}`,
+    );
+  }
+
+  // How many buffers may be retained at once. This is the ceiling on what
+  // the feed can cost: a buffer's key includes the connection's filter,
+  // which is client-supplied on a route that serves anonymous callers, so
+  // without it one caller can leave arbitrarily many behind. Past the
+  // limit the longest-disconnected buffers are dropped early, which costs
+  // their owners a `cursor_expired` and a reconcile-by-query.
+  const changeBufferLimit = parseInt(
+    optional('CHANGE_BUFFER_LIMIT', String(DEFAULT_CHANGE_BUFFER_LIMIT)),
+    10,
+  );
+  if (
+    isNaN(changeBufferLimit) ||
+    changeBufferLimit < 1 ||
+    changeBufferLimit > MAX_CHANGE_BUFFER_LIMIT
+  ) {
+    throw new Error(
+      `Invalid CHANGE_BUFFER_LIMIT: ${process.env['CHANGE_BUFFER_LIMIT']} ` +
+        `(expected 1-${MAX_CHANGE_BUFFER_LIMIT})`,
+    );
+  }
+
   // Bounds how long shutdown() waits for in-flight/keep-alive connections to
   // drain on server.close() before forcing them closed with
   // closeAllConnections() and finishing the flush/close sequence anyway. See
@@ -178,6 +239,9 @@ export function loadConfig(): Config {
     queryTimeoutMs,
     queryWorkerPoolSize,
     queryQueueLimit,
+    changeBufferDepth,
+    changeBufferRetentionMs,
+    changeBufferLimit,
     seedCommonsTypes,
     shutdownTimeoutMs,
   };

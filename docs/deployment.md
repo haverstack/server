@@ -33,6 +33,10 @@ Obtain a certificate first with [Certbot](https://certbot.eff.org/), then use th
 # In the http block:
 limit_req_zone $binary_remote_addr zone=hs_global:10m rate=60r/m;
 limit_req_zone $binary_remote_addr zone=hs_tokens:10m rate=5r/m;
+# GET /changes connections are long-lived, so a request-rate limit doesn't
+# bound them — it caps how fast they open, not how many stay open. See
+# Bounding change-feed cost below.
+limit_conn_zone $binary_remote_addr zone=hs_changes_conn:10m;
 ```
 
 ```nginx
@@ -54,6 +58,26 @@ server {
         limit_req zone=hs_global burst=20 nodelay;
 
         proxy_pass http://localhost:3000;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # The change feed is a streaming response. nginx buffers proxied
+    # bodies and talks HTTP/1.0 upstream by default, which holds frames in
+    # the buffer instead of delivering them — the feed looks hung, then
+    # arrives in clumps. `limit_conn` is what actually bounds the feed's
+    # cost on the server: each open connection holds a subscription, and
+    # each one left behind holds a resume buffer for CHANGE_BUFFER_RETENTION_MS.
+    location = /changes {
+        limit_conn hs_changes_conn 8;
+
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_buffering     off;
+        proxy_cache         off;
+        proxy_read_timeout  1h;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -168,6 +192,24 @@ Note that `GET /records` and `POST /records/query` are both reachable without au
 
 ---
 
+## Bounding change-feed cost
+
+`GET /changes` is the feed's only endpoint, and like the query routes it serves anonymous callers — so like them, it is a surface a stranger can put load on. What it costs is different, though, and the difference is worth being explicit about: a query is expensive while it runs, and a feed connection is expensive for as long as it is remembered.
+
+Each connection subscribes through the `ScopedStack` its token names, and every write in the stack then fans out through that subscription, paying a `canRead` per event. Connections with the same session, filter and `?include=record` choice share one subscription and one **resume buffer** — the ring of recent frames that lets a reconnect presenting `Last-Event-ID` receive exactly what it missed instead of a `reset`.
+
+That buffer is what outlives the connection. It keeps collecting for `CHANGE_BUFFER_RETENTION_MS` (default 5 minutes) after the last connection using it drops, because that is the whole point: a client that reconnects inside the window gets its gap filled. The cost is that a caller who opens a connection and leaves still owns server-side state for five minutes — and since the buffer's identity includes the filter, and the filter comes from query params, a caller can mint as many distinct buffers as it can invent filters.
+
+`CHANGE_BUFFER_LIMIT` (default 512) is the ceiling on that. Past it, the longest-disconnected buffers are dropped early — they have the least retention window left to lose, and losing one is a documented outcome rather than a failure: the reconnect that presents its cursor gets `reset` with reason `cursor_expired` and reconciles by query, exactly as it would have a moment later. A buffer with a live connection is never dropped this way.
+
+`CHANGE_BUFFER_DEPTH` (default 1000) bounds each buffer instead of the set of them: how many frames one can hold before the oldest are evicted, and so how large a gap a reconnect can recover before the answer becomes `overflow`. Depth is the setting to watch on memory, because with `?include=record` each retained frame carries a record body — up to `MAX_CONTENT_BYTES` each.
+
+Raise `CHANGE_BUFFER_LIMIT` if you legitimately serve many distinct (session, filter) combinations and see clients getting `cursor_expired` sooner than the retention window should allow. Raise `CHANGE_BUFFER_DEPTH` for clients that reconnect after long gaps on a busy stack. Lower either to cap memory on a small host.
+
+**What these settings do not bound is concurrent connections.** A buffer with a live reader is never evicted, so the ceiling above applies to abandoned buffers rather than to a caller who simply holds many streams open. That is the reverse proxy's job, and it needs a connection limit rather than a request-rate one — `limit_conn` in nginx, not `limit_req`, since a rate limit caps how fast streams open and says nothing about how many stay open. The nginx example above sets one; if you write your own, or run Caddy or Traefik, add the equivalent.
+
+---
+
 ## Single-writer topology
 
 The `data` volume (`DB_PATH`'s directory) holds more than the database file itself: `stack.db-wal` and `stack.db-shm` are SQLite's write-ahead-log sidecar files, present whenever the process has the database open, and `stack.db.lock` is a storage-ownership lock recording the PID of the process that opened it. Back up or copy the whole directory, not just `stack.db` — a `stack.db` file copied without its `-wal` sidecar can be missing recently-committed data.
@@ -199,11 +241,13 @@ Two consequences worth being deliberate about:
 - **A grant with no grantee is a grant to the public.** `grant(null, ...)` resolves for any authenticated entity, and with the handshake open that is anyone at all. See [Access Control](./api.md#access-control). Named grants (`grant(<did>, ...)`) are unaffected — those are the vouching mechanism.
 - **Rate limiting matters more than it used to.** A stranger's handshake writes a token row with a 7-day expiry. Expired rows are reclaimed, but live ones are bounded only by issuance rate × TTL, so the proxy-level rate limit configured above is what actually caps the table. The reverse-proxy examples in this guide already cover `/auth/*`; if you write your own, do not exempt it.
 
-Read access is unaffected either way: `GET /records`, `POST /records/query`, `GET /records/:id` and `GET /types` already serve anonymous requests, subject to record-level permissions, and a token changes nothing about what they return.
+Read access is unaffected either way: `GET /records`, `POST /records/query`, `GET /records/:id`, `GET /types` and `GET /changes` already serve anonymous requests, subject to record-level permissions, and a token changes nothing about what they return.
 
 ## Public endpoints
 
 `GET /.well-known/stack` is intentionally public and unauthenticated. It exposes the owner entity ID, configured timezone, and capability list. This information is required by `@haverstack/adapter-api` to bootstrap a client connection. If your stack is private, ensure the endpoint is only reachable by intended clients (e.g. by network policy) rather than by auth-gating it.
+
+The read routes — `GET /records`, `POST /records/query`, `GET /records/:id`, `GET /types` and `GET /changes` — also answer without a credential, serving the anonymous view (public records only). Two of them can be made to hold resources by a caller who never authenticates: the query routes occupy a worker for up to `QUERY_TIMEOUT_MS` (see [Bounding query cost](#bounding-query-cost)), and `GET /changes` holds a subscription for as long as the connection lasts plus a resume buffer for `CHANGE_BUFFER_RETENTION_MS` after it (see [Bounding change-feed cost](#bounding-change-feed-cost)). Both are bounded in-process, and both are worth a proxy-level limit too on a deployment expecting hostile traffic — a request-rate limit for the query routes, a connection limit for the feed.
 
 ## Schema Commons seeding
 

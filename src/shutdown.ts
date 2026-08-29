@@ -35,6 +35,11 @@ export function createShutdownHandler(
     // would otherwise wait out the full grace period on every shutdown
     // rather than finishing as soon as ordinary requests complete.
     ctx.changeStreams.closeAll();
+    // Closing the streams above does not release their buffers: a buffer
+    // deliberately outlives its last connection so a reconnect can recover
+    // what it missed, which on shutdown just means holding a subscription
+    // nobody will ever read. Release them explicitly.
+    ctx.resumeBuffers.closeAll();
 
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {

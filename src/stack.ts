@@ -17,6 +17,7 @@ import type { Config } from './config.js';
 import { AuthNonceStore, defaultNonceStorePath } from './lib/nonceStore.js';
 import { QueryWorkerPool } from './lib/queryWorker/pool.js';
 import { ChangeStreamRegistry } from './lib/changeStreams.js';
+import { ResumeBufferRegistry } from './lib/resumeBuffer.js';
 
 export type StackContext = {
   adapter: LocalAdapter;
@@ -37,6 +38,11 @@ export type StackContext = {
   // Open GET /changes SSE connections, so shutdown can end them promptly
   // rather than waiting out the drain timeout. See src/lib/changeStreams.ts.
   changeStreams: ChangeStreamRegistry;
+  // GET /changes' resume buffers. Owned here rather than by changeRoutes()
+  // because a buffer outlives the connection that minted it — closing every
+  // stream leaves the buffers behind by design, so shutdown needs its own
+  // handle to release their subscriptions. See src/lib/resumeBuffer.ts.
+  resumeBuffers: ResumeBufferRegistry;
 };
 
 export async function initStack(config: Config, logger: Logger): Promise<StackContext> {
@@ -102,5 +108,17 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
     logger,
   });
 
-  return { adapter, stack, tokens, nonces, queryWorker, changeStreams: new ChangeStreamRegistry() };
+  return {
+    adapter,
+    stack,
+    tokens,
+    nonces,
+    queryWorker,
+    changeStreams: new ChangeStreamRegistry(),
+    resumeBuffers: new ResumeBufferRegistry({
+      depth: config.changeBufferDepth,
+      retentionMs: config.changeBufferRetentionMs,
+      maxBuffers: config.changeBufferLimit,
+    }),
+  };
 }

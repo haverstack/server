@@ -11,6 +11,7 @@ import {
   type TestApp,
 } from '../setup.js';
 import { changeRoutes, type ChangeRouteOptions } from '../../src/routes/changes.js';
+import { ResumeBufferRegistry } from '../../src/lib/resumeBuffer.js';
 import { authMiddleware } from '../../src/middleware/auth.js';
 import { openChangeFeed } from '../changeFeedClient.js';
 import type { StackContext } from '../../src/stack.js';
@@ -259,7 +260,19 @@ describe('GET /changes', () => {
     });
 
     it('answers overflow once depth eviction has dropped what a reconnect would need', async () => {
-      const app = testChangesApp(t.ctx, testConfig(t.dbPath), { resumeBufferDepth: 2 });
+      // A shallow ring, so two changes are enough to evict what a
+      // reconnect would need. The registry is swapped rather than
+      // configured per-route: it belongs to the context now, since a
+      // buffer outlives the connection that minted it.
+      const ctx = {
+        ...t.ctx,
+        resumeBuffers: new ResumeBufferRegistry({
+          depth: 2,
+          retentionMs: 5 * 60 * 1000,
+          maxBuffers: 512,
+        }),
+      };
+      const app = testChangesApp(ctx, testConfig(t.dbPath));
       const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original' });
 
       const conn = await openChangeFeed(app, '/', { token: TEST_TOKEN });

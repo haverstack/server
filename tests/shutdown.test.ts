@@ -3,6 +3,7 @@ import type { Logger } from 'pino';
 import type { StackContext } from '../src/stack.js';
 import { createShutdownHandler, type ShutdownServer } from '../src/shutdown.js';
 import { ChangeStreamRegistry } from '../src/lib/changeStreams.js';
+import { ResumeBufferRegistry } from '../src/lib/resumeBuffer.js';
 
 function fakeLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
@@ -21,6 +22,11 @@ function fakeCtx(): StackContext {
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as StackContext['queryWorker'],
     changeStreams: new ChangeStreamRegistry(),
+    resumeBuffers: new ResumeBufferRegistry({
+      depth: 10,
+      retentionMs: 10_000,
+      maxBuffers: 512,
+    }),
   };
 }
 
@@ -31,6 +37,18 @@ describe('createShutdownHandler', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('releases the resume buffers, which closing the streams deliberately leaves behind', async () => {
+    const server: ShutdownServer = { close: (cb) => cb(), closeAllConnections: vi.fn() };
+    const ctx = fakeCtx();
+    const unsubscribe = vi.fn();
+    await ctx.resumeBuffers.acquire('key', async () => unsubscribe);
+    ctx.resumeBuffers.release('key'); // the connection ends; the buffer stays
+
+    await createShutdownHandler(server, ctx, fakeLogger(), 10_000)('SIGTERM');
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it('runs the full cleanup sequence once close() finishes on its own', async () => {

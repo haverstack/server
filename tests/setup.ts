@@ -13,6 +13,8 @@ import type { StackContext } from '../src/stack.js';
 import { AuthNonceStore, defaultNonceStorePath } from '../src/lib/nonceStore.js';
 import { QueryWorkerPool } from '../src/lib/queryWorker/pool.js';
 import { ChangeStreamRegistry } from '../src/lib/changeStreams.js';
+import { ResumeBufferRegistry } from '../src/lib/resumeBuffer.js';
+import type { ResumeBufferRegistryOptions } from '../src/lib/resumeBuffer.js';
 import type { Hono } from 'hono';
 import type { AppEnv } from '../src/app.js';
 
@@ -44,6 +46,12 @@ export type TestContextOpts = {
    * `{ timezone: undefined }` deliberately, not the bare value.
    */
   timezone?: string;
+  /**
+   * Overrides for GET /changes' resume buffers, for tests that need a
+   * shallow ring, a short retention window or a low buffer ceiling to
+   * reach behavior the production defaults would take too long to show.
+   */
+  resumeBuffers?: Partial<ResumeBufferRegistryOptions>;
 };
 
 export async function createTestContext(
@@ -64,7 +72,20 @@ export async function createTestContext(
     queueLimit: 64,
     logger,
   });
-  return { adapter, stack, tokens, nonces, queryWorker, changeStreams: new ChangeStreamRegistry() };
+  return {
+    adapter,
+    stack,
+    tokens,
+    nonces,
+    queryWorker,
+    changeStreams: new ChangeStreamRegistry(),
+    resumeBuffers: new ResumeBufferRegistry({
+      depth: 1000,
+      retentionMs: 5 * 60 * 1000,
+      maxBuffers: 512,
+      ...opts.resumeBuffers,
+    }),
+  };
 }
 
 export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {
@@ -84,6 +105,9 @@ export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: '
     queryTimeoutMs: 10_000,
     queryWorkerPoolSize: 1,
     queryQueueLimit: 64,
+    changeBufferDepth: 1000,
+    changeBufferRetentionMs: 5 * 60 * 1000,
+    changeBufferLimit: 512,
     seedCommonsTypes: false,
     shutdownTimeoutMs: 10_000,
   };

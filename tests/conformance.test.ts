@@ -59,6 +59,7 @@ import {
   type TestApp,
 } from './setup.js';
 import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
+import { ResumeBufferRegistry } from '../src/lib/resumeBuffer.js';
 import { wellknownRoutes } from '../src/routes/wellknown.js';
 import { changeRoutes } from '../src/routes/changes.js';
 import { authMiddleware } from '../src/middleware/auth.js';
@@ -1395,12 +1396,17 @@ describe('changeFeed sequence fixtures', () => {
     // forced deterministically with a near-zero window rather than
     // waiting out the real (5-minute) default.
     const config = testConfig(t.dbPath);
+    const ctx = {
+      ...t.ctx,
+      resumeBuffers: new ResumeBufferRegistry({
+        depth: 1000,
+        retentionMs: 10,
+        maxBuffers: 512,
+      }),
+    };
     const resumeApp = new Hono<AppEnv>();
-    resumeApp.use(authMiddleware(config.ownerToken, t.ctx));
-    resumeApp.route(
-      '/changes',
-      changeRoutes(t.ctx, config, logger, { resume: true, resumeRetentionMs: 10 }),
-    );
+    resumeApp.use(authMiddleware(config.ownerToken, ctx));
+    resumeApp.route('/changes', changeRoutes(ctx, config, logger, { resume: true }));
 
     const first = await openChangeFeed(resumeApp, fixture.steps[0]!.path, { token: TEST_TOKEN });
     let headCursor: string;

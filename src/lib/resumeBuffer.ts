@@ -149,6 +149,12 @@ export type ResumeBufferRegistryOptions = {
   depth: number;
   /** How long a buffer keeps being fed after its last connection disconnects, before it's dropped entirely. */
   retentionMs: number;
+  /**
+   * Max buffers retained at once. Past it, the longest-disconnected ones
+   * are dropped early — see `enforceLimit()`. Counts every buffer, but
+   * only ones with no live connection are eligible for eviction.
+   */
+  maxBuffers: number;
 };
 
 /**
@@ -156,6 +162,15 @@ export type ResumeBufferRegistryOptions = {
  * A buffer's underlying `ScopedStack.subscribe()` is opened once, when the
  * buffer is first minted, and kept open — including across a gap with zero
  * live connections — until the buffer itself is evicted.
+ *
+ * That retention is what makes a reconnect able to recover changes made
+ * while nobody was listening, and it is also what makes the registry a
+ * cost worth bounding: the key includes the connection's filter, which
+ * comes from client-supplied query params on a route that serves
+ * anonymous callers, so without a ceiling one caller can leave arbitrarily
+ * many buffers — each holding an open `ScopedStack.subscribe()` that every
+ * write in the stack then fans out through — collecting for the whole
+ * retention window after it has gone. `maxBuffers` is that ceiling.
  */
 export class ResumeBufferRegistry {
   private readonly buffers = new Map<string, ResumeBuffer>();
@@ -219,9 +234,40 @@ export class ResumeBufferRegistry {
     try {
       const buffer = await attempt;
       buffer.liveCount += 1;
+      this.enforceLimit();
       return buffer;
     } finally {
       this.acquiring.delete(key);
+    }
+  }
+
+  /**
+   * Drop the longest-disconnected buffers once the registry is over its
+   * ceiling. They are the ones whose retention window is closest to
+   * expiring anyway, so they are the cheapest to lose — and losing one is
+   * a documented outcome rather than a failure: the reconnect that
+   * presents its cursor gets `cursor_expired` and reconciles by query,
+   * exactly as it would have a moment later.
+   *
+   * A buffer with a live connection is never evicted here. It has a client
+   * actively reading it, and closing that stream to reclaim memory would
+   * trade a bounded cost for a broken one. Bounding *concurrent*
+   * connections is the reverse proxy's job (`limit_conn`) — see
+   * docs/deployment.md § Bounding change-feed cost.
+   */
+  private enforceLimit(): void {
+    let excess = this.buffers.size - this.opts.maxBuffers;
+    if (excess <= 0) return;
+
+    const idle = [...this.buffers.entries()]
+      .filter(([, buffer]) => buffer.liveCount === 0 && buffer.disconnectedAt !== null)
+      .sort((a, b) => a[1].disconnectedAt! - b[1].disconnectedAt!);
+
+    for (const [key, buffer] of idle) {
+      if (excess <= 0) return;
+      this.cancelEviction(key);
+      this.evict(key, buffer);
+      excess -= 1;
     }
   }
 

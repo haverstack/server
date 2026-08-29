@@ -109,4 +109,39 @@ describe('loadConfig', () => {
     process.env['SHUTDOWN_TIMEOUT_MS'] = 'not-a-number';
     expect(() => loadConfig()).toThrow(/Invalid SHUTDOWN_TIMEOUT_MS/);
   });
+
+  it('defaults the change-feed buffer bounds', () => {
+    const config = loadConfig();
+    expect(config.changeBufferDepth).toBe(1000);
+    expect(config.changeBufferRetentionMs).toBe(5 * 60 * 1000);
+    expect(config.changeBufferLimit).toBe(512);
+  });
+
+  it('reads the change-feed buffer bounds when set', () => {
+    process.env['CHANGE_BUFFER_DEPTH'] = '50';
+    process.env['CHANGE_BUFFER_RETENTION_MS'] = '30000';
+    process.env['CHANGE_BUFFER_LIMIT'] = '64';
+    const config = loadConfig();
+    expect(config.changeBufferDepth).toBe(50);
+    expect(config.changeBufferRetentionMs).toBe(30_000);
+    expect(config.changeBufferLimit).toBe(64);
+  });
+
+  it('rejects invalid change-feed buffer bounds', () => {
+    process.env['CHANGE_BUFFER_DEPTH'] = '0';
+    expect(() => loadConfig()).toThrow(/Invalid CHANGE_BUFFER_DEPTH/);
+    delete process.env['CHANGE_BUFFER_DEPTH'];
+
+    process.env['CHANGE_BUFFER_RETENTION_MS'] = 'not-a-number';
+    expect(() => loadConfig()).toThrow(/Invalid CHANGE_BUFFER_RETENTION_MS/);
+    delete process.env['CHANGE_BUFFER_RETENTION_MS'];
+
+    process.env['CHANGE_BUFFER_LIMIT'] = '0';
+    expect(() => loadConfig()).toThrow(/Invalid CHANGE_BUFFER_LIMIT/);
+  });
+
+  it('refuses a change-feed buffer limit past the sanity ceiling', () => {
+    process.env['CHANGE_BUFFER_LIMIT'] = '100001';
+    expect(() => loadConfig()).toThrow(/Invalid CHANGE_BUFFER_LIMIT.*expected 1-100000/);
+  });
 });
