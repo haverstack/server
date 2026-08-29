@@ -49,10 +49,12 @@ export type ChangeRouteOptions = {
   sessionCheckMs?: number;
   maxPendingFrames?: number;
   /**
-   * Whether a presented cursor is honored at all. Default true. Exists
-   * only so a test can exercise the `resume: false` branch of the wire
-   * contract (see WellknownRouteOptions.changeFeedResume) — there's no
-   * real deployer lever here once #84 lands.
+   * Whether a presented cursor is honored at all. Default true, and never
+   * false in production — #84 made this server a resuming one, and
+   * discovery says so unconditionally. It exists because `resume: false`
+   * is real, spec-defined behavior (`ready` with no `seq`, then `reset`
+   * with reason `not_supported`) that a conformance fixture exercises, and
+   * that behavior needs a way to be reached.
    */
   resume?: boolean;
   resumeBufferDepth?: number;
