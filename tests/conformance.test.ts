@@ -59,6 +59,8 @@ import {
 } from './setup.js';
 import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
 import { wellknownRoutes } from '../src/routes/wellknown.js';
+import { changeRoutes } from '../src/routes/changes.js';
+import { authMiddleware } from '../src/middleware/auth.js';
 import type { AppEnv } from '../src/types.js';
 
 /**
@@ -177,11 +179,10 @@ describe('discovery fixtures', () => {
     const changes = (data as { changes?: Record<string, unknown> }).changes;
     expect(changes).toBeDefined();
     expect(changes!.transports).toEqual(['sse']);
-    // resume/records mirror this server's own actual support, not the
-    // fixture's illustrative `resume: true` — #84 flips resume once cursors
-    // exist. This server already honors `?include=record` (#82), so records
-    // is true.
-    expect(changes!.resume).toBe(false);
+    // Both mirror this server's own actual support. #84 mints cursors and
+    // GET /changes honors Last-Event-ID/?since=, so resume is true; this
+    // server already honors `?include=record` (#82), so records is true.
+    expect(changes!.resume).toBe(true);
     expect(changes!.records).toBe(true);
   });
 
@@ -191,15 +192,18 @@ describe('discovery fixtures', () => {
     )!;
     handled.add(fixture.name);
     // Both flags false is fully conformant, but this server always honors
-    // `?include=record` — it has no real toggle for it (see
-    // WellknownRouteOptions in src/routes/wellknown.ts). Build a standalone
-    // app that passes the test-only override directly, the same way
-    // tests/routes/changes.test.ts bypasses createApp() to pass
-    // ChangeRouteOptions createApp() has no way to thread through.
+    // both resume and `?include=record` — it has no real deployer toggle
+    // for either (see WellknownRouteOptions in src/routes/wellknown.ts).
+    // Build a standalone app that passes the test-only overrides directly,
+    // the same way tests/routes/changes.test.ts bypasses createApp() to
+    // pass ChangeRouteOptions createApp() has no way to thread through.
     const app = new Hono<AppEnv>();
     app.route(
       '/.well-known',
-      wellknownRoutes(t.ctx, testConfig(t.dbPath), { changeFeedRecords: false }),
+      wellknownRoutes(t.ctx, testConfig(t.dbPath), {
+        changeFeedRecords: false,
+        changeFeedResume: false,
+      }),
     );
     const { status, data } = await req(app, fixture.method, fixture.path);
     expect(status).toBe(fixture.responseStatus);
@@ -1037,14 +1041,17 @@ describe('error response fixtures', () => {
 //
 // Same targeted-field discipline as every other block: a fixture's `seq`
 // and record ids/timestamps are illustrative, not literal. This server
-// mints no cursors (`resume: false` — resume is #84), so `ready` never
-// carries `seq` and no frame ever carries an `id:` — asserted structurally
-// below rather than deep-equated against a fixture's placeholder cursor.
+// mints real cursors since #84 (`resume: true`) — `ready.data.seq` and
+// every `record` frame's SSE `id:` are asserted structurally (base64url
+// shaped) below rather than deep-equated against a fixture's placeholder.
 // -------------------------------------------------------
 
 function frameData(frame: DecodedFrame): Record<string, unknown> {
   return frame.data as Record<string, unknown>;
 }
+
+/** base64url charset — the shape every minted cursor is held to (isValidSeq). */
+const SEQ_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 describe('changeFeed fixtures', () => {
   const handled = new Set<string>();
@@ -1067,7 +1074,10 @@ describe('changeFeed fixtures', () => {
       expect(conn.status).toBe(fixture.responseStatus);
       const [ready] = await conn.waitForFrames(1);
       expect(ready.event).toBe('ready');
+      // ready never carries an SSE `id:` line — the cursor it reports rides
+      // in the JSON body (`data.seq`), which resume mints since #84.
       expect(ready.id).toBeUndefined();
+      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
     } finally {
       await conn.close();
     }
@@ -1086,7 +1096,9 @@ describe('changeFeed fixtures', () => {
       const recordId = (created as { id: string }).id;
       const [, frame] = await conn.waitForFrames(2);
       expect(frame.event).toBe('record');
-      expect(frame.id).toBeUndefined();
+      // A record frame's SSE `id:` is its resume cursor — present since #84.
+      expect(frame.id).toMatch(SEQ_PATTERN);
+      expect(frame.id).toBe((frameData(frame) as { seq?: string }).seq);
       const data = frameData(frame);
       expect(data.kind).toBe('created');
       expect(data.op).toBe('create');
@@ -1273,7 +1285,15 @@ describe('changeFeed fixtures', () => {
       (f) => f.name === 'change-feed-reset-when-no-cursor-is-honored',
     )!;
     handled.add(fixture.name);
-    const conn = await openChangeFeed(t.app, '/changes', {
+    // This fixture pins the behavior of a server advertising `resume:
+    // false` — this server's default is `resume: true` since #84, so the
+    // fixture is dispatched against a standalone app built with the
+    // matching test-only override, same pattern as the discovery block's
+    // `changeFeedResume: false` app above.
+    const resumeDisabledApp = new Hono<AppEnv>();
+    resumeDisabledApp.use(authMiddleware(testConfig(t.dbPath).ownerToken, t.ctx));
+    resumeDisabledApp.route('/', changeRoutes(t.ctx, testConfig(t.dbPath), { resume: false }));
+    const conn = await openChangeFeed(resumeDisabledApp, '/', {
       token: TEST_TOKEN,
       headers: { 'Last-Event-ID': 'AA3f1R' },
     });
@@ -1298,15 +1318,125 @@ describe('changeFeed fixtures', () => {
 });
 
 describe('changeFeed sequence fixtures', () => {
-  // Both stay skipped even once #82 lands GET /changes — resume support
-  // (Last-Event-ID / ?since=, the per-session buffer) is #84's work.
-  const SKIPPED = new Set(changeFeedSequenceFixtures.map((f) => f.name));
+  const handled = new Set<string>();
+
+  test('change-feed-resume-delivers-what-was-missed', async () => {
+    const fixture = changeFeedSequenceFixtures.find(
+      (f) => f.name === 'change-feed-resume-delivers-what-was-missed',
+    )!;
+    handled.add(fixture.name);
+
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original' });
+
+    // Step 1: connect fresh, see one change, retain the id it carried.
+    const first = await openChangeFeed(t.app, fixture.steps[0]!.path, { token: TEST_TOKEN });
+    let lastEventId: string;
+    try {
+      expect(first.status).toBe(fixture.steps[0]!.responseStatus);
+      const [ready] = await first.waitForFrames(1);
+      expect(ready.event).toBe('ready');
+      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { title: 'first' },
+      });
+      const [, changeFrame] = await first.waitForFrames(2);
+      expect(changeFrame.event).toBe('record');
+      expect(changeFrame.id).toMatch(SEQ_PATTERN);
+      lastEventId = changeFrame.id!;
+    } finally {
+      await first.close();
+    }
+
+    // A second edit lands with nobody listening — the buffer (retained
+    // past disconnect) keeps collecting on its own.
+    await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: { title: 'second' },
+    });
+
+    // Step 2: reconnect presenting the last id seen. ready still leads,
+    // and exactly the missed change is replayed — never the frame the
+    // first connection already had.
+    const second = await openChangeFeed(t.app, fixture.steps[1]!.path, {
+      token: TEST_TOKEN,
+      headers: { 'Last-Event-ID': lastEventId },
+    });
+    try {
+      expect(second.status).toBe(fixture.steps[1]!.responseStatus);
+      const [ready, replayed] = await second.waitForFrames(2);
+      expect(ready.event).toBe('ready');
+      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
+      expect(replayed.event).toBe('record');
+      expect(replayed.id).toMatch(SEQ_PATTERN);
+      expect(replayed.id).not.toBe(lastEventId);
+      const data = frameData(replayed);
+      expect(data.recordId).toBe(record.id);
+      expect(data.version).toBe(3);
+      // Nothing else arrives — confirms the already-delivered frame from
+      // step 1 wasn't replayed a second time.
+      await expect(second.waitForFrames(3, 300)).rejects.toThrow();
+    } finally {
+      await second.close();
+    }
+  });
+
+  test('change-feed-reset-rather-than-resume-from-wherever-it-can', async () => {
+    const fixture = changeFeedSequenceFixtures.find(
+      (f) => f.name === 'change-feed-reset-rather-than-resume-from-wherever-it-can',
+    )!;
+    handled.add(fixture.name);
+
+    // A buffer past its retention window is unrecognized on reconnect —
+    // forced deterministically with a near-zero window rather than
+    // waiting out the real (5-minute) default.
+    const config = testConfig(t.dbPath);
+    const resumeApp = new Hono<AppEnv>();
+    resumeApp.use(authMiddleware(config.ownerToken, t.ctx));
+    resumeApp.route(
+      '/changes',
+      changeRoutes(t.ctx, config, { resume: true, resumeRetentionMs: 10 }),
+    );
+
+    const first = await openChangeFeed(resumeApp, fixture.steps[0]!.path, { token: TEST_TOKEN });
+    let headCursor: string;
+    try {
+      expect(first.status).toBe(fixture.steps[0]!.responseStatus);
+      const [ready] = await first.waitForFrames(1);
+      expect(ready.event).toBe('ready');
+      headCursor = frameData(ready).seq as string;
+      expect(headCursor).toMatch(SEQ_PATTERN);
+    } finally {
+      await first.close();
+    }
+
+    // Long enough past the deliberately tiny retention window for the
+    // buffer to have been dropped.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const second = await openChangeFeed(resumeApp, fixture.steps[1]!.path, {
+      token: TEST_TOKEN,
+      headers: { 'Last-Event-ID': headCursor },
+    });
+    try {
+      expect(second.status).toBe(fixture.steps[1]!.responseStatus);
+      const [ready, reset] = await second.waitForFrames(2);
+      expect(ready.event).toBe('ready');
+      // A fresh buffer, so a fresh (different) head cursor.
+      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
+      expect(frameData(ready).seq).not.toBe(headCursor);
+      expect(reset.event).toBe('reset');
+      expect(frameData(reset).reason).toBe('cursor_expired');
+    } finally {
+      await second.close();
+    }
+  });
 
   test('coverage', () => {
     assertCoverage(
       changeFeedSequenceFixtures.map((f) => f.name),
+      handled,
       new Set(),
-      SKIPPED,
     );
   });
 });

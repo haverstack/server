@@ -57,22 +57,26 @@ describe('GET /.well-known/stack', () => {
     const { data } = await req(t.app, 'GET', '/.well-known/stack');
     expect((data as { changes?: unknown }).changes).toEqual({
       transports: ['sse'],
-      // Not yet: #84 mints cursors.
-      resume: false,
-      // Already: GET /changes honors ?include=record unconditionally (#82).
+      // GET /changes mints and honors resume cursors since #84.
+      resume: true,
+      // GET /changes honors ?include=record unconditionally (#82).
       records: true,
     });
   });
 
   it('can advertise a feed that neither resumes nor includes records', async () => {
-    // This server has no real deployer-facing toggle for `records` — GET
-    // /changes always honors ?include=record. changeFeedRecords is a
-    // test-only override on wellknownRoutes() itself for exercising the
-    // (fully conformant) records: false branch of the wire contract.
+    // This server has no real deployer-facing toggle for either flag — GET
+    // /changes always resumes and always honors ?include=record.
+    // changeFeedResume/changeFeedRecords are test-only overrides on
+    // wellknownRoutes() itself for exercising the (fully conformant)
+    // both-false branch of the wire contract.
     const app = new Hono<AppEnv>();
     app.route(
       '/.well-known',
-      wellknownRoutes(t.ctx, testConfig(t.dbPath), { changeFeedRecords: false }),
+      wellknownRoutes(t.ctx, testConfig(t.dbPath), {
+        changeFeedRecords: false,
+        changeFeedResume: false,
+      }),
     );
     const { data } = await req(app, 'GET', '/.well-known/stack');
     expect((data as { changes?: unknown }).changes).toEqual({

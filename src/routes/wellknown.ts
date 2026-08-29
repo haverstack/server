@@ -20,6 +20,14 @@ export type WellknownRouteOptions = {
    * doesn't otherwise need.
    */
   changeFeedRecords?: boolean;
+  /**
+   * Whether `GET /changes` honors a resume cursor. Always `true` in
+   * production (#84) — mirrors `changeRoutes()`'s own `resume` option
+   * (`ChangeRouteOptions.resume`), which a test threads through alongside
+   * this one so the discovery response and the route's actual behavior
+   * never disagree.
+   */
+  changeFeedResume?: boolean;
 };
 
 export function wellknownRoutes(
@@ -57,12 +65,13 @@ export function wellknownRoutes(
       // true, not what's aspirational — a client that calls
       // subscribeChanges() against a server advertising no feed fails
       // locally at open(), which is strictly better than discovering a 404
-      // partway through a connection. `resume: false` until #84 mints
-      // cursors; `records: true` because `GET /changes` already honors
-      // `?include=record` unconditionally (#82).
+      // partway through a connection. `resume: true` since #84 mints
+      // cursors and GET /changes honors Last-Event-ID/?since=; `records:
+      // true` because `GET /changes` already honors `?include=record`
+      // unconditionally (#82).
       changes: {
         transports: [CHANGE_TRANSPORT_SSE],
-        resume: false,
+        resume: opts.changeFeedResume ?? true,
         records: opts.changeFeedRecords ?? true,
       },
     };
