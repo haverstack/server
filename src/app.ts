@@ -77,7 +77,7 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/.well-known', wellknownRoutes(ctx, config));
   app.route('/health', healthRoutes());
   app.route('/records', recordRoutes(ctx, config.queryTimeoutMs));
-  app.route('/changes', changeRoutes(ctx, config));
+  app.route('/changes', changeRoutes(ctx, config, logger));
   app.route('/types', typeRoutes(ctx));
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
   app.route('/entity', entityRoutes(ctx));

@@ -7,6 +7,7 @@ import {
   testConfig,
   tempDbPath,
   TEST_TOKEN,
+  logger,
   type TestApp,
 } from '../setup.js';
 import { changeRoutes, type ChangeRouteOptions } from '../../src/routes/changes.js';
@@ -30,7 +31,7 @@ const CONTRIBUTOR_ID = 'entity-contributor-789';
 function testChangesApp(ctx: StackContext, config: Config, opts: ChangeRouteOptions = {}) {
   const app = new Hono<AppEnv>();
   app.use(authMiddleware(config.ownerToken, ctx));
-  app.route('/', changeRoutes(ctx, config, opts));
+  app.route('/', changeRoutes(ctx, config, logger, opts));
   return app;
 }
 
@@ -320,5 +321,115 @@ describe('GET /changes', () => {
         await resumed.close();
       }
     });
+  });
+
+  // Two connections sharing a resume buffer share its single subscription,
+  // and so its single filter. `?parentId=null` ("root records only") and no
+  // parentId filter at all mean different things and must never share one:
+  // whichever connected first would otherwise decide what the other
+  // receives — a silent gap in one direction, frames outside the filter in
+  // the other, and no `reset` either way to announce it.
+  describe('buffer keying across distinct filters', () => {
+    async function childWrite(): Promise<string> {
+      const parent = await t.ctx.stack.create(NOTE_TYPE, { title: 'parent' });
+      const child = await t.ctx.stack.create(
+        NOTE_TYPE,
+        { title: 'child' },
+        { parentId: parent.id },
+      );
+      return child.id;
+    }
+
+    it('delivers a child change to an unfiltered connection opened after a ?parentId=null one', async () => {
+      const rootsOnly = await openChangeFeed(t.app, '/changes?parentId=null', {
+        token: TEST_TOKEN,
+      });
+      await rootsOnly.waitForFrames(1);
+      const unfiltered = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      await unfiltered.waitForFrames(1);
+
+      try {
+        const childId = await childWrite();
+        const frames = await unfiltered.waitForFrames(3);
+        const child = frames.find(
+          (f) => f.event === 'record' && (f.data as { recordId: string }).recordId === childId,
+        );
+        expect(child).toBeDefined();
+        expect(unfiltered.frames.some((f) => f.event === 'reset')).toBe(false);
+      } finally {
+        await unfiltered.close();
+        await rootsOnly.close();
+      }
+    });
+
+    it('withholds a child change from a ?parentId=null connection opened after an unfiltered one', async () => {
+      const unfiltered = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      await unfiltered.waitForFrames(1);
+      const rootsOnly = await openChangeFeed(t.app, '/changes?parentId=null', {
+        token: TEST_TOKEN,
+      });
+      await rootsOnly.waitForFrames(1);
+
+      try {
+        const childId = await childWrite();
+        // The parent is a root record, so it does arrive — waiting on it
+        // proves the connection is live and that the child's absence below
+        // is a filter decision rather than a race.
+        await rootsOnly.waitForFrames(2);
+        const leaked = rootsOnly.frames.filter(
+          (f) => f.event === 'record' && (f.data as { recordId: string }).recordId === childId,
+        );
+        expect(leaked).toHaveLength(0);
+      } finally {
+        await rootsOnly.close();
+        await unfiltered.close();
+      }
+    });
+  });
+
+  it('closes the connection when the token store cannot answer a session re-check', async () => {
+    const dbPath = tempDbPath();
+    const ctx = await createTestContext(dbPath);
+    await ctx.stack.defineType(NOTE_TYPE, 'Note', { title: { kind: 'string' } });
+    const config = testConfig(dbPath);
+    const { token } = await ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const app = testChangesApp(ctx, config, { sessionCheckMs: 20, keepaliveMs: 60_000 });
+
+    // The store is reachable at connect (auth succeeds) and unreachable by
+    // the time the re-check runs. Closing is the honest answer: the client
+    // reconnects through the path that already handles a 401. Left
+    // unhandled, the rejection would take the process down instead.
+    const lookupToken = ctx.tokens.lookupToken.bind(ctx.tokens);
+    let authenticated = false;
+    ctx.tokens.lookupToken = async (t: string) => {
+      if (authenticated) throw new Error('token store unavailable');
+      authenticated = true;
+      return lookupToken(t);
+    };
+
+    try {
+      const res = await app.request('/', {
+        headers: { Accept: 'text/event-stream', Authorization: `Bearer ${token}` },
+      });
+      expect(res.status).toBe(200);
+
+      const reader = res.body!.getReader();
+      const drained = await Promise.race([
+        (async () => {
+          while (true) {
+            const { done } = await reader.read();
+            if (done) return true;
+          }
+        })(),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000)),
+      ]);
+      expect(drained).toBe(true);
+    } finally {
+      ctx.tokens.lookupToken = lookupToken;
+      await ctx.queryWorker.close();
+      await ctx.stack.close();
+      await ctx.tokens.close();
+      ctx.nonces.close();
+    }
   });
 });

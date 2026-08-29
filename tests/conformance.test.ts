@@ -55,6 +55,7 @@ import {
   testConfig,
   TEST_TOKEN,
   TEST_ENTITY_ID,
+  logger,
   type TestApp,
 } from './setup.js';
 import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
@@ -1292,7 +1293,10 @@ describe('changeFeed fixtures', () => {
     // `changeFeedResume: false` app above.
     const resumeDisabledApp = new Hono<AppEnv>();
     resumeDisabledApp.use(authMiddleware(testConfig(t.dbPath).ownerToken, t.ctx));
-    resumeDisabledApp.route('/', changeRoutes(t.ctx, testConfig(t.dbPath), { resume: false }));
+    resumeDisabledApp.route(
+      '/',
+      changeRoutes(t.ctx, testConfig(t.dbPath), logger, { resume: false }),
+    );
     const conn = await openChangeFeed(resumeDisabledApp, '/', {
       token: TEST_TOKEN,
       headers: { 'Last-Event-ID': 'AA3f1R' },
@@ -1395,7 +1399,7 @@ describe('changeFeed sequence fixtures', () => {
     resumeApp.use(authMiddleware(config.ownerToken, t.ctx));
     resumeApp.route(
       '/changes',
-      changeRoutes(t.ctx, config, { resume: true, resumeRetentionMs: 10 }),
+      changeRoutes(t.ctx, config, logger, { resume: true, resumeRetentionMs: 10 }),
     );
 
     const first = await openChangeFeed(resumeApp, fixture.steps[0]!.path, { token: TEST_TOKEN });

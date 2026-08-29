@@ -14,6 +14,8 @@ import type {
 import { StackQueryError } from '@haverstack/core';
 import { serializeChange, isValidSeq } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
+import type { Logger } from 'pino';
+import { safeCompare } from '../middleware/auth.js';
 import { FrameGate } from '../lib/frameGate.js';
 import { decodeCursor } from '../lib/resumeCursor.js';
 import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
@@ -103,6 +105,7 @@ function presentedCursorRaw(c: Context<AppEnv>, url: URL): string | undefined {
 export function changeRoutes(
   ctx: StackContext,
   config: Config,
+  logger: Logger,
   opts: ChangeRouteOptions = {},
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -158,125 +161,160 @@ export function changeRoutes(
       const unregister = ctx.changeStreams.add(() => resolveDone());
 
       const gate = new FrameGate(maxPendingFrames, () => resolveDone());
-      function send(event: string, data: unknown, id?: string): void {
-        gate.send(() =>
+      /** Returns false once the gate has tripped — this connection is closing. */
+      function send(event: string, data: unknown, id?: string): boolean {
+        return gate.send(() =>
           stream.writeSSE({ event, data: JSON.stringify(data), ...(id !== undefined && { id }) }),
         );
       }
 
-      let unsubscribe: () => void;
+      // Assigned inside the try below; torn down in the finally whether the
+      // connection ended by abort, by a revoked session, or by a throw. A
+      // throw is caught rather than left to hono, which would answer it by
+      // writing the raw error message to the client as an `error` frame.
+      let unsubscribe: (() => void) | undefined;
+      let keepalive: NodeJS.Timeout | undefined;
+      let sessionCheck: NodeJS.Timeout | undefined;
 
-      if (!resumeEnabled) {
-        // `resume: false` — a discovery-conformant server that mints no
-        // cursors at all. Exists only for WellknownRouteOptions'
-        // matching test toggle; every connection here is answered exactly
-        // as #82 shipped it.
-        send('ready', {});
-        if (presentedRaw !== undefined) {
-          const reason: ChangeResetReason = 'not_supported';
-          send('reset', { reason });
-        }
-        unsubscribe = await scopeFor(auth).subscribe(
-          (change: RecordChange) => {
-            send('record', serializeChange(change));
-          },
-          { filter, includeRecords },
-        );
-      } else {
-        const key = resumeBufferKey({
-          principalId: auth?.principalId ?? null,
-          subjectId: auth?.subjectId ?? null,
-          filter,
-          includeRecords,
-        });
-        const scoped = scopeFor(auth);
-        const buffer = await resumeBuffers.acquire(key, (onChange) =>
-          scoped.subscribe(onChange, { filter, includeRecords }),
-        );
-
-        // Attached before anything below reads or awaits, so nothing this
-        // connection is owed can land in the gap between "what the backlog
-        // snapshot covers" and "what the live buffer starts reporting" —
-        // there isn't one. `replaying` buffers what arrives live while the
-        // (possibly awaited, permission-rechecking) backlog replay below is
-        // still in flight, so a change appended mid-replay can never be
-        // sent out of order ahead of an older, still-pending backlog frame.
-        let replaying = true;
-        const queued: ResumeEntry[] = [];
-        const detachLive = buffer.subscribeLive((entry) => {
-          if (replaying) queued.push(entry);
-          else send('record', entry.frame, entry.frame.seq);
-        });
-
-        let resetReason: ChangeResetReason | undefined;
-        let backlog: ResumeEntry[] = [];
-        if (presentedRaw !== undefined) {
-          const decoded = decodeCursor(presentedRaw);
-          if (!decoded || decoded.bufferId !== buffer.id) {
-            // Unrecognized outright, or names a buffer instance that isn't
-            // this key's current one (evicted past its retention window,
-            // or minted for a filter this cursor doesn't actually match).
-            resetReason = 'cursor_expired';
-          } else {
-            const outcome = buffer.entriesAfter(decoded.n);
-            if (outcome.status === 'ok') backlog = outcome.entries;
-            else resetReason = outcome.status;
+      try {
+        if (!resumeEnabled) {
+          // `resume: false` — a discovery-conformant server that mints no
+          // cursors at all. Exists only for WellknownRouteOptions'
+          // matching test toggle; every connection here is answered exactly
+          // as #82 shipped it.
+          send('ready', {});
+          if (presentedRaw !== undefined) {
+            const reason: ChangeResetReason = 'not_supported';
+            send('reset', { reason });
           }
-        }
-
-        send('ready', { seq: buffer.headCursor() });
-
-        if (resetReason) {
-          send('reset', { reason: resetReason });
+          unsubscribe = await scopeFor(auth).subscribe(
+            (change: RecordChange) => {
+              send('record', serializeChange(change));
+            },
+            { filter, includeRecords },
+          );
         } else {
-          for (const entry of backlog) {
-            // Purge frames aren't re-checkable — the mutation-time decision
-            // is the only one that will ever exist (docs/spec/events.md,
-            // quoted on issue #84). A non-purge frame's record ID is still
-            // in hand, so a grant revoked during the gap is caught here.
-            if (!entry.isPurge) {
-              const stillReadable = await scoped.get(entry.recordId);
-              if (!stillReadable) continue;
+          const key = resumeBufferKey({
+            principalId: auth?.principalId ?? null,
+            subjectId: auth?.subjectId ?? null,
+            filter,
+            includeRecords,
+          });
+          const scoped = scopeFor(auth);
+          const buffer = await resumeBuffers.acquire(key, (onChange) =>
+            scoped.subscribe(onChange, { filter, includeRecords }),
+          );
+
+          // Attached before anything below reads or awaits, so nothing this
+          // connection is owed can land in the gap between "what the backlog
+          // snapshot covers" and "what the live buffer starts reporting" —
+          // there isn't one. `replaying` buffers what arrives live while the
+          // (possibly awaited, permission-rechecking) backlog replay below is
+          // still in flight, so a change appended mid-replay can never be
+          // sent out of order ahead of an older, still-pending backlog frame.
+          let replaying = true;
+          const queued: ResumeEntry[] = [];
+          const detachLive = buffer.subscribeLive((entry) => {
+            if (replaying) queued.push(entry);
+            else send('record', entry.frame, entry.frame.seq);
+          });
+          // Registered before the first `await` below, so a subscription
+          // opened above is always released — including when that await
+          // throws. Everything after this point runs under the finally.
+          unsubscribe = () => {
+            detachLive();
+            resumeBuffers.release(key);
+          };
+
+          let resetReason: ChangeResetReason | undefined;
+          let backlog: ResumeEntry[] = [];
+          if (presentedRaw !== undefined) {
+            const decoded = decodeCursor(presentedRaw);
+            if (!decoded || decoded.bufferId !== buffer.id) {
+              // Unrecognized outright, or names a buffer instance that isn't
+              // this key's current one (evicted past its retention window,
+              // or minted for a filter this cursor doesn't actually match).
+              resetReason = 'cursor_expired';
+            } else {
+              const outcome = buffer.entriesAfter(decoded.n);
+              if (outcome.status === 'ok') backlog = outcome.entries;
+              else resetReason = outcome.status;
             }
-            send('record', entry.frame, entry.frame.seq);
+          }
+
+          send('ready', { seq: buffer.headCursor() });
+
+          if (resetReason) {
+            send('reset', { reason: resetReason });
+          } else {
+            for (const entry of backlog) {
+              // Purge frames aren't re-checkable — the mutation-time decision
+              // is the only one that will ever exist (docs/spec/events.md,
+              // quoted on issue #84). A non-purge frame's record ID is still
+              // in hand, so a grant revoked during the gap is caught here.
+              if (!entry.isPurge) {
+                const stillReadable = await scoped.get(entry.recordId);
+                if (!stillReadable) continue;
+              }
+              // Once the gate trips this connection is closing, so the
+              // remaining entries are permission checks nobody will read.
+              if (!send('record', entry.frame, entry.frame.seq)) break;
+            }
+          }
+
+          replaying = false;
+          for (const entry of queued) {
+            if (!send('record', entry.frame, entry.frame.seq)) break;
           }
         }
 
-        replaying = false;
-        for (const entry of queued) {
-          send('record', entry.frame, entry.frame.seq);
-        }
+        // Through the gate like any other write: a client not draining its
+        // keepalives isn't draining anything, and counting them is what
+        // keeps "in-flight frames are bounded" true of the whole stream
+        // rather than of `record` frames alone.
+        keepalive = setInterval(() => {
+          gate.send(() => stream.write(': keepalive\n\n'));
+        }, keepaliveMs);
 
-        unsubscribe = () => {
-          detachLive();
-          resumeBuffers.release(key);
-        };
+        // A revoked or expired token must stop delivering. The owner's
+        // static bearer token never expires (authMiddleware compares it
+        // directly, not via the token store), so only a minted session needs
+        // re-checking; an anonymous connection has no token to revoke.
+        const isOwnerToken =
+          bearerToken !== undefined && safeCompare(bearerToken, config.ownerToken);
+        sessionCheck =
+          auth && !isOwnerToken && bearerToken
+            ? setInterval(() => {
+                void ctx.tokens.lookupToken(bearerToken).then(
+                  (session) => {
+                    if (!session) resolveDone();
+                  },
+                  // The token store is unreachable. Closing is the honest
+                  // answer — the client reconnects and re-authenticates
+                  // through the path that already handles a 401 — and it
+                  // keeps a rejection here from going unhandled.
+                  () => resolveDone(),
+                );
+              }, sessionCheckMs)
+            : undefined;
+
+        await done;
+      } catch (err) {
+        // Hono answers a throw from this callback by writing the raw error
+        // message to the client as an `error` frame; catching it here keeps
+        // internal detail off a stream any anonymous caller can open, and
+        // the closed connection is already a repair the client knows how to
+        // make (reconnect, present the cursor, take frames or a `reset`).
+        logger.error(
+          { err, requestId: c.get('requestId') },
+          'Change feed connection ended with an error',
+        );
+      } finally {
+        if (keepalive) clearInterval(keepalive);
+        if (sessionCheck) clearInterval(sessionCheck);
+        unsubscribe?.();
+        unregister();
       }
-
-      const keepalive = setInterval(() => {
-        void stream.write(': keepalive\n\n');
-      }, keepaliveMs);
-
-      // A revoked or expired token must stop delivering. The owner's
-      // static bearer token never expires (authMiddleware compares it
-      // directly, not via the token store), so only a minted session needs
-      // re-checking; an anonymous connection has no token to revoke.
-      const isOwnerToken = bearerToken === config.ownerToken;
-      const sessionCheck =
-        auth && !isOwnerToken && bearerToken
-          ? setInterval(() => {
-              void ctx.tokens.lookupToken(bearerToken).then((session) => {
-                if (!session) resolveDone();
-              });
-            }, sessionCheckMs)
-          : undefined;
-
-      await done;
-
-      clearInterval(keepalive);
-      if (sessionCheck) clearInterval(sessionCheck);
-      unsubscribe();
-      unregister();
     });
   });
 

@@ -5,7 +5,13 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
 
-function safeCompare(a: string, b: string): boolean {
+/**
+ * Constant-time string equality, for comparing a presented credential
+ * against a configured secret. Exported so every comparison of the owner
+ * token uses the same one — `GET /changes` re-derives "is this the owner"
+ * to decide whether to arm its session re-check.
+ */
+export function safeCompare(a: string, b: string): boolean {
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
   return ba.length === bb.length && timingSafeEqual(ba, bb);

@@ -25,7 +25,7 @@ export class FrameGate {
    * means this call (and every one after it) triggered — or already
    * followed — overflow, and `onOverflow` has fired at most once.
    */
-  send(write: () => Promise<void>): boolean {
+  send(write: () => Promise<unknown>): boolean {
     if (this.overflowed) return false;
     if (this.pending >= this.maxPending) {
       this.overflowed = true;
