@@ -9,32 +9,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { Config } from '../config.js';
 
-export type WellknownRouteOptions = {
-  /**
-   * Whether `?include=record` is honored on `GET /changes`. Always `true`
-   * in production — `src/routes/changes.ts` honors it unconditionally, so
-   * there's no real deployer lever here. This exists only so a test can
-   * exercise the `records: false` branch of the wire contract (both flags
-   * false is fully conformant — see docs/spec/wire-format.md § Change
-   * feed) without `src/routes/changes.ts` growing a matching toggle it
-   * doesn't otherwise need.
-   */
-  changeFeedRecords?: boolean;
-  /**
-   * Whether `GET /changes` honors a resume cursor. Always `true` in
-   * production (#84) — mirrors `changeRoutes()`'s own `resume` option
-   * (`ChangeRouteOptions.resume`), which a test threads through alongside
-   * this one so the discovery response and the route's actual behavior
-   * never disagree.
-   */
-  changeFeedResume?: boolean;
-};
-
-export function wellknownRoutes(
-  ctx: StackContext,
-  config: Config,
-  opts: WellknownRouteOptions = {},
-): Hono<AppEnv> {
+export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.get('/stack', (c) => {
@@ -61,18 +36,23 @@ export function wellknownRoutes(
       // adapter's own capabilities do, so it's added explicitly. An object
       // rather than a boolean for the same reason `auth` is: the surface
       // grows entries (another transport, batched frames) rather than
-      // gaining a second and third boolean alongside it. Advertise what's
-      // true, not what's aspirational — a client that calls
-      // subscribeChanges() against a server advertising no feed fails
-      // locally at open(), which is strictly better than discovering a 404
-      // partway through a connection. `resume: true` since #84 mints
-      // cursors and GET /changes honors Last-Event-ID/?since=; `records:
-      // true` because `GET /changes` already honors `?include=record`
-      // unconditionally (#82).
+      // gaining a second and third boolean alongside it.
+      //
+      // Both literals, with no override: this server resumes (#84 mints
+      // cursors and GET /changes honors Last-Event-ID/?since=) and honors
+      // `?include=record` (#82), so those are the only true answers it can
+      // give. A client is entitled to act on this without asking again —
+      // `APIAdapter.subscribeChanges()` against a server advertising no
+      // feed throws locally, without sending a request — which makes an
+      // override that could report otherwise a way to make this response
+      // lie about the route next to it. The conformant both-false shape is
+      // a different server's discovery response, not a mode of this one;
+      // the fixture describing it is skipped in tests/conformance.test.ts
+      // for exactly that reason.
       changes: {
         transports: [CHANGE_TRANSPORT_SSE],
-        resume: opts.changeFeedResume ?? true,
-        records: opts.changeFeedRecords ?? true,
+        resume: true,
+        records: true,
       },
     };
     return c.json(body);
