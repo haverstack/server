@@ -22,20 +22,15 @@ import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/
 
 const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 
-// How often a `: keepalive` comment goes out on an otherwise-idle
-// connection, and how often an authenticated session is re-checked against
-// the token store — a stream's authority is fixed at connect, so without
-// this a revoked or expired token would keep delivering for as long as the
-// connection stays open. Neither is part of the wire contract (a client
-// never sees these values), so they're plain constants rather than another
-// pair of env vars.
+// Keepalive cadence, and how often an authenticated session is re-checked
+// against the token store — a stream's authority is fixed at connect, so
+// without the re-check a revoked token keeps delivering for as long as the
+// connection lives. Neither value reaches a client, so neither is an env var.
 const DEFAULT_KEEPALIVE_MS = 15_000;
 const DEFAULT_SESSION_CHECK_MS = 30_000;
-// A slow or stalled client whose in-flight frame count crosses this is
-// closed rather than left to queue indefinitely — "close on overflow,
-// never drop a frame silently" (#82): a client that can't tell it missed
-// something can't repair it either, so silently dropping is worse than
-// disconnecting.
+// A client whose in-flight frame count crosses this is closed rather than
+// left to queue: one that can't tell it missed a frame can't repair it
+// either, so dropping silently is worse than disconnecting.
 const DEFAULT_MAX_PENDING_FRAMES = 1000;
 // Per-buffer ring depth and how long a buffer keeps being fed after its
 // last connection disconnects — see src/lib/resumeBuffer.ts. Not part of
@@ -49,12 +44,11 @@ export type ChangeRouteOptions = {
   sessionCheckMs?: number;
   maxPendingFrames?: number;
   /**
-   * Whether a presented cursor is honored at all. Default true, and never
-   * false in production — #84 made this server a resuming one, and
-   * discovery says so unconditionally. It exists because `resume: false`
-   * is real, spec-defined behavior (`ready` with no `seq`, then `reset`
-   * with reason `not_supported`) that a conformance fixture exercises, and
-   * that behavior needs a way to be reached.
+   * Whether a presented cursor is honored at all. Default true and never
+   * false in production, since discovery advertises resume unconditionally.
+   * It exists because `resume: false` is real, spec-defined behavior
+   * (`ready` with no `seq`, then `reset` with reason `not_supported`) that
+   * a conformance fixture needs a way to reach.
    */
   resume?: boolean;
   resumeBufferDepth?: number;
@@ -130,13 +124,11 @@ export function changeRoutes(
     return auth ? ctx.stack.forSession(auth) : ctx.stack.asEntity(null);
   }
 
-  // Single-process only: events exist only in the process that owns the
+  // Single-process only: events exist only in the process owning the
   // stack's storage (docs/spec/wire-format.md § Feed implementation
-  // checklist). This server is one process today and
-  // src/lib/queryWorker/ only reads, so ctx.stack.subscribe() sees every
-  // local write — but a second process subscribing to its own Stack over
-  // the same storage would see nothing and look fine in testing. Worth
-  // knowing before this server is ever scaled horizontally.
+  // checklist), and query workers only read. A second process subscribing
+  // to its own Stack over the same storage would see nothing and look fine
+  // in testing — worth knowing before scaling this horizontally.
   app.get('/', async (c) => {
     const url = new URL(c.req.url);
     const auth = c.get('auth');
@@ -145,21 +137,18 @@ export function changeRoutes(
     const includeUnlisted = parseIncludeUnlisted(url);
     const presentedRaw = presentedCursorRaw(c, url);
 
-    // Refused before the SSE stream opens, not inside it: a StackPermissionError
-    // thrown from ScopedStack.subscribe() once streaming has started would be
-    // caught by the generic catch below and the connection would just close —
-    // silently, after already answering 200. includeUnlisted needs a real 403,
-    // the same as GET /records and POST /records/query answer it as, so the
-    // owner-acting-alone check is done here, up front (mirrors requireOwner()).
+    // Refused before the stream opens: a throw from subscribe() after
+    // streaming starts is caught below and merely closes the connection,
+    // silently, having already answered 200. includeUnlisted owes a real
+    // 403, the same one GET /records answers with.
     if (includeUnlisted && !isOwnerActingAlone(auth, ctx.stack.ownerEntityId)) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
 
-    // A charset-invalid cursor is refused locally rather than treated as a
-    // cache miss — it isn't a value this (or any conformant) server could
-    // ever have minted, so there's nothing to reconcile by resuming from
-    // it. isValidSeq() is the same rule this server's own minted cursors
-    // are held to on the way out.
+    // A charset-invalid cursor is refused rather than treated as a cache
+    // miss: no conformant server could have minted it, so there is nothing
+    // to reconcile. isValidSeq() is the rule minted cursors meet on the way
+    // out, applied here on the way in.
     if (resumeEnabled && presentedRaw !== undefined && !isValidSeq(presentedRaw)) {
       throw new StackQueryError(`Invalid cursor: "${presentedRaw}"`);
     }
@@ -197,9 +186,8 @@ export function changeRoutes(
       try {
         if (!resumeEnabled) {
           // `resume: false` — a discovery-conformant server that mints no
-          // cursors at all. Exists only for WellknownRouteOptions'
-          // matching test toggle; every connection here is answered exactly
-          // as #82 shipped it.
+          // cursors at all, reachable only through WellknownRouteOptions'
+          // matching test toggle.
           send('ready', {});
           if (presentedRaw !== undefined) {
             const reason: ChangeResetReason = 'not_supported';
@@ -224,13 +212,11 @@ export function changeRoutes(
             scoped.subscribe(onChange, { filter, includeRecords, includeUnlisted }),
           );
 
-          // Attached before anything below reads or awaits, so nothing this
-          // connection is owed can land in the gap between "what the backlog
-          // snapshot covers" and "what the live buffer starts reporting" —
-          // there isn't one. `replaying` buffers what arrives live while the
-          // (possibly awaited, permission-rechecking) backlog replay below is
-          // still in flight, so a change appended mid-replay can never be
-          // sent out of order ahead of an older, still-pending backlog frame.
+          // Attached before anything below awaits, so there is no gap
+          // between what the backlog snapshot covers and what the live
+          // buffer reports. `replaying` holds live arrivals until the
+          // permission-rechecking replay finishes, so a change appended
+          // mid-replay can't overtake an older, still-pending backlog frame.
           let replaying = true;
           const queued: ResumeEntry[] = [];
           const detachLive = buffer.subscribeLive((entry) => {
@@ -267,10 +253,10 @@ export function changeRoutes(
             send('reset', { reason: resetReason });
           } else {
             for (const entry of backlog) {
-              // Purge frames aren't re-checkable — the mutation-time decision
-              // is the only one that will ever exist (docs/spec/events.md,
-              // quoted on issue #84). A non-purge frame's record ID is still
-              // in hand, so a grant revoked during the gap is caught here.
+              // A purge frame isn't re-checkable: the mutation-time
+              // decision is the only one there will ever be
+              // (docs/spec/events.md). Everything else still has its record
+              // ID, so a grant revoked during the gap is caught here.
               if (!entry.isPurge) {
                 const stillReadable = await scoped.get(entry.recordId);
                 if (!stillReadable) continue;
@@ -319,11 +305,10 @@ export function changeRoutes(
 
         await done;
       } catch (err) {
-        // Hono answers a throw from this callback by writing the raw error
-        // message to the client as an `error` frame; catching it here keeps
-        // internal detail off a stream any anonymous caller can open, and
-        // the closed connection is already a repair the client knows how to
-        // make (reconnect, present the cursor, take frames or a `reset`).
+        // Hono answers an uncaught throw here by writing the raw error
+        // message to the client as an `error` frame. Catching keeps internal
+        // detail off a stream any anonymous caller can open, and a closed
+        // connection is a repair the client already knows how to make.
         logger.error(
           { err, requestId: c.get('requestId') },
           'Change feed connection ended with an error',

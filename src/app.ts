@@ -41,11 +41,10 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
             ? config.corsOrigins.split(',').map((s) => s.trim())
             : [],
       allowMethods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'],
-      // Last-Event-ID: a browser client resuming GET /changes sends it as a
-      // plain request header (fetch, not EventSource, per the feed's own
-      // no-token-in-the-URL rule) — omitted from the preflight allowlist,
-      // a cross-origin resume attempt never reaches the route that answers
-      // it with `reset`.
+      // Last-Event-ID: a browser resuming GET /changes sends it as a plain
+      // header (fetch, not EventSource, per the feed's no-token-in-the-URL
+      // rule). Omitted here, a cross-origin resume never reaches the route
+      // that would answer it with `reset`.
       allowHeaders: ['Authorization', 'Content-Type', 'Content-Disposition', 'Last-Event-ID'],
       exposeHeaders: ['X-Request-Id', 'Content-Disposition'],
     }),
@@ -53,14 +52,11 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.onError(errorMiddleware(logger, ctx.stack));
   app.use(authMiddleware(config.ownerToken, ctx));
 
-  // Cap request body size globally — not per-prefix, so a route added later
-  // (e.g. auth endpoints) can't silently end up with no limit at all. The
-  // one exception is POST /attachments, which enforces its own, larger
-  // ceiling via maxAttachmentBytes; running this limit ahead of that one
-  // would reject legitimate uploads before the upload-specific check ever
-  // runs. Thrown as a StackError, like every other Stack-domain failure,
-  // rather than hand-built via wireError() — errorMiddleware/serializeError()
-  // produces the conforming { error: { code, message } } body from it.
+  // Global rather than per-prefix, so a route added later can't end up with
+  // no limit at all. POST /attachments is the one exception: it enforces its
+  // own, larger ceiling, and running this one first would reject legitimate
+  // uploads before that check ran. Thrown as a StackError so
+  // errorMiddleware produces the conforming body, like any other failure.
   const jsonBodyLimit = bodyLimit({
     maxSize: config.maxContentBytes,
     onError: () => {

@@ -30,10 +30,9 @@ export function createShutdownHandler(
   return async (signal: string) => {
     logger.info({ signal }, 'Shutting down');
 
-    // Ends every open GET /changes connection up front — left open, a
-    // change-feed stream never drains on its own, so server.close() below
-    // would otherwise wait out the full grace period on every shutdown
-    // rather than finishing as soon as ordinary requests complete.
+    // A change-feed stream never drains on its own, so server.close() below
+    // would wait out the full grace period every time. See
+    // src/lib/changeStreams.ts.
     ctx.changeStreams.closeAll();
 
     await new Promise<void>((resolve) => {

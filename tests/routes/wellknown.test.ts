@@ -60,9 +60,9 @@ describe('GET /.well-known/stack', () => {
     const { data } = await req(t.app, 'GET', '/.well-known/stack');
     expect((data as { changes?: unknown }).changes).toEqual({
       transports: ['sse'],
-      // GET /changes mints and honors resume cursors since #84.
+      // GET /changes mints and honors resume cursors.
       resume: true,
-      // GET /changes honors ?include=record unconditionally (#82).
+      // GET /changes honors ?include=record unconditionally.
       records: true,
     });
   });

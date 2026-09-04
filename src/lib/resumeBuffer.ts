@@ -1,10 +1,10 @@
 /**
- * Per-(session, filter) resume buffers for GET /changes (#84). Sits
- * downstream of each connection's `ScopedStack.subscribe()` — every entry
- * here is a frame that subscription already delivered, i.e. something this
- * session was cleared to see at the moment it happened. Resuming replays
- * this buffer; it needs nothing from core. See the design writeup on
- * issue #84 for why this shape was chosen over a single server-wide buffer.
+ * Per-(session, filter) resume buffers for GET /changes. Sits downstream
+ * of each connection's `ScopedStack.subscribe()`, so every entry here is a
+ * frame that subscription already delivered — something this session was
+ * cleared to see at the moment it happened. That is what keeps replay a
+ * pure re-send needing nothing from core, where a single server-wide
+ * buffer would owe a permission check per frame per reader.
  *
  * A buffer mints its own cursors (its position is a private counter, not a
  * slice of some global sequence) and is fed independently of any one HTTP
@@ -123,10 +123,10 @@ export type ResumeBufferKeyParts = {
  *
  * Hence an object rather than a positional array: `JSON.stringify` drops
  * an undefined *property* but renders an undefined *array element* as
- * `null`, which collapsed "no parentId filter" onto `parentId: null`
- * ("root records only" — a filter the wire format defines) when both were
- * array slots. Absent is now encoded as an absent key, which no present
- * value can imitate. Key order is fixed by construction below.
+ * `null`, which would collapse "no parentId filter" onto `parentId: null`
+ * — "root records only", a filter the wire format defines. An absent part
+ * is an absent key, which no present value can imitate. Key order is fixed
+ * by construction below.
  */
 export function resumeBufferKey(parts: ResumeBufferKeyParts): string {
   const { filter } = parts;

@@ -31,24 +31,15 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
       // credential learns at open() that there's a handshake to perform,
       // rather than discovering it as a 404 partway through one.
       auth: { methods: [AUTH_METHOD_DID_CHALLENGE] },
-      // A top-level field, not part of `capabilities` above — it does not
-      // come along with the `...ctx.stack.features` spread the way the
-      // adapter's own capabilities do, so it's added explicitly. An object
-      // rather than a boolean for the same reason `auth` is: the surface
-      // grows entries (another transport, batched frames) rather than
-      // gaining a second and third boolean alongside it.
+      // Top-level rather than inside `capabilities`, which carries only
+      // what the `...ctx.stack.features` spread brings. An object rather
+      // than a boolean for the same reason `auth` is: the surface grows
+      // entries — another transport, batched frames — not more booleans.
       //
-      // Both literals, with no override: this server resumes (#84 mints
-      // cursors and GET /changes honors Last-Event-ID/?since=) and honors
-      // `?include=record` (#82), so those are the only true answers it can
-      // give. A client is entitled to act on this without asking again —
-      // `APIAdapter.subscribeChanges()` against a server advertising no
-      // feed throws locally, without sending a request — which makes an
-      // override that could report otherwise a way to make this response
-      // lie about the route next to it. The conformant both-false shape is
-      // a different server's discovery response, not a mode of this one;
-      // the fixture describing it is skipped in tests/conformance.test.ts
-      // for exactly that reason.
+      // Both flags are literals with no override: GET /changes does resume
+      // and does honor `?include=record`, and a client acts on this answer
+      // without asking again. An override could only ever make discovery
+      // lie about the route beside it.
       changes: {
         transports: [CHANGE_TRANSPORT_SSE],
         resume: true,

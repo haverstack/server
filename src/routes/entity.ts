@@ -11,25 +11,16 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
   const { stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
 
-  // `_entity@1` records get an auto-generated id — even the owner's own
-  // card, whether hand-created or minted by Stack.create()'s ownerProfile
-  // bootstrap. The binding lives in content.did, not the record id, so
-  // finding it takes a query. Run unscoped: this only resolves *which*
-  // record is the owner's card (routing, not data access) — the actual
-  // read/write below still goes through the caller's session so
-  // permission enforcement (403 for a known-but-forbidden record vs 404
-  // for a genuinely missing one) is unchanged. See docs/spec/identity.md
-  // § DID bindings.
+  // An `_entity@1` card binds its DID in content.did rather than in the
+  // record id, so finding the owner's takes a query. It runs unscoped
+  // because it resolves *which* record to touch, not its content: the read
+  // or write below still goes through the caller's session. See
+  // docs/spec/identity.md § DID bindings.
   //
-  // The resolved id is cached: once minted, a record's own id never
-  // changes, so re-querying for it on every GET is wasted work over the
-  // life of the process. Not cached as "absent" — a null result is never
-  // stored, so a card created later (ownerProfile wasn't configured at
-  // boot, or the owner is created out of band) is picked up on the next
-  // request rather than staying 404 forever. If a cached id ever stops
-  // resolving (the card was deleted, or in principle recreated under a
-  // new id), it's cleared so the next request re-resolves it — a
-  // once-per-process query, not a permanent trust of a stale id.
+  // A record's id never changes once minted, so the answer is cached. A
+  // null is never cached, which is what lets a card created after boot be
+  // picked up; a cached id that stops resolving is cleared below rather
+  // than trusted onward.
   let cachedOwnerRecordId: string | null = null;
 
   async function resolveOwnerRecordId(): Promise<string | null> {
@@ -47,13 +38,10 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     const id = await resolveOwnerRecordId();
     const record = id ? await stack.forSession(auth).get(id) : null;
     if (!record) {
-      // get() now returns null both for "doesn't exist" and "exists but
-      // this caller can't read it" (the anti-oracle rule — see #79), so a
-      // non-owner's null says nothing about whether the card is actually
-      // gone. Only the owner's own null is a reliable deletion signal;
-      // evicting the cache on anyone else's denial would force a
-      // re-resolve query on every subsequent forbidden GET for a card that
-      // never moved.
+      // A null from get() means "missing or unreadable" — the anti-oracle
+      // rule — so only the owner's own null is evidence the card is gone.
+      // Evicting on anyone else's denial would re-run the resolve query on
+      // every forbidden GET for a card that never moved.
       const ownerActingAlone =
         auth.principalId === ownerEntityId && auth.subjectId === ownerEntityId;
       if (ownerActingAlone) cachedOwnerRecordId = null;

@@ -14,8 +14,7 @@ const logger = pino({
 });
 
 // Set once initStack() resolves, so the fatal-error handler below can flush
-// even when the crash happens after startup (e.g. mid-request). Left
-// undefined for a crash during startup itself, since there's nothing to
+// a crash that happens after startup. Undefined before then: nothing to
 // flush yet.
 let ctx: StackContext | undefined;
 

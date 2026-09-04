@@ -20,12 +20,9 @@ export function errorMiddleware(logger: Logger, stack: Stack): ErrorHandler<AppE
   return async (err, c) => {
     const wire = serializeError(err);
     if (wire) {
-      // A permission denial with a resolved auth means the requester's DID
-      // was verified (a real token, not just anonymous noise) but lacked
-      // the grant — an actionable signal worth its own log line, per
-      // docs/spec/identity.md's "SHOULD log the requester DID on
-      // denied-but-verified requests". Anonymous denials never reach here:
-      // they're bodyless 401s from wireError(), not thrown StackErrors.
+      // A denial with a resolved auth is a verified DID that lacked the
+      // grant, which docs/spec/identity.md asks be logged. Anonymous
+      // denials are bodyless 401s from wireError() and never reach here.
       const auth = c.get('auth');
       if (err instanceof StackPermissionError && auth) {
         logger.warn(
@@ -37,23 +34,12 @@ export function errorMiddleware(logger: Logger, stack: Stack): ErrorHandler<AppE
           'Denied a verified requester',
         );
       }
-      // A StackNotFoundError for a verified requester is deliberately
-      // indistinguishable, on the wire, from a genuinely missing record
-      // (docs/spec/wire-format.md § Server implementation checklist,
-      // "Log the refusal you didn't send") — that's the anti-oracle rule
-      // #79 adopted. But the operator is not the adversary: an unscoped
-      // existence probe here (one extra read, only on a path that's
-      // already failing) recovers the distinction for the log without
-      // ever surfacing it to the client. `check` is always 'read' because
-      // ScopedStack's denialFor()/get() both collapse into
-      // StackNotFoundError exactly when canRead() is false, regardless of
-      // which verb (update/delete/etc.) the request asked for — there's no
-      // second gate to name here.
-      //
-      // Logged at debug, not warn: unlike the denial line above, this one
-      // is "who asked after what, and was refused" — the sharing graph,
-      // written down — and the spec asks that it not ship to a
-      // general-purpose aggregator by default (default LOG_LEVEL is info).
+      // On the wire a refused record is indistinguishable from a missing
+      // one (docs/spec/wire-format.md § Server implementation checklist),
+      // but the operator is not the adversary: an unscoped probe, on a path
+      // already failing, recovers the distinction for the log alone. Debug
+      // rather than warn — this is the sharing graph, which the spec asks
+      // stay out of a general-purpose aggregator by default.
       if (err instanceof StackNotFoundError && auth) {
         const recordId = c.req.param('id');
         if (recordId) {
@@ -65,20 +51,19 @@ export function errorMiddleware(logger: Logger, stack: Stack): ErrorHandler<AppE
               subjectId: auth.subjectId,
               recordId,
               existed: existing !== null,
+              // Always 'read': ScopedStack collapses to StackNotFoundError
+              // exactly when canRead() is false, whatever verb was asked.
               check: 'read',
             },
             'Refused a verified requester a 404',
           );
         }
       }
-      // An anonymous requester gets the same 404 for a private record as for
-      // a missing one (docs/spec/wire-format.md § Server implementation
-      // checklist): a bare 403 or 401 here would confirm the record exists
-      // to a caller who presented no credential at all. `WWW-Authenticate`
-      // keeps the login prompt reachable without reopening that
-      // distinction — RFC 7235's standard scheme for a bearer-token API is
-      // `Bearer` (RFC 6750 §3), not the higher-level `did-challenge`
-      // exchange discovery advertises for obtaining that token.
+      // A 401 or 403 to an anonymous caller would confirm the record
+      // exists to someone who presented no credential, so a private record
+      // and a missing one answer alike. `Bearer` (RFC 6750 §3) — not the
+      // `did-challenge` exchange discovery advertises for obtaining a
+      // token — keeps the login prompt reachable without reopening that.
       if (wire.status === 404 && !auth) c.header('WWW-Authenticate', 'Bearer');
       return c.json(wire.body, wire.status as ContentfulStatusCode);
     }

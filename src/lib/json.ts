@@ -16,12 +16,10 @@ export async function readJson<T = unknown>(c: Context<AppEnv>): Promise<T> {
     if (err instanceof SyntaxError) throw new StackQueryError('Invalid JSON in request body');
     throw err;
   }
-  // A body of `null`, a bare string or a number parses fine but is not
-  // something any route here can read: every call site indexes fields off
-  // the result, so a non-object reaches the handler and throws a bare
-  // TypeError — another unlabeled 500, and on /auth/challenge and
-  // /auth/token an unauthenticated one. Structurally invalid in the same
-  // way malformed JSON is, so it earns the same 400.
+  // `null`, a bare string or a number parses fine, but every call site
+  // indexes fields off the result, so a non-object reaches the handler and
+  // throws a bare TypeError — another unlabeled 500, unauthenticated on the
+  // /auth routes. Structurally invalid like malformed JSON, so a 400 too.
   if (parsed === null || typeof parsed !== 'object') {
     throw new StackQueryError('Request body must be a JSON object');
   }

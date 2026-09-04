@@ -1,11 +1,10 @@
 /**
- * Resume cursor codec (#84). A cursor is opaque and base64url by wire
- * contract (`isValidSeq()` in @haverstack/wire-types), but this server's
- * own cursors are self-describing: `base64url(bufferId + ":" + n)`. That
- * makes a presented cursor's origin checkable — a reconnect naming a
- * buffer this server doesn't hold (a different filter, a restart, a
- * buffer past its retention window) is detectable rather than silently
- * resumed against the wrong stream. See the design writeup on issue #84.
+ * Resume cursor codec. A cursor is opaque and base64url by wire contract
+ * (`isValidSeq()` in @haverstack/wire-types), but this server's own are
+ * self-describing: `base64url(bufferId + ":" + n)`. That makes a presented
+ * cursor's origin checkable — a reconnect naming a buffer this server
+ * doesn't hold (a different filter, a restart, a buffer past its retention
+ * window) is caught rather than resumed against the wrong stream.
  *
  * Real base64url encoding of the whole string is what satisfies the
  * charset rule automatically — there's no separate escaping step for the

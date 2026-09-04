@@ -60,11 +60,10 @@ describe('SSEDecoder', () => {
 });
 
 /**
- * A throwaway SSE server, unrelated to this repo's real change feed
- * endpoint (#82 hasn't landed it), that exists purely to prove
- * openChangeFeed's own mechanics: a connection opens, a mutation dispatched
- * against a *second*, concurrent request reaches the still-open stream, and
- * waitForFrames/close behave correctly around that.
+ * A throwaway SSE server, deliberately not this repo's GET /changes, so
+ * these pin openChangeFeed's own mechanics rather than the feed's: a
+ * connection opens, a mutation dispatched on a *second*, concurrent request
+ * reaches the still-open stream, and waitForFrames/close behave around it.
  */
 function buildSseTestApp() {
   const emitter = new EventEmitter();

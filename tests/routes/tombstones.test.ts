@@ -1,6 +1,7 @@
 /**
- * Soft-delete tombstone projection and mutation refusal — inherited from
- * the core 0.18 bump (issue #96), pinned here rather than assumed.
+ * Soft-delete tombstone projection and mutation refusal. The behavior is
+ * core's, pinned at this server's HTTP surface rather than assumed to
+ * survive the trip through it.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildTestApp, req, TEST_TOKEN, type TestApp } from '../setup.js';

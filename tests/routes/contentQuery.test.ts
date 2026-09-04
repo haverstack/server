@@ -1,7 +1,7 @@
 /**
- * Content filter and search behaviors carried through unmodified by the
- * core 0.20 bump (issue #96): the sqlite adapter's nestedContentQuery
- * capability, and FTS5 full-text search.
+ * Content filters and search over this server's query routes: the sqlite
+ * adapter's nestedContentQuery capability, and FTS5 full-text search,
+ * pinned at the HTTP surface rather than assumed to arrive intact.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildTestApp, req, TEST_TOKEN, type TestApp } from '../setup.js';

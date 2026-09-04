@@ -21,11 +21,9 @@ import { ChangeStreamRegistry } from './lib/changeStreams.js';
 export type StackContext = {
   adapter: LocalAdapter;
   stack: Stack;
-  // The interface (not NativeTokenStore) everywhere except lifecycle:
-  // routes and middleware should type against StackTokenStore, same
-  // reasoning as not sniffing token methods off the adapter. close() is
-  // the one lifecycle hook every implementation needs but the core
-  // interface doesn't declare.
+  // Typed as the interface, not NativeTokenStore, so routes and middleware
+  // bind to the contract. close() is the one lifecycle hook every
+  // implementation needs and the core interface doesn't declare.
   tokens: StackTokenStore & { close(): Promise<void> };
   // DID challenge-response nonces — see AuthNonceStore. Also kept outside
   // the portable stack file, in its own sibling store beside the tokens.
@@ -40,16 +38,11 @@ export type StackContext = {
 };
 
 export async function initStack(config: Config, logger: Logger): Promise<StackContext> {
-  // openOrInitialize() collapses the existsSync-then-branch choreography
-  // (a TOCTOU: the file can change state between the check and the call)
-  // into one race-free operation. entityId is passed as a lazy provider
-  // rather than a plain string so that openOrInitialize()'s own
-  // owner-mismatch check — which throws — never runs on the open path;
-  // ENTITY_ID divergence from an existing stack is a warning here, not a
-  // hard failure, matching documented behavior ("ignored once the
-  // database exists"). The provider itself is only invoked when a new
-  // database is actually being created, so a missing ENTITY_ID is never
-  // an error when opening an existing one.
+  // openOrInitialize() decides between open and create without a TOCTOU
+  // gap. entityId goes in as a lazy provider so openOrInitialize()'s own
+  // owner-mismatch check, which throws, never runs on the open path —
+  // ENTITY_ID divergence is a warning below, not a failure — and so a
+  // missing ENTITY_ID is an error only when creating a database.
   const adapter = await LocalAdapter.openOrInitialize({
     path: config.dbPath,
     entityId: () => {
@@ -77,10 +70,8 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
       : undefined,
   );
 
-  // Opt-in (SEED_COMMONS_TYPES) — see config.ts. defineCommonsTypes() is a
-  // thin loop over stack.defineType(), which is idempotent by construction
-  // (an identical schema is a no-op preserving createdAt), so this is safe
-  // on every boot, same as the system-type seeding above.
+  // Opt-in (SEED_COMMONS_TYPES). defineType() is idempotent — an identical
+  // schema is a no-op preserving createdAt — so this is safe every boot.
   if (config.seedCommonsTypes) {
     await defineCommonsTypes(stack, [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, PHOTO]);
   }
@@ -91,10 +82,9 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(config.dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(config.dbPath));
 
-  // Spawned only after the adapter above has opened (or created) and
-  // seeded stack.db — each worker opens its own connection to the same
-  // file, and seedSystemTypes()/ensureOwnerEntity() being idempotent is
-  // what makes that safe to race, but there's no reason to race it.
+  // Spawned only once the adapter has opened and seeded stack.db: each
+  // worker opens its own connection to that same file, and idempotent
+  // seeding makes the race survivable rather than worth running.
   const queryWorker = new QueryWorkerPool({
     init: { dbPath: config.dbPath },
     poolSize: config.queryWorkerPoolSize,

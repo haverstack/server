@@ -714,10 +714,9 @@ describe('Records', () => {
 
   describe('_grant@1 write protection', () => {
     it('refuses to grant privileges on _grant/_config/_app (privilege-escalation guard)', async () => {
-      // stack.grant() itself forecloses the escalation vector the old test
-      // below exercised via a route-level guard: it's no longer possible to
-      // hand out a grant that targets _grant, so there is nothing for a
-      // non-owner to escalate with in the first place.
+      // stack.grant() forecloses the escalation at the source: a grant
+      // targeting _grant cannot be handed out at all, so a non-owner has
+      // nothing to escalate with.
       await expect(
         t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['update-own'], typeId: GRANT_TYPE_ID }]),
       ).rejects.toThrow(/privilege escalation/);
@@ -1333,9 +1332,9 @@ describe('Records', () => {
         token: TEST_TOKEN,
         body: { permissions: [] },
       });
-      // Anonymous can no longer tell "made private" from "never existed" —
-      // the anti-oracle rule (#79) — so this is 404 + WWW-Authenticate, not
-      // 403 or a bodyless 401.
+      // Anonymous can't tell "made private" from "never existed" — the
+      // anti-oracle rule — so 404 + WWW-Authenticate, not 403 or a
+      // bodyless 401.
       const res = await t.app.request(`/records/${record.id}`);
       expect(res.status).toBe(404);
       expect(res.headers.get('WWW-Authenticate')).toBe('Bearer');

@@ -55,15 +55,11 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     try {
       data = await (auth ? stack.forSession(auth) : stack.asEntity(null)).getAttachment(fileId);
     } catch (e) {
-      // Anonymous + denied is a transport-auth failure (no token at all),
-      // distinct from an authenticated requester lacking access. Anything
-      // else — StackPermissionError with auth present, StackNotFoundError,
-      // or a genuine fault — falls through to errorMiddleware, which maps
-      // the first two to 403/404 via serializeError() and logs/500s the
-      // rest. Missing and forbidden stay indistinguishable for non-owners
-      // because ScopedStack.getAttachment already throws the same
-      // StackPermissionError for both (see canAccessFile) — this handler
-      // doesn't need its own anti-oracle logic, only to stop overriding it.
+      // Anonymous and denied is a transport-auth failure, distinct from an
+      // authenticated requester lacking access; everything else belongs to
+      // errorMiddleware. ScopedStack.getAttachment() already throws alike
+      // for missing and forbidden, so this handler owes no anti-oracle
+      // logic of its own — only to leave that answer intact.
       if (!auth && e instanceof StackPermissionError) {
         return c.json({ error: 'Unauthorized' }, 401);
       }
@@ -88,11 +84,10 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       filenameParam,
       storedMimeType: firstRecord?.content.mimeType,
     });
-    // forced means the dangerous-type policy overrode the candidate — the
-    // server must also drop any filename from the disposition, since
-    // Content-Type forcing alone doesn't stop a browser from sniffing the
-    // body back into the original type without both nosniff and a
-    // non-inline disposition (see AttachmentDownloadContentType.forced).
+    // When the dangerous-type policy overrides the candidate, the filename
+    // goes too: forcing Content-Type alone won't stop a browser sniffing
+    // the body back into the original type without both nosniff and a
+    // non-inline disposition.
     const filename = forced
       ? undefined
       : (filenameParam ?? ownRecord?.content.filename ?? firstRecord?.content.filename);

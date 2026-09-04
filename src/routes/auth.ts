@@ -17,12 +17,10 @@ import type { StackContext } from '../stack.js';
 import { readJson } from '../lib/json.js';
 import { createExpiredTokenSweeper } from '../lib/tokenSweep.js';
 
-// The handshake never issues a delegated token — proving key possession
-// proves the principal and nothing about whom it may act for (see #54's
-// docs/spec quote). A default TTL, since AuthTokenResponse.expiresAt is a
-// concrete value in the conformance fixtures, not an absent field: unlike
-// the owner's POST /tokens (which leaves expiry to the owner's choice),
-// self-service handshake tokens get a bounded lifetime by default.
+// The handshake never issues a delegated token: proving key possession
+// proves the principal and nothing about whom it may act for. It gets a
+// default TTL rather than the owner's choice of one, because a token
+// anyone can mint for themselves owes a bounded lifetime.
 const AUTH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Stamped on every handshake-issued token. GET /tokens is the owner's only
@@ -112,13 +110,11 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
       label: AUTH_TOKEN_LABEL,
     });
 
-    // expiresAt is reported from the value just written, not read back via
-    // listTokens(): that read is an unpaginated scan of every token ever
-    // issued, which on an unauthenticated route makes each handshake cost
-    // more than the last. The store persists this Date unchanged (its
-    // schema holds epoch millis), so a read-back could only ever return
-    // what is already here. POST /tokens still reads back — it needs
-    // createdAt and label, which it does not compute, and it is owner-only.
+    // Reported from the value just written rather than read back through
+    // listTokens(), an unpaginated scan of every token ever issued — on an
+    // unauthenticated route that makes each handshake cost more than the
+    // last. The store persists the Date unchanged, so a read-back could
+    // only return what is already here.
     const response: AuthTokenResponse = {
       token,
       expiresAt: expiresAt.toISOString(),

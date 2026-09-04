@@ -1,7 +1,6 @@
 /**
  * Runs the shared @haverstack/conformance-fixtures suite against this
- * server's real HTTP surface — issue #32 / core#52's acceptance gate for
- * the sync batch. This is a companion to the hand-written route tests
+ * server's real HTTP surface. A companion to the hand-written route tests
  * under tests/routes/, not a replacement: each fixture pins one documented
  * wire-contract point (a status code, an error code, a merge/versioning
  * rule), so a fixture that starts failing here means this server and the
@@ -18,7 +17,7 @@
  * named in that describe block's SKIPPED set with a reason. Each block's
  * final "coverage" test fails loudly if core adds, removes, or renames a
  * fixture this file hasn't been told about — that's what makes this an
- * acceptance gate rather than a snapshot of today's fixture list.
+ * acceptance gate rather than a snapshot of one day's fixture list.
  */
 import { Hono } from 'hono';
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
@@ -77,11 +76,10 @@ import type { AppEnv } from '../src/types.js';
  * every dispatched create swaps in a freshly generated id instead.
  *
  * Fixture bodies carry the same long-past `createdAt`/`updatedAt` (a
- * WireRecord is a whole record). Those are stripped here too: since #99, an
- * owner-token dispatch backdates for real, and a stale `createdAt` paired
- * with the fresh id above would fail the id-vs-createdAt skew check these
- * fixtures aren't testing. A fixture that *is* testing backdating passes its
- * own matching id/createdAt instead of going through this helper.
+ * WireRecord is a whole record). Those are stripped too: an owner-token
+ * dispatch backdates for real, so a stale `createdAt` beside the fresh id
+ * above would fail the skew check these fixtures aren't testing. A fixture
+ * that *is* testing backdating passes its own matching pair instead.
  */
 function withFreshId<T extends { id?: string; createdAt?: unknown; updatedAt?: unknown }>(
   body: T,
@@ -144,11 +142,9 @@ function assertCoverage(names: string[], handled: Set<string>, skipped: Set<stri
 describe('discovery fixtures', () => {
   const SKIPPED = new Set([
     // Describes a conformant server that neither resumes nor includes
-    // records. This server does both — #84 mints and honors cursors, #82
-    // honors `?include=record` — so the only way to produce this response
-    // would be an override that lets discovery contradict the route beside
-    // it, on a field clients are entitled to act on without asking again.
-    // The shape is exercised by whichever implementation actually has it.
+    // records. This one does both, so producing this response would take an
+    // override letting discovery contradict the route beside it, on a field
+    // clients act on without asking again.
     'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
   ]);
   const handled = new Set<string>();
@@ -204,9 +200,8 @@ describe('discovery fixtures', () => {
     const changes = (data as { changes?: Record<string, unknown> }).changes;
     expect(changes).toBeDefined();
     expect(changes!.transports).toEqual(['sse']);
-    // Both mirror this server's own actual support. #84 mints cursors and
-    // GET /changes honors Last-Event-ID/?since=, so resume is true; this
-    // server already honors `?include=record` (#82), so records is true.
+    // Both mirror what GET /changes actually does: it mints cursors and
+    // honors Last-Event-ID/?since=, and it honors `?include=record`.
     expect(changes!.resume).toBe(true);
     expect(changes!.records).toBe(true);
   });
@@ -231,7 +226,7 @@ describe('createRecord fixtures', () => {
     // by hand in tests/routes/attachments.test.ts instead of reconstructed here.
     'create-attachment-record-non-owner-carve-out-succeeds',
     // Unlisted records (unlistedAt, PUT .../unlisted, includeUnlisted) are
-    // not implemented by this server yet — pending #98.
+    // not implemented by this server.
     'create-record-unlisted',
   ]);
   const handled = new Set<string>();
@@ -689,8 +684,8 @@ describe('setPermissions fixtures', () => {
       body: fixture.requestBody,
     });
     expect(status).toBe(fixture.responseStatus);
-    // Anonymous can't tell "made private" from "never existed" (#79's
-    // anti-oracle rule) — 404 + WWW-Authenticate, not 403.
+    // Anonymous can't tell "made private" from "never existed" — the
+    // anti-oracle rule, so 404 + WWW-Authenticate, not 403.
     const anon = await t.app.request(`/records/${record.id}`);
     expect(anon.status).toBe(404);
     expect(anon.headers.get('WWW-Authenticate')).toBe('Bearer');
@@ -870,8 +865,7 @@ describe('error response fixtures', () => {
     // Not implemented by this server: no query-time bound exists to trip.
     // A real gap, tracked separately from this harness.
     'error-timeout-search-exceeds-server-bound',
-    // includeUnlisted isn't wired into this server's filter parsing yet —
-    // pending #98.
+    // includeUnlisted isn't wired into this server's filter parsing.
     'error-permission-denied-includeUnlisted-non-owner',
   ]);
   const handled = new Set<string>();
@@ -1097,15 +1091,14 @@ describe('error response fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Change feed (#82): a change-feed fixture isn't a request/response pair
-// like every other block here — it pins an ordered stream of frames a
+// Change feed: a change-feed fixture isn't a request/response pair like
+// every other block here — it pins an ordered stream of frames a
 // connection sees, optionally across mutations made while it's open.
-// tests/changeFeedClient.ts (openChangeFeed/SSEDecoder, built in #81)
-// dispatches those against this server's real GET /changes.
+// tests/changeFeedClient.ts dispatches those against the real GET /changes.
 //
 // Same targeted-field discipline as every other block: a fixture's `seq`
 // and record ids/timestamps are illustrative, not literal. This server
-// mints real cursors since #84 (`resume: true`) — `ready.data.seq` and
+// mints real cursors (`resume: true`), so `ready.data.seq` and
 // every `record` frame's SSE `id:` are asserted structurally (base64url
 // shaped) below rather than deep-equated against a fixture's placeholder.
 // -------------------------------------------------------
@@ -1128,7 +1121,7 @@ describe('changeFeed fixtures', () => {
     'change-feed-unknown-frame-names-are-ignored',
     // The unlist/list transition (PUT .../unlisted, kind:"deleted"/op:"unlist"
     // and kind:"changed"/op:"list" frames, includeUnlisted suppression) isn't
-    // implemented by this server yet — pending #98.
+    // implemented by this server.
     'change-feed-unlist-frame-is-a-deleted-kind',
     'change-feed-list-frame-is-a-changed-kind',
     'change-feed-unlisted-record-produces-no-frame-by-default',
@@ -1145,7 +1138,7 @@ describe('changeFeed fixtures', () => {
       const [ready] = await conn.waitForFrames(1);
       expect(ready.event).toBe('ready');
       // ready never carries an SSE `id:` line — the cursor it reports rides
-      // in the JSON body (`data.seq`), which resume mints since #84.
+      // in the JSON body, as `data.seq`.
       expect(ready.id).toBeUndefined();
       expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
     } finally {
@@ -1166,7 +1159,7 @@ describe('changeFeed fixtures', () => {
       const recordId = (created as { id: string }).id;
       const [, frame] = await conn.waitForFrames(2);
       expect(frame.event).toBe('record');
-      // A record frame's SSE `id:` is its resume cursor — present since #84.
+      // A record frame's SSE `id:` is its resume cursor.
       expect(frame.id).toMatch(SEQ_PATTERN);
       expect(frame.id).toBe((frameData(frame) as { seq?: string }).seq);
       const data = frameData(frame);
@@ -1355,11 +1348,9 @@ describe('changeFeed fixtures', () => {
       (f) => f.name === 'change-feed-reset-when-no-cursor-is-honored',
     )!;
     handled.add(fixture.name);
-    // This fixture pins the behavior of a server advertising `resume:
-    // false` — this server's default is `resume: true` since #84, so the
-    // fixture is dispatched against a standalone app built with the
-    // matching test-only override, same pattern as the discovery block's
-    // `changeFeedResume: false` app above.
+    // This fixture pins a server advertising `resume: false`, and this
+    // server defaults to true, so it runs against a standalone app built
+    // with the matching test-only override.
     const resumeDisabledApp = new Hono<AppEnv>();
     resumeDisabledApp.use(authMiddleware(testConfig(t.dbPath).ownerToken, t.ctx));
     resumeDisabledApp.route(
@@ -1515,7 +1506,7 @@ describe('changeFeed sequence fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Auth: DID challenge-response handshake (#53)
+// Auth: DID challenge-response handshake
 // -------------------------------------------------------
 
 describe('auth handshake fixtures', () => {
