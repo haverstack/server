@@ -31,6 +31,38 @@ describe('Associations', () => {
     ]);
   });
 
+  it('POST adds a relationship association with a record-scope target and answers with the updated record', async () => {
+    const record = await seedRecord();
+    const other = await seedRecord();
+    const target = { scope: 'record' as const, recordId: other.id };
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { kind: 'relationship', label: 'reply-to', target },
+    });
+    expect(status).toBe(200);
+    expect((data as Record<string, unknown>).associations).toEqual([
+      { kind: 'relationship', label: 'reply-to', target },
+    ]);
+  });
+
+  it.each([
+    ['entity', { scope: 'entity', entityId: 'did:key:z6MkAlice' }],
+    ['external', { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/1' }],
+  ] as const)(
+    'POST adds a relationship association with a %s-scope target and answers with the updated record',
+    async (_scope, target) => {
+      const record = await seedRecord();
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+        token: TEST_TOKEN,
+        body: { kind: 'relationship', label: 'reply-to', target },
+      });
+      expect(status).toBe(200);
+      expect((data as Record<string, unknown>).associations).toEqual([
+        { kind: 'relationship', label: 'reply-to', target },
+      ]);
+    },
+  );
+
   it('GET returns all associations', async () => {
     const record = await seedRecord();
     await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
@@ -67,6 +99,20 @@ describe('Associations', () => {
     expect((data as Record<string, unknown>).associations).toBeUndefined();
     const after = await t.ctx.adapter.getRecord(record.id);
     expect(after?.associations?.some((a) => a.label === 'starred')).toBeFalsy();
+  });
+
+  it('POST .../associations/delete removes a relationship association regardless of target scope', async () => {
+    const record = await seedRecord();
+    const target = { scope: 'entity' as const, entityId: 'did:key:z6MkAlice' };
+    await t.ctx.adapter.associate(record.id, { kind: 'relationship', label: 'author', target });
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+      token: TEST_TOKEN,
+      body: { kind: 'relationship', label: 'author', target },
+    });
+    expect(status).toBe(200);
+    expect((data as Record<string, unknown>).associations).toBeUndefined();
+    const after = await t.ctx.adapter.getRecord(record.id);
+    expect(after?.associations?.some((a) => a.label === 'author')).toBeFalsy();
   });
 
   describe('If-Match / optimistic concurrency', () => {

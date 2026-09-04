@@ -102,6 +102,14 @@ Version history requires the same access `PATCH`/`DELETE` require — a write-ho
 
 Removing an association is `POST /records/:id/associations/delete`, not a body-bearing `DELETE` — a `DELETE` request body has no defined semantics (RFC 9110 §9.3.5) and is a portability landmine for proxies/gateways that drop or reject it.
 
+A `relationship` association's `target` is a discriminated union naming which identifier space the value belongs to — a Record (in this Stack or another), an identity, or something outside the Stack entirely:
+
+```json
+{ "kind": "relationship", "label": "reply-to",      "target": { "scope": "record",   "recordId": "xyz789" } }
+{ "kind": "relationship", "label": "author",        "target": { "scope": "entity",   "entityId": "did:key:z6Mk..." } }
+{ "kind": "relationship", "label": "syndicated-to", "target": { "scope": "external", "ns": "atproto", "id": "at://..." } }
+```
+
 `PUT /records/:id/permissions` returns `204` with no body; the body and (when read back via `GET`) response both use the `{ "permissions": [...] }` envelope. An empty array makes the record private (owner-only).
 
 `POST /records/:id/undelete` reverses a soft delete and returns the record as it now stands (`deletedAt` absent). Idempotent — a second call on an already-active record returns the same result.
@@ -112,9 +120,22 @@ Removing an association is `POST /records/:id/associations/delete`, not a body-b
 
 ### Query parameters
 
-`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
+`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToStack`, `relatedToLabel`), `relatedToEntity` (+ `relatedToLabel`), `relatedToNs` (+ `relatedToId`, `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
 
 Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
+
+#### Relationship target filter (`relatedTo` family)
+
+A relationship association's target names one of three scopes — a Record, an identity, or something outside the Stack — and the filter parameters mirror that:
+
+| Parameter         | Scope        | Pairs with                                                  |
+| ----------------- | ------------ | ----------------------------------------------------------- |
+| `relatedTo`       | `record`     | `relatedToStack` (that Record's Stack URL, if not this one) |
+| `relatedToEntity` | `entity`     | —                                                           |
+| `relatedToNs`     | `external`   | `relatedToId` (omit to match the whole namespace)           |
+| `relatedToLabel`  | any, or none | narrows any of the above; valid alone                       |
+
+`relatedTo`, `relatedToEntity`, and `relatedToNs` name different, mutually exclusive scopes — mixing parameters from two of them is `400`. `relatedToStack` is only meaningful alongside `relatedTo`, and `relatedToId` only alongside `relatedToNs`; either appearing without its pair is `400`. Absence and emptiness are not the same thing: omitting `relatedToStack` means the target has no `stackUrl` (i.e. this Stack) and does _not_ match a target that carries one, while an _empty_ `relatedToStack` is `400` rather than being read as "local" or "any". The same holds for `relatedToId`: omit it to match the whole namespace; an empty value is `400`. A bare `relatedToLabel`, with none of the scope parameters, is valid and matches every target under that label. `filter.relatedTo` in the `POST /records/query` body carries the same rule as a `{ label?, target? }` object, `target` being `{ scope: 'record' | 'entity' | 'external', ... }`.
 
 #### Content filter keys
 

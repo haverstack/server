@@ -356,6 +356,38 @@ describe('queryRecords fixtures', () => {
     expect(seen).toBe(3);
   });
 
+  test('query-related-to-record-target — relatedTo (+ relatedToLabel) accepts a record-target filter', async () => {
+    const fixture = queryRecordsFixtures.find((f) => f.name === 'query-related-to-record-target')!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    expect(page.records).toEqual([]);
+    expect(page.cursor).toBeNull();
+    expect(page.total).toBeNull();
+  });
+
+  test('query-related-to-entity-target — relatedToEntity accepts an entity-target filter', async () => {
+    const fixture = queryRecordsFixtures.find((f) => f.name === 'query-related-to-entity-target')!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    expect(page.records).toEqual([]);
+    expect(page.cursor).toBeNull();
+    expect(page.total).toBeNull();
+  });
+
+  test('query-related-to-external-namespace — relatedToNs alone matches the whole namespace', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-related-to-external-namespace',
+    )!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    expect(page.records).toEqual([]);
+    expect(page.cursor).toBeNull();
+    expect(page.total).toBeNull();
+  });
+
   test('coverage', () => {
     // query-empty-page-with-live-cursor and query-get-records-uses-the-same-
     // envelope pin narrower edge cases of the same two invariants (a
@@ -368,16 +400,11 @@ describe('queryRecords fixtures', () => {
         'query-empty-page-with-live-cursor',
         'query-final-page-closes-the-cursor',
         'query-get-records-uses-the-same-envelope',
-      ]),
-      new Set([
-        // The relatedTo filter's scoped-target reshape (relatedToEntity,
-        // relatedToNs, relatedToId, relatedToStack, and their exclusivity
-        // rules) is #97's work — this filter still only understands the
-        // pre-0.14 record-target-by-id shape.
         'query-related-to-record-target',
         'query-related-to-entity-target',
         'query-related-to-external-namespace',
       ]),
+      new Set(),
     );
   });
 });

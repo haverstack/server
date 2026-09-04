@@ -1,6 +1,12 @@
 import { parseDate } from '@haverstack/wire-types';
 import { StackQueryError } from '@haverstack/core';
-import type { StackQuery, RecordFilter, QuerySort } from '@haverstack/core';
+import type {
+  StackQuery,
+  RecordFilter,
+  QuerySort,
+  RelatedToFilter,
+  RelationshipTargetPattern,
+} from '@haverstack/core';
 
 const MAX_QUERY_LIMIT = 1000;
 
@@ -80,6 +86,104 @@ function requirePlainObject(raw: unknown, label: string): Record<string, unknown
   return raw as Record<string, unknown>;
 }
 
+const TARGET_SCOPES = new Set(['record', 'entity', 'external']);
+
+/**
+ * Parse `filter.relatedTo.target` from a POST /records/query body into a
+ * RelationshipTargetPattern. The scope names which fields apply; core
+ * validates non-emptiness of the fields present (StackQueryError → 400),
+ * this only needs to route by scope and reject an unrecognized one.
+ */
+function parseRelatedToTarget(raw: unknown): RelationshipTargetPattern {
+  const t = requirePlainObject(raw, 'filter.relatedTo.target');
+  if (!TARGET_SCOPES.has(t.scope as string))
+    throw new StackQueryError(`Invalid filter.relatedTo.target.scope: ${JSON.stringify(t.scope)}`);
+  if (t.scope === 'record') {
+    return {
+      scope: 'record',
+      recordId: requireString(t.recordId, 'filter.relatedTo.target.recordId'),
+      ...(t.stackUrl !== undefined && {
+        stackUrl: requireString(t.stackUrl, 'filter.relatedTo.target.stackUrl'),
+      }),
+    };
+  }
+  if (t.scope === 'entity') {
+    return {
+      scope: 'entity',
+      entityId: requireString(t.entityId, 'filter.relatedTo.target.entityId'),
+    };
+  }
+  return {
+    scope: 'external',
+    ns: requireString(t.ns, 'filter.relatedTo.target.ns'),
+    ...(t.id !== undefined && { id: requireString(t.id, 'filter.relatedTo.target.id') }),
+  };
+}
+
+/** Parse `filter.relatedTo` from a POST /records/query body — a label, a target, or both. */
+function parseRelatedToBody(raw: unknown): RelatedToFilter {
+  const r = requirePlainObject(raw, 'filter.relatedTo');
+  const label =
+    r.label !== undefined ? requireString(r.label, 'filter.relatedTo.label') : undefined;
+  const target = r.target !== undefined ? parseRelatedToTarget(r.target) : undefined;
+  return {
+    ...(label !== undefined && { label }),
+    ...(target !== undefined && { target }),
+  } as RelatedToFilter;
+}
+
+/**
+ * Parse the `relatedTo`/`relatedToStack`/`relatedToEntity`/`relatedToNs`/
+ * `relatedToId`/`relatedToLabel` URL params into a RelatedToFilter. The
+ * scope is implied by which params appear and the three scopes are
+ * mutually exclusive; `relatedToStack`/`relatedToId` are only meaningful
+ * alongside their scope's primary param. Field-level emptiness (an empty
+ * relatedToStack, relatedToId, etc.) is left to core's target validation —
+ * passing the raw value through, rather than treating it as absent, is
+ * what lets core tell "omitted" from "empty" apart.
+ * See docs/api.md § Query parameters.
+ */
+function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
+  const hasRecord = url.searchParams.has('relatedTo');
+  const hasStack = url.searchParams.has('relatedToStack');
+  const hasEntity = url.searchParams.has('relatedToEntity');
+  const hasNs = url.searchParams.has('relatedToNs');
+  const hasId = url.searchParams.has('relatedToId');
+  const label = getOne(url, 'relatedToLabel');
+
+  if ([hasRecord, hasEntity, hasNs].filter(Boolean).length > 1) {
+    throw new StackQueryError(
+      'relatedTo, relatedToEntity and relatedToNs name different target scopes and are mutually exclusive',
+    );
+  }
+  if (hasStack && !hasRecord)
+    throw new StackQueryError('relatedToStack is only valid alongside relatedTo');
+  if (hasId && !hasNs) throw new StackQueryError('relatedToId is only valid alongside relatedToNs');
+
+  let target: RelationshipTargetPattern | undefined;
+  if (hasRecord) {
+    target = {
+      scope: 'record',
+      recordId: getOne(url, 'relatedTo')!,
+      ...(hasStack && { stackUrl: getOne(url, 'relatedToStack')! }),
+    };
+  } else if (hasEntity) {
+    target = { scope: 'entity', entityId: getOne(url, 'relatedToEntity')! };
+  } else if (hasNs) {
+    target = {
+      scope: 'external',
+      ns: getOne(url, 'relatedToNs')!,
+      ...(hasId && { id: getOne(url, 'relatedToId')! }),
+    };
+  }
+
+  if (target === undefined && !label) return undefined;
+  return {
+    ...(target !== undefined && { target }),
+    ...(label && { label }),
+  } as RelatedToFilter;
+}
+
 /** Convert wire ISO strings back to Date objects inside a StackQuery body. */
 export function parseQueryBody(raw: unknown): StackQuery {
   if (!raw || typeof raw !== 'object') return {};
@@ -103,16 +207,7 @@ export function parseQueryBody(raw: unknown): StackQuery {
       filter.hasAttachment = requireString(f.hasAttachment, 'filter.hasAttachment');
     if (f.attachmentFileId !== undefined)
       filter.attachmentFileId = requireString(f.attachmentFileId, 'filter.attachmentFileId');
-    if (f.relatedTo !== undefined) {
-      const r = requirePlainObject(f.relatedTo, 'filter.relatedTo');
-      filter.relatedTo = {
-        target: {
-          scope: 'record',
-          recordId: requireString(r.recordId, 'filter.relatedTo.recordId'),
-        },
-        ...(r.label !== undefined && { label: requireString(r.label, 'filter.relatedTo.label') }),
-      };
-    }
+    if (f.relatedTo !== undefined) filter.relatedTo = parseRelatedToBody(f.relatedTo);
     if (f.content !== undefined) filter.content = requirePlainObject(f.content, 'filter.content');
     if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
     if (f.includeDeleted) filter.includeDeleted = true;
@@ -182,14 +277,8 @@ export function parseQueryParams(url: URL): StackQuery {
   const attachmentFileId = getOne(url, 'attachmentFileId');
   if (attachmentFileId) filter.attachmentFileId = attachmentFileId;
 
-  const relatedTo = getOne(url, 'relatedTo');
-  if (relatedTo) {
-    const label = getOne(url, 'relatedToLabel');
-    filter.relatedTo = {
-      target: { scope: 'record', recordId: relatedTo },
-      ...(label && { label }),
-    };
-  }
+  const relatedTo = parseRelatedToParams(url);
+  if (relatedTo) filter.relatedTo = relatedTo;
 
   const search = getOne(url, 'search');
   if (search) filter.search = search;
