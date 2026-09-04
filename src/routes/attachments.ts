@@ -83,12 +83,19 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const contentTypeParam = c.req.query('contentType');
     const filenameParam = c.req.query('filename');
 
-    const { contentType } = resolveAttachmentDownloadContentType({
+    const { contentType, forced } = resolveAttachmentDownloadContentType({
       contentTypeParam,
       filenameParam,
       storedMimeType: firstRecord?.content.mimeType,
     });
-    const filename = filenameParam ?? ownRecord?.content.filename ?? firstRecord?.content.filename;
+    // forced means the dangerous-type policy overrode the candidate — the
+    // server must also drop any filename from the disposition, since
+    // Content-Type forcing alone doesn't stop a browser from sniffing the
+    // body back into the original type without both nosniff and a
+    // non-inline disposition (see AttachmentDownloadContentType.forced).
+    const filename = forced
+      ? undefined
+      : (filenameParam ?? ownRecord?.content.filename ?? firstRecord?.content.filename);
 
     const disposition = filename
       ? `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
