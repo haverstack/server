@@ -43,6 +43,9 @@ import {
   authSequenceFixtures,
   changeFeedFixtures,
   changeFeedSequenceFixtures,
+  setUnlistedFixtures,
+  attachmentDownloadFixtures,
+  attachmentUploadFixtures,
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
 } from '@haverstack/conformance-fixtures';
@@ -214,6 +217,9 @@ describe('createRecord fixtures', () => {
     // same fileId via an attachment association or file-ref field — exercised
     // by hand in tests/routes/attachments.test.ts instead of reconstructed here.
     'create-attachment-record-non-owner-carve-out-succeeds',
+    // Unlisted records (unlistedAt, PUT .../unlisted, includeUnlisted) are
+    // not implemented by this server yet — pending #98.
+    'create-record-unlisted',
   ]);
   const handled = new Set<string>();
 
@@ -355,13 +361,24 @@ describe('queryRecords fixtures', () => {
     // envelope pin narrower edge cases of the same two invariants (a
     // partial-visibility empty page that isn't exhaustion; GET/POST sharing
     // an envelope) already covered above by construction.
-    const names = queryRecordsFixtures.map((f) => f.name);
-    expect(names).toEqual([
-      'query-reports-null-total',
-      'query-empty-page-with-live-cursor',
-      'query-final-page-closes-the-cursor',
-      'query-get-records-uses-the-same-envelope',
-    ]);
+    assertCoverage(
+      queryRecordsFixtures.map((f) => f.name),
+      new Set([
+        'query-reports-null-total',
+        'query-empty-page-with-live-cursor',
+        'query-final-page-closes-the-cursor',
+        'query-get-records-uses-the-same-envelope',
+      ]),
+      new Set([
+        // The relatedTo filter's scoped-target reshape (relatedToEntity,
+        // relatedToNs, relatedToId, relatedToStack, and their exclusivity
+        // rules) is #97's work — this filter still only understands the
+        // pre-0.14 record-target-by-id shape.
+        'query-related-to-record-target',
+        'query-related-to-entity-target',
+        'query-related-to-external-namespace',
+      ]),
+    );
   });
 });
 
@@ -535,6 +552,25 @@ describe('associate fixtures', () => {
     const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
     });
+    expect((data as { associations: unknown[] }).associations).toEqual([fixture.requestBody]);
+  });
+
+  test('associate-relationship-external-target', async () => {
+    const fixture = associateFixtures.find(
+      (f) => f.name === 'associate-relationship-external-target',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+    });
+    // The discriminated target travels verbatim — core validates the union,
+    // this server neither flattens nor reshapes it.
     expect((data as { associations: unknown[] }).associations).toEqual([fixture.requestBody]);
   });
 
@@ -794,6 +830,9 @@ describe('error response fixtures', () => {
     // Not implemented by this server: no query-time bound exists to trip.
     // A real gap, tracked separately from this harness.
     'error-timeout-search-exceeds-server-bound',
+    // includeUnlisted isn't wired into this server's filter parsing yet —
+    // pending #98.
+    'error-permission-denied-includeUnlisted-non-owner',
   ]);
   const handled = new Set<string>();
 
@@ -1047,6 +1086,12 @@ describe('changeFeed fixtures', () => {
     // unrecognized frame — there's nothing server-side for this fixture to
     // exercise until a later minor adds one.
     'change-feed-unknown-frame-names-are-ignored',
+    // The unlist/list transition (PUT .../unlisted, kind:"deleted"/op:"unlist"
+    // and kind:"changed"/op:"list" frames, includeUnlisted suppression) isn't
+    // implemented by this server yet — pending #98.
+    'change-feed-unlist-frame-is-a-deleted-kind',
+    'change-feed-list-frame-is-a-changed-kind',
+    'change-feed-unlisted-record-produces-no-frame-by-default',
   ]);
 
   test('change-feed-ready-leads-every-connection', async () => {
@@ -1559,5 +1604,46 @@ describe('auth handshake fixtures', () => {
         expect((data as { error: { code: string } }).error.code).toBe(expected.error.code);
       }
     }
+  });
+});
+
+// -------------------------------------------------------
+// Records: setUnlisted (new in fixtures 0.8.0)
+// -------------------------------------------------------
+
+describe('setUnlisted fixtures', () => {
+  // Unlisted records — PUT /records/:id/unlisted, unlistedAt, and
+  // includeUnlisted — are not implemented by this server yet. Pending #98.
+  test('coverage', () => {
+    assertCoverage(
+      setUnlistedFixtures.map((f) => f.name),
+      new Set(),
+      new Set(setUnlistedFixtures.map((f) => f.name)),
+    );
+  });
+});
+
+// -------------------------------------------------------
+// Attachments: download / upload
+// -------------------------------------------------------
+
+describe('attachment download/upload fixtures', () => {
+  // Never wired up in this harness at all — a pre-existing coverage gap
+  // (attachment routes are exercised by hand in tests/routes/attachments.test.ts
+  // instead). Pending #102.
+  test('coverage: attachmentDownloadFixtures', () => {
+    assertCoverage(
+      attachmentDownloadFixtures.map((f) => f.name),
+      new Set(),
+      new Set(attachmentDownloadFixtures.map((f) => f.name)),
+    );
+  });
+
+  test('coverage: attachmentUploadFixtures', () => {
+    assertCoverage(
+      attachmentUploadFixtures.map((f) => f.name),
+      new Set(),
+      new Set(attachmentUploadFixtures.map((f) => f.name)),
+    );
   });
 });

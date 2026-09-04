@@ -131,6 +131,27 @@ describe('GET /attachments/:fileId', () => {
     expect(status).toBe(200);
   });
 
+  it('a readable unlisted record still conveys access to its attachment (core 0.18)', async () => {
+    // ScopedStack.getAttachment() scans referencing records with
+    // includeUnlisted itself — enumeration standing (unlisted) and read
+    // access (permissions) are orthogonal, so an unlisted-but-shared
+    // record still unlocks its attachment for a reader who holds a grant.
+    const fileId = await putFile(t.ctx);
+    await t.ctx.stack.create(
+      NOTE_TYPE_ID,
+      { body: 'unlisted but shared' },
+      {
+        unlisted: true,
+        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        associations: [{ kind: 'attachment', label: 'file', fileId }],
+      },
+    );
+    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+    const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
+    expect(status).toBe(200);
+  });
+
   it('rejects a non-owner entity without a matching read grant', async () => {
     const fileId = await putFile(t.ctx);
     await t.ctx.stack.create(

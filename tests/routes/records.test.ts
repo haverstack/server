@@ -208,12 +208,28 @@ describe('Records', () => {
       const child = await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'child' },
-        { associations: [{ kind: 'relationship', label: 'child', recordId: target.id }] },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'child',
+              target: { scope: 'record', recordId: target.id },
+            },
+          ],
+        },
       );
       await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'sibling' },
-        { associations: [{ kind: 'relationship', label: 'sibling', recordId: target.id }] },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'sibling',
+              target: { scope: 'record', recordId: target.id },
+            },
+          ],
+        },
       );
 
       const { data: unlabeled } = await req(
