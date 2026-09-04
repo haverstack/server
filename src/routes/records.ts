@@ -41,15 +41,12 @@ function parseOwnerDate(value: unknown, path: string): Date | undefined {
 // Route factory
 // ---------------------------------------------------------------------------
 
-// Routes that can search a large index (POST /query, GET /) run through
-// the query worker pool with a deadline (docs/spec/wire-format.md §
-// Bounding query cost); every other route below still calls the main
-// thread's Stack/ScopedStack directly. Only full-text/content-field
-// search over a large store has unbounded cost — a get, create, or
-// patch by id is index-bound and already fast, and routing every Stack
-// call through the worker boundary would mean virtualizing the entire
-// ScopedStack API (including attachment byte streaming) for no bound
-// this issue is actually about. See src/lib/queryWorker/pool.ts.
+// Only the routes that can search a large index (POST /query, GET /) run
+// on the query worker pool with a deadline; everything else calls the main
+// thread's ScopedStack directly, being index-bound already. Virtualizing
+// the whole ScopedStack API across the worker boundary would buy no bound
+// the unbounded-cost case needs. See src/lib/queryWorker/pool.ts and
+// docs/spec/wire-format.md § Bounding query cost.
 export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack, queryWorker } = ctx;
@@ -61,10 +58,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   }
 
   // POST /records/query — full query with content-field filters. Optional
-  // auth, same as GET /records: it's a superset of the same query surface,
-  // so an anonymous caller gets the same public-record subset either way
-  // (docs/api.md lists both as Optional). See #49.
-  // Registered before /:id patterns to avoid param capture on the literal "query" segment.
+  // auth, like GET /records: a superset of the same query surface, so an
+  // anonymous caller gets the same public-record subset either way.
+  // Registered ahead of the /:id patterns, which would otherwise capture
+  // the literal "query" segment.
   app.post('/query', async (c) => {
     const auth = c.get('auth');
     const query = parseQueryBody(await readJson(c));
@@ -72,11 +69,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
-      // Always null over the wire: every response has passed a permission
-      // boundary, so an unscoped count would leak how many Records exist
-      // beyond what this requester may read. Set explicitly here rather
-      // than trusting result.total, so the guarantee holds regardless of
-      // which query path produced the result.
+      // Always null: an unscoped count would leak how many Records exist
+      // beyond what this requester may read. Set here rather than trusted
+      // from result.total, so it holds whichever path produced the result.
       total: null,
     });
   });
@@ -89,26 +84,19 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json({
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
-      // Always null over the wire: every response has passed a permission
-      // boundary, so an unscoped count would leak how many Records exist
-      // beyond what this requester may read. Set explicitly here rather
-      // than trusting result.total, so the guarantee holds regardless of
-      // which query path produced the result.
+      // Always null: an unscoped count would leak how many Records exist
+      // beyond what this requester may read. Set here rather than trusted
+      // from result.total, so it holds whichever path produced the result.
       total: null,
     });
   });
 
-  // POST /records — accepts a full record body; id is client-minted (12
-  // lowercase Crockford base-32 chars, no reserved "_" prefix) and optional
-  // — omit it to let ScopedStack.create() generate one. version is never
-  // accepted from the client: it's always freshly generated for a new
-  // record, same as entityId/principalId (stamped from the authenticated
-  // session, never trusted from the body). createdAt/updatedAt are accepted
-  // only from the stack owner acting alone — everyone else's client sends
-  // both on every create (a record body is a whole record, and adapter-api
-  // serializes it with Dates included), and forwarding them unfiltered
-  // would turn an ordinary grantee create into a 403: ScopedStack.create()
-  // refuses backdating outright rather than ignoring it. See #99.
+  // POST /records — a full record body, but version, entityId and
+  // principalId are stamped here and never trusted from it. createdAt and
+  // updatedAt are read only for the owner acting alone: every client sends
+  // both on any create (a record body is a whole record), and forwarding
+  // them unfiltered would turn an ordinary grantee create into a 403, since
+  // ScopedStack.create() refuses backdating rather than ignoring it.
   app.post('/', requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await readJson<Record<string, unknown>>(c);
@@ -155,12 +143,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // a real edit into a silent no-op that still bumps version. null field
   // values remove the field.
   //
-  // The _attachment@1 immutable-field guard, the _grant@1 owner-only guard,
-  // and the unscoped stack.get() pre-fetch that used to back them are gone:
-  // ScopedStack now enforces all of it (docs/spec/attachments.md,
+  // No route-level guard belongs here: ScopedStack owns the _attachment@1
+  // immutable-field and _grant@1 owner-only rules (docs/spec/attachments.md,
   // docs/spec/access-control.md), so a denial round-trips as the core error
-  // it actually is instead of a route-level guess made before the
-  // permission check ever ran.
+  // it is rather than a guess made before the permission check ran.
   app.patch('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
@@ -227,10 +213,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   // PUT /records/:id/unlisted — withhold from enumeration, or relist.
   // Orthogonal to permissions: decides whether the record is enumerable,
-  // never who may read it. Gated exactly like setPermissions() (owner or
-  // creator) and refused on a soft-deleted record with 409 — both come
-  // free from ScopedStack.setUnlisted(), which (like associate/dissociate)
-  // returns void rather than the record, so the response is a re-fetch.
+  // never who may read it. The owner-or-creator gate and the 409 on a
+  // soft-deleted record both come from ScopedStack.setUnlisted(), which
+  // returns void, so the response is a re-fetch.
   app.put('/:id/unlisted', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
@@ -314,13 +299,11 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // POST /records/:id/migrate — the only way typeId changes after creation.
-  // Body carries the full post-migration content (computed client-side by
-  // the type's owning app); ScopedStack.commitMigration() validates it
-  // against toTypeId's schema before writing. Owner acting alone, only —
-  // ScopedStack.commitMigration()'s own doc: replacing content and typeId
-  // wholesale would have to re-derive every gate create()/update() apply at
-  // both ends, and grant-based access would reopen the non-owner
-  // _attachment@1 refusal that carve-out exists to close.
+  // The body carries the full post-migration content, computed client-side
+  // by the type's owning app and validated against toTypeId's schema by
+  // ScopedStack.commitMigration(). Owner acting alone only: replacing
+  // content and typeId wholesale would have to re-derive every gate
+  // create() and update() apply at both ends.
   app.post('/:id/migrate', requireOwner(ownerEntityId), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;

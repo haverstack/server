@@ -1,7 +1,7 @@
 /**
- * _group-scoped permissions — the core 0.20 ACL fix restricting a
- * permission's groupId to a real _group Record's roster, pinned here
- * rather than assumed (issue #96).
+ * _group-scoped permissions: a permission's groupId resolves only against
+ * a real _group Record's roster. Core's rule, pinned at this server's HTTP
+ * surface rather than assumed to arrive intact.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SYSTEM_TYPES } from '@haverstack/core';

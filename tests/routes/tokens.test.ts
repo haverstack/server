@@ -139,7 +139,6 @@ describe('DELETE /tokens/:id', () => {
     const { status } = await req(t.app, 'DELETE', `/tokens/${id}`, { token: TEST_TOKEN });
     expect(status).toBe(204);
 
-    // Revoked token is no longer usable
     const tokens = await t.ctx.adapter.listTokens();
     expect(tokens.find((tok) => tok.id === id)).toBeUndefined();
   });

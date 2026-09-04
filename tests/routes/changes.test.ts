@@ -64,7 +64,7 @@ describe('GET /changes', () => {
     it('rejects a charset-invalid cursor locally, as a 400, rather than as a reset frame', async () => {
       // isValidSeq() only ever allows base64url — a space is never in that
       // alphabet. Refused before the SSE stream even opens, not treated as
-      // a resumable-but-unrecognized cursor (#84).
+      // a resumable-but-unrecognized cursor.
       const { status, data } = await req(t.app, 'GET', '/changes', {
         token: TEST_TOKEN,
         headers: { 'Last-Event-ID': 'not a valid cursor' },

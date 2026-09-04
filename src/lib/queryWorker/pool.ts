@@ -2,50 +2,42 @@
  * Main-thread side of the query worker boundary. Owns a small, fixed-size
  * pool of workers (src/lib/queryWorker/worker.ts), each with its own
  * LocalAdapter connection to the same stack.db, and dispatches
- * ScopedStack.query() calls to them.
+ * ScopedStack.query() calls to them. The operator-facing account of why
+ * this exists is docs/deployment.md § Bounding query cost.
  *
- * Two separate bounds, deliberately not one:
+ * Two bounds, deliberately not one:
  *
  *   - `deadlineMs` bounds **execution**, and its clock starts when a
- *     request is handed to a worker — not when it was accepted here. That
- *     is the only thing that needs bounding: node:sqlite exposes no
- *     `sqlite3_interrupt` equivalent (checked against Node 22's
- *     DatabaseSync — its prototype has no interrupt method), so a query
- *     already inside the engine can't be cancelled in place. Time spent
- *     waiting behind other searches is not that, so queueing makes a
- *     request slow, never failed — the pre-pool behavior, minus the part
- *     where a slow search also stalled every unrelated route.
+ *     request reaches a worker, not when it was accepted here. Execution
+ *     is the only part that needs bounding: node:sqlite exposes no
+ *     `sqlite3_interrupt` equivalent, so a query already inside the engine
+ *     cannot be cancelled in place. Queueing makes a request slow, never
+ *     failed.
  *
- *   - `queueLimit` bounds **the wait**, so "slow" can't quietly become
- *     "unbounded" (in latency or in retained memory). Past it the pool
- *     sheds load explicitly with StackTimeoutError — a 503 that says
- *     "retryable, the server declined to keep queueing," which is honest
- *     about overload in a way a silently growing queue is not.
+ *   - `queueLimit` bounds **the wait**, so "slow" cannot quietly become
+ *     unbounded in latency or retained memory. Past it the pool sheds load
+ *     with StackTimeoutError — a retryable 503, which is honest about
+ *     overload in a way a silently growing queue is not.
  *
- * When a query does outlive its execution deadline the only lever left is
- * termination: the caller is answered with StackTimeoutError at once, and
- * the worker running it is terminated and replaced, so a stuck query costs
- * one worker slot rather than wedging the pool. That recycle is immediate
- * and un-throttled, because it is deliberate and already rate-limited by
- * construction — at most `poolSize` terminations per `deadlineMs`.
+ * Past its deadline the only lever left is termination: the caller is
+ * answered at once and the worker is terminated and replaced, so a stuck
+ * query costs one slot rather than wedging the pool. That recycle needs no
+ * backoff, being rate-limited by construction at `poolSize` terminations
+ * per `deadlineMs`.
  *
- * An *unexpected* death (a crash, a worker that throws on startup) is the
- * opposite case and gets exponential backoff: respawning a worker that
- * fails to boot — an unreadable or missing DB_PATH, say — as fast as the
- * loop allows would spin threads and flood logs forever. After
+ * An *unexpected* death is the opposite case and does back off: respawning
+ * a worker that can't boot — an unreadable DB_PATH, say — as fast as the
+ * loop allows would spin threads and flood logs. After
  * MAX_CONSECUTIVE_SPAWN_FAILURES the pool reports itself unhealthy and
- * fails queries fast with the underlying spawn error, so a fatal
- * misconfiguration surfaces as itself instead of as a pile of timeouts.
- * Respawns continue at the capped interval, so the pool heals on its own
- * once the cause clears.
+ * fails queries with the underlying spawn error, so a fatal
+ * misconfiguration surfaces as itself rather than as a pile of timeouts.
+ * Respawns continue at the capped interval, so the pool heals once the
+ * cause clears.
  *
- * Terminating mid-write is safe — SQLite's WAL journaling means an
- * uncommitted transaction is simply absent after the file is reopened (see
- * docs/spec/adapters.md's snapshot-then-mutate recovery, which already
- * assumes a writer can die mid-transaction) — but query() is the only
- * method routed through this pool today; see the module doc in
- * src/routes/records.ts for why writes and by-id reads stay on the main
- * thread.
+ * Terminating mid-write is safe: WAL journaling leaves an uncommitted
+ * transaction simply absent once the file is reopened. Only query() routes
+ * through this pool — src/routes/records.ts holds the reason writes and
+ * by-id reads stay on the main thread.
  */
 import { Worker } from 'node:worker_threads';
 import type { StackQuery, QueryResult, TokenSession } from '@haverstack/core';

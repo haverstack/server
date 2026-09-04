@@ -1,8 +1,8 @@
 /**
  * POST /records/query's filter.relatedTo — the body-side counterpart to
  * the relatedTo/relatedToEntity/relatedToNs/relatedToId/relatedToStack URL
- * params covered in records.test.ts. Same scoped-target shape (issue #97),
- * carried as a JSON object instead of query params.
+ * params covered in records.test.ts. Same scoped-target shape, carried as
+ * a JSON object instead of query params.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { buildTestApp, req, TEST_TOKEN, OTHER_ENTITY_ID, type TestApp } from '../setup.js';

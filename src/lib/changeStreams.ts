@@ -1,6 +1,6 @@
 /**
  * Tracks every open `GET /changes` SSE connection so shutdown can end them
- * up front. `server.close()` (src/shutdown.ts, from #49) waits for open
+ * up front. `server.close()` (src/shutdown.ts) waits for open
  * connections to drain on their own before its callback fires — fine for an
  * ordinary request, but a change-feed connection is meant to stay open
  * indefinitely, so left alone it would hold the drain open for the entire

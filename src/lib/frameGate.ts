@@ -5,10 +5,9 @@
  * changes arrive — the gate reports overflow instead of queuing further
  * sends without bound.
  *
- * "Close on buffer overflow; never drop a frame silently" (#82): a client
- * that can't tell it missed something can't repair it either, so silently
- * dropping a frame is worse than disconnecting and letting the client
- * reconnect and reconcile.
+ * Close on overflow, never drop a frame silently: a client that can't tell
+ * it missed something can't repair it either, so dropping is worse than
+ * disconnecting and letting it reconnect and reconcile.
  */
 export class FrameGate {
   private pending = 0;

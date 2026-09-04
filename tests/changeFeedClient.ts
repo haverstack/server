@@ -3,10 +3,9 @@
  * (docs/spec/wire-format.md § Change feed). Hono's own `hono/streaming`
  * ships an SSE *writer* (`streamSSE`) but nothing to consume one — that
  * half is what this module provides, so tests/conformance.test.ts can
- * drive changeFeedFixtures once GET /changes exists (#82): open a
- * connection, decode frames as they arrive, dispatch the fixture's
- * `activity` mutations while it's still open, and collect what the
- * connection produces.
+ * drive changeFeedFixtures: open a connection, decode frames as they
+ * arrive, dispatch the fixture's `activity` mutations while it is still
+ * open, and collect what the connection produces.
  */
 import type { Hono } from 'hono';
 import type { AppEnv } from '../src/app.js';

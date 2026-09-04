@@ -385,10 +385,9 @@ describe('handshake token bookkeeping', () => {
   });
 });
 
-// #44: a present-but-invalid credential must 401, not be silently
-// downgraded to anonymous — that's the dangerous shape on optional-auth
-// routes, where it would otherwise surface as a 200 with the public-only
-// subset instead of telling the caller its session is dead.
+// A present-but-invalid credential must 401, never a silent downgrade to
+// anonymous: on an optional-auth route that would surface as a 200 with the
+// public-only subset instead of telling the caller its session is dead.
 describe('invalid bearer credentials', () => {
   let t: TestApp;
   beforeEach(async () => {

@@ -81,12 +81,9 @@ export function loadConfig(): Config {
     throw new Error(`Invalid MAX_CONTENT_BYTES: ${process.env['MAX_CONTENT_BYTES']}`);
   }
 
-  // Per docs/spec/wire-format.md § Bounding query cost: the deadline applied
-  // to a query *executing* on the query worker pool (see src/lib/queryWorker),
-  // past which the request is abandoned with 503 `timeout` rather than
-  // blocking on a query node:sqlite has no way to cancel from inside. Time a
-  // request spends queued for a worker is bounded by QUERY_QUEUE_LIMIT
-  // instead, so ordinary contention makes searches slow rather than failed.
+  // Bounds a query *executing* on the worker pool, never its wait for a
+  // slot — that is QUERY_QUEUE_LIMIT's job, so ordinary contention makes a
+  // search slow rather than failed. See src/lib/queryWorker/pool.ts.
   const queryTimeoutMs = parseInt(
     optional('QUERY_TIMEOUT_MS', String(DEFAULT_QUERY_TIMEOUT_MS)),
     10,
@@ -124,10 +121,8 @@ export function loadConfig(): Config {
     );
   }
 
-  // Bounds how long shutdown() waits for in-flight/keep-alive connections to
-  // drain on server.close() before forcing them closed with
-  // closeAllConnections() and finishing the flush/close sequence anyway. See
-  // #49.
+  // How long shutdown() lets in-flight and keep-alive connections drain
+  // before forcing them closed and finishing the sequence anyway.
   const shutdownTimeoutMs = parseInt(
     optional('SHUTDOWN_TIMEOUT_MS', String(DEFAULT_SHUTDOWN_TIMEOUT_MS)),
     10,
@@ -136,20 +131,17 @@ export function loadConfig(): Config {
     throw new Error(`Invalid SHUTDOWN_TIMEOUT_MS: ${process.env['SHUTDOWN_TIMEOUT_MS']}`);
   }
 
-  // Opt-in: @haverstack/commons is Draft status (docs/commons/README.md in
-  // haverstack/core reserves the right to change definitions in place until
-  // there's an install base), and registering types is not free — they show
-  // up in GET /types and every app's type cache. Off by default keeps that
-  // an explicit choice rather than something this reference server defaults
-  // on for every deployer.
+  // Opt-in: @haverstack/commons is Draft status, so its definitions may
+  // change in place, and a registered type shows up in GET /types and every
+  // app's type cache whether or not that app wants it. See
+  // docs/deployment.md § Schema Commons seeding.
   const seedCommonsTypes = optional('SEED_COMMONS_TYPES', 'false') === 'true';
 
-  // Required, not auto-detected: the DID challenge-response handshake signs
-  // a payload scoped to this server's own public origin, and that origin
-  // must come from configuration rather than a client-controlled request
-  // header (Host, X-Forwarded-Host) — deriving it from a header would let a
-  // client choose which origin it signs for, reopening the relay attack the
-  // binding exists to prevent. See docs/spec/wire-format.md § Authentication.
+  // Required rather than auto-detected: the handshake signs a payload
+  // scoped to this server's public origin, and taking that from a
+  // client-controlled header (Host, X-Forwarded-Host) would let a client
+  // pick the origin it signs for, reopening the relay attack the binding
+  // closes. See docs/spec/wire-format.md § Authentication.
   const baseUrl = required('BASE_URL');
   let authOrigin: string;
   try {

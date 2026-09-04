@@ -75,12 +75,24 @@ pnpm lint             # Lint
 pnpm format:check     # Check formatting
 ```
 
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full pre-push checklist, where to file what, and the comment, commit, and architecture conventions this codebase follows. [AGENTS.md](./AGENTS.md) is the same material in condensed form, for AI coding agents.
+
+Releases are automatic: [Conventional Commits](https://www.conventionalcommits.org/) since the last tag decide the version bump, and every push to `main` bumps `package.json`, publishes the `ghcr.io/haverstack/server` image, tags, and cuts a GitHub release. See [CONTRIBUTING.md § Releasing](./CONTRIBUTING.md#releasing).
+
 ---
 
 ## Docs
 
 - [API reference](./docs/api.md) — routes, auth, and permissions
 - [Deployment guide](./docs/deployment.md) — TLS, CORS, and rate limiting
+- [Contributing](./CONTRIBUTING.md) — setup, conventions, and releases
+- [Security policy](./SECURITY.md) — reporting, scope, and documented non-vulnerabilities
+
+---
+
+## Security
+
+Found a weakness? Report it privately through [GitHub Security Advisories](https://github.com/haverstack/server/security/advisories/new). [SECURITY.md](./SECURITY.md) says what's in scope, which properties are documented decisions rather than bugs, and when a finding belongs in [`haverstack/core`](https://github.com/haverstack/core) instead — which is where to send anything you can't confidently place.
 
 ---
 

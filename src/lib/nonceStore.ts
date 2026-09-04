@@ -65,12 +65,10 @@ export class AuthNonceStore {
    * spent-by-someone-else, since the difference only tells an attacker
    * something.
    *
-   * One `DELETE ... RETURNING` rather than a SELECT then a DELETE: the pair
-   * is only indivisible because DatabaseSync is synchronous and nothing
-   * awaits between the two statements, an invariant nothing in the file
-   * states and a later refactor would quietly break. The `did` predicate
-   * lives in the WHERE clause so a mismatch still deletes nothing, exactly
-   * as the two-statement form behaved.
+   * One `DELETE ... RETURNING` rather than a SELECT then a DELETE, which
+   * would be indivisible only for as long as nothing awaits between the two
+   * statements — an invariant no reader can see. The `did` predicate sits in
+   * the WHERE clause, so a mismatch deletes nothing.
    */
   redeem(did: string, nonce: string): NonceRedeemResult {
     const row = this.db

@@ -133,14 +133,10 @@ function parseRelatedToBody(raw: unknown): RelatedToFilter {
 }
 
 /**
- * Parse the `relatedTo`/`relatedToStack`/`relatedToEntity`/`relatedToNs`/
- * `relatedToId`/`relatedToLabel` URL params into a RelatedToFilter. The
- * scope is implied by which params appear and the three scopes are
- * mutually exclusive; `relatedToStack`/`relatedToId` are only meaningful
- * alongside their scope's primary param. Field-level emptiness (an empty
- * relatedToStack, relatedToId, etc.) is left to core's target validation —
- * passing the raw value through, rather than treating it as absent, is
- * what lets core tell "omitted" from "empty" apart.
+ * Parse the `relatedTo*` URL params into a RelatedToFilter. Scope is
+ * implied by which params appear, and the three are mutually exclusive.
+ * An empty field value passes through raw rather than as absent, which is
+ * what lets core's target validation tell "omitted" from "empty".
  * See docs/api.md § Query parameters.
  */
 function parseRelatedToParams(url: URL): RelatedToFilter | undefined {
