@@ -225,9 +225,6 @@ describe('createRecord fixtures', () => {
     // same fileId via an attachment association or file-ref field — exercised
     // by hand in tests/routes/attachments.test.ts instead of reconstructed here.
     'create-attachment-record-non-owner-carve-out-succeeds',
-    // POST /records does not forward unlistedAt to create(), so an
-    // unlisted create silently produces a listed record.
-    'create-record-unlisted',
   ]);
   const handled = new Set<string>();
 
@@ -303,6 +300,22 @@ describe('createRecord fixtures', () => {
     const { status, data } = await req(t.app, 'POST', fixture.path, { token: TEST_TOKEN, body });
     expect(status).toBe(fixture.responseStatus);
     expect((data as Record<string, unknown>).content).toEqual(body.content);
+  });
+
+  test('create-record-unlisted — unlistedAt in the create body suppresses enumeration from create time', async () => {
+    const fixture = createRecordFixtures.find((f) => f.name === 'create-record-unlisted')!;
+    handled.add(fixture.name);
+    const body = withFreshId(fixture.requestBody as WireRecord);
+    const { status, data } = await req(t.app, 'POST', fixture.path, { token: TEST_TOKEN, body });
+    expect(status).toBe(fixture.responseStatus);
+    const d = data as Record<string, unknown>;
+    expect(d.id).toBe(body.id);
+    expect(d.content).toEqual(body.content);
+    expect(d.version).toBe(1);
+    // Core stamps unlistedAt to the real create time rather than honoring a
+    // backdated value from the body it's echoed alongside — presence is
+    // what this fixture pins, not the literal value.
+    expect(typeof d.unlistedAt).toBe('string');
   });
 
   test('coverage', () => {
@@ -865,9 +878,6 @@ describe('error response fixtures', () => {
     // Not implemented by this server: no query-time bound exists to trip.
     // A real gap, tracked separately from this harness.
     'error-timeout-search-exceeds-server-bound',
-    // Behaves correctly already — 403 on both query routes — but is not
-    // dispatched here yet.
-    'error-permission-denied-includeUnlisted-non-owner',
   ]);
   const handled = new Set<string>();
 
@@ -956,6 +966,17 @@ describe('error response fixtures', () => {
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const { status, data } = await dispatch(fixture, token);
     expectError(status, data, fixture);
+  });
+
+  test('error-permission-denied-includeUnlisted-non-owner', async () => {
+    const fixture = find('error-permission-denied-includeUnlisted-non-owner');
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { status, data } = await dispatch(fixture, token);
+    expectError(status, data, fixture);
+    // Same refusal on GET /records — includeUnlisted is owner-only on every
+    // route that accepts it, not just the fixture's own POST /records/query.
+    const get = await req(t.app, 'GET', '/records?includeUnlisted=true', { token });
+    expect(get.status).toBe(403);
   });
 
   test('error-not-found — write against a nonexistent id', async () => {
@@ -1120,11 +1141,6 @@ describe('changeFeed fixtures', () => {
     // unrecognized frame — there's nothing server-side for this fixture to
     // exercise until a later minor adds one.
     'change-feed-unknown-frame-names-are-ignored',
-    // The unlist/list transitions and the suppression of edits made while
-    // unlisted all behave correctly already, but are not dispatched here yet.
-    'change-feed-unlist-frame-is-a-deleted-kind',
-    'change-feed-list-frame-is-a-changed-kind',
-    'change-feed-unlisted-record-produces-no-frame-by-default',
   ]);
 
   test('change-feed-ready-leads-every-connection', async () => {
@@ -1367,6 +1383,82 @@ describe('changeFeed fixtures', () => {
       expect(ready.event).toBe('ready');
       expect(reset.event).toBe('reset');
       expect(frameData(reset).reason).toBe('not_supported');
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-unlist-frame-is-a-deleted-kind', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-unlist-frame-is-a-deleted-kind',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: true },
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.kind).toBe('deleted');
+      expect(data.op).toBe('unlist');
+      expect(data.recordId).toBe(record.id);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-list-frame-is-a-changed-kind', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-list-frame-is-a-changed-kind',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    await t.ctx.stack.setUnlisted(record.id, true);
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: false },
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.kind).toBe('changed');
+      expect(data.op).toBe('list');
+      expect(data.recordId).toBe(record.id);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-unlisted-record-produces-no-frame-by-default', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-unlisted-record-produces-no-frame-by-default',
+    )!;
+    handled.add(fixture.name);
+    const unlistedRecord = await t.ctx.stack.create(NOTE_TYPE, { title: 'Unlisted' });
+    await t.ctx.stack.setUnlisted(unlistedRecord.id, true);
+    const visibleRecord = await t.ctx.stack.create(NOTE_TYPE, { title: 'Visible' });
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PATCH', `/records/${unlistedRecord.id}`, {
+        token: TEST_TOKEN,
+        body: { title: 'Edited while unlisted' },
+      });
+      await req(t.app, 'PATCH', `/records/${visibleRecord.id}`, {
+        token: TEST_TOKEN,
+        body: { title: 'Edited, visible' },
+      });
+      // Exactly one more frame — the visible record's — proves the
+      // unlisted edit produced none rather than merely arriving later.
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.recordId).toBe(visibleRecord.id);
     } finally {
       await conn.close();
     }

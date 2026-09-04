@@ -480,6 +480,30 @@ describe('GET /changes', () => {
       }
     });
 
+    it('POST /records with unlistedAt in the body creates unlisted and emits nothing', async () => {
+      // Same transition as "created unlisted emits nothing" above, but
+      // through the actual HTTP route with unlistedAt in the body rather
+      // than stack.create({ unlisted: true }) directly — pins that the
+      // route really forwards it end to end.
+      const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      try {
+        await conn.waitForFrames(1); // ready
+        await req(t.app, 'POST', '/records', {
+          token: TEST_TOKEN,
+          body: {
+            typeId: NOTE_TYPE,
+            content: { title: 'secret' },
+            unlistedAt: new Date().toISOString(),
+          },
+        });
+        const proof = await t.ctx.stack.create(NOTE_TYPE, { title: 'public' });
+        const [, frame] = await conn.waitForFrames(2);
+        expect((frame.data as { recordId: string }).recordId).toBe(proof.id);
+      } finally {
+        await conn.close();
+      }
+    });
+
     it('listed -> unlisted emits a deleted/unlist frame', async () => {
       const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
       const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });

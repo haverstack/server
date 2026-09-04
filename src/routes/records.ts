@@ -97,6 +97,13 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // both on any create (a record body is a whole record), and forwarding
   // them unfiltered would turn an ordinary grantee create into a 403, since
   // ScopedStack.create() refuses backdating rather than ignoring it.
+  //
+  // unlistedAt is different: it's opt-in (only present when a client
+  // actually wants an unlisted create), so it's forwarded unconditionally
+  // as the `unlisted` boolean ScopedStack.create() expects — same as
+  // permissions/associations below. ScopedStack.create() gates it itself
+  // (mayGrantAccess(), the same rule as the permissions field), refusing
+  // with 403 rather than silently dropping it.
   app.post('/', requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await readJson<Record<string, unknown>>(c);
@@ -121,6 +128,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
         associations: Array.isArray(body.associations)
           ? (body.associations as Association[])
           : undefined,
+        unlisted: typeof body.unlistedAt === 'string' ? true : undefined,
         createdAt,
         updatedAt,
       });
