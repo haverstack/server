@@ -162,6 +162,8 @@ Answers `200` with the updated record — it bumps `version` like any other muta
 
 **`includeUnlisted` is owner-only.** `GET /records`, `POST /records/query`, and `GET /changes` all accept it (excluded by default, like `includeDeleted`), and all three refuse it with `403` for any requester but the owner acting alone — enumeration standing rests on nothing but ownership, so no grant or delegation carries it. On `GET /changes` the refusal happens before the SSE stream opens.
 
+A `POST /records` body may carry `unlistedAt` to create the record already unlisted, so there is no window where it exists and is enumerable before a later `PUT .../unlisted` catches up — presence of the field is what matters; its value is not honored (`unlistedAt` on the response is stamped to the real create time, like `version`). This is **not** owner-only, unlike `createdAt`/`updatedAt`: it's gated the same way the `permissions` field is at create time — refused with `403` for a delegated app acting for anyone but the owner, but available to any other creator holding a create grant for the type.
+
 ### The feed transitions
 
 `unlist` and `list` are new change-feed ops (`unlist` maps to `kind: "deleted"`, `list` to `kind: "changed"` — see [Change feed](#change-feed)). Only the `unlist` transition needs special-casing; every other row falls out of checking the record's current `unlistedAt` against the subscriber's `includeUnlisted`:

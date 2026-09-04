@@ -1218,6 +1218,81 @@ describe('Records', () => {
     });
   });
 
+  describe('POST /records — unlistedAt', () => {
+    it('unlistedAt in the body creates the record already unlisted', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: {
+          typeId: NOTE_TYPE_ID,
+          content: { body: 'link-shared draft' },
+          unlistedAt: new Date().toISOString(),
+        },
+      });
+      expect(status).toBe(200);
+      expect((data as { unlistedAt?: string }).unlistedAt).toBeDefined();
+    });
+
+    it('an unlisted create is absent from an unfiltered GET /records', async () => {
+      const { data: created } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: {
+          typeId: NOTE_TYPE_ID,
+          content: { body: 'link-shared draft' },
+          unlistedAt: new Date().toISOString(),
+        },
+      });
+      const id = (created as { id: string }).id;
+
+      const { data: listed } = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+      const ids = (listed as { records: { id: string }[] }).records.map((r) => r.id);
+      expect(ids).not.toContain(id);
+
+      // Still reachable by id — unlisted withholds enumeration, not access.
+      const { status: getStatus } = await req(t.app, 'GET', `/records/${id}`, {
+        token: TEST_TOKEN,
+      });
+      expect(getStatus).toBe(200);
+    });
+
+    it('a non-owner grantee with a plain create grant may create unlisted — not owner-only', async () => {
+      await t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token,
+        body: {
+          typeId: NOTE_TYPE_ID,
+          content: { body: 'not the owner' },
+          unlistedAt: new Date().toISOString(),
+        },
+      });
+      expect(status).toBe(200);
+      expect((data as { unlistedAt?: string }).unlistedAt).toBeDefined();
+    });
+
+    it('refuses unlistedAt from a delegated app acting for a non-owner subject', async () => {
+      // Neither identity is the stack owner, so mayGrantAccess() — the same
+      // gate the permissions field uses at create time — refuses: a
+      // delegated app carries none of the owner's extra trust, and this
+      // record is the subject's own to begin with.
+      const appId = 'com.example.thirdparty';
+      const subjectId = 'entity-third-party-subject';
+      await t.ctx.stack.grant(subjectId, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      await t.ctx.stack.grant(appId, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      const { token } = await t.ctx.adapter.createToken(appId, { onBehalfOf: subjectId });
+
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token,
+        body: {
+          typeId: NOTE_TYPE_ID,
+          content: { body: 'delegated' },
+          unlistedAt: new Date().toISOString(),
+        },
+      });
+      expect(status).toBe(403);
+      expect((data as { error: { code: string } }).error.code).toBe('permission');
+    });
+  });
+
   describe('PATCH /records/:id — If-Match / optimistic concurrency', () => {
     it('succeeds when If-Match names the current version', async () => {
       const record = await seedRecord(t.ctx);
