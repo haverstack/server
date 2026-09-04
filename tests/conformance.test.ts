@@ -18,6 +18,14 @@
  * final "coverage" test fails loudly if core adds, removes, or renames a
  * fixture this file hasn't been told about — that's what makes this an
  * acceptance gate rather than a snapshot of one day's fixture list.
+ *
+ * Only two fixtures are skipped, and neither is a gap: each states in its
+ * own description that it pins a *client* obligation rather than a server
+ * one, and neither can be dispatched against a conformant server without
+ * forging the response it checks. Everything else — including the cases
+ * that need a second principal, a readable attachment reference, an
+ * adapter-level write, or a server configured with a deadline no query can
+ * meet — is dispatched.
  */
 import { Hono } from 'hono';
 import { describe, test, expect, beforeEach, afterEach } from 'vitest';
@@ -141,10 +149,13 @@ function assertCoverage(names: string[], handled: Set<string>, skipped: Set<stri
 
 describe('discovery fixtures', () => {
   const SKIPPED = new Set([
-    // Describes a conformant server that neither resumes nor includes
-    // records. This one does both, so producing this response would take an
-    // override letting discovery contradict the route beside it, on a field
-    // clients act on without asking again.
+    // Not a requirement this server can fail: the fixture describes a
+    // *different* conformant server, one that neither resumes nor includes
+    // records. This one does both — src/routes/wellknown.ts writes both
+    // flags as literals precisely so discovery can't contradict the route
+    // beside it, on a field clients act on without asking again — so the
+    // only way to produce this response would be an override that lets it.
+    // The obligation the fixture exists to pin is the client's.
     'discovery-advertises-a-feed-that-neither-resumes-nor-includes-records',
   ]);
   const handled = new Set<string>();
@@ -220,12 +231,8 @@ describe('discovery fixtures', () => {
 // -------------------------------------------------------
 
 describe('createRecord fixtures', () => {
-  const SKIPPED = new Set([
-    // Needs a second record, readable by the requester, that references the
-    // same fileId via an attachment association or file-ref field — exercised
-    // by hand in tests/routes/attachments.test.ts instead of reconstructed here.
-    'create-attachment-record-non-owner-carve-out-succeeds',
-  ]);
+  // Every fixture in this block is dispatched — nothing here is skipped.
+  const SKIPPED = new Set<string>();
   const handled = new Set<string>();
 
   test('create-record — owner-authored, echoed back verbatim', async () => {
@@ -300,6 +307,44 @@ describe('createRecord fixtures', () => {
     const { status, data } = await req(t.app, 'POST', fixture.path, { token: TEST_TOKEN, body });
     expect(status).toBe(fixture.responseStatus);
     expect((data as Record<string, unknown>).content).toEqual(body.content);
+  });
+
+  test('create-attachment-record-non-owner-carve-out-succeeds', async () => {
+    const fixture = createRecordFixtures.find(
+      (f) => f.name === 'create-attachment-record-non-owner-carve-out-succeeds',
+    )!;
+    handled.add(fixture.name);
+    const body = withFreshId(
+      fixture.requestBody as WireRecord & { content: { fileId: string; mimeType: string } },
+    );
+    // The readable reference the carve-out turns on: an owner-authored Note
+    // the contributor may read, carrying an attachment association for the
+    // same file. The bytes stay the owner's — the contributor never uploads
+    // and never proves possession, which is the whole point of the carve-out.
+    const uploaded = await t.ctx.stack.putAttachment(
+      new Uint8Array([1, 2, 3]),
+      body.content.mimeType,
+      'owner.png',
+    );
+    const fileId = (uploaded.content as { fileId: string }).fileId;
+    const note = await t.ctx.stack.create(NOTE_TYPE, { title: 'has a cover' });
+    await t.ctx.stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
+    await t.ctx.stack.grant(CONTRIBUTOR_ID, [
+      { actions: ['read-any'], typeId: NOTE_TYPE },
+      { actions: ['create'], typeId: ATTACHMENT_TYPE },
+    ]);
+    const content = { ...body.content, fileId };
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { status, data } = await req(t.app, 'POST', fixture.path, {
+      token,
+      body: { ...body, content },
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const d = data as Record<string, unknown>;
+    // Their own record — own id, own filename — not a dedup of the owner's.
+    expect(d.id).toBe(body.id);
+    expect(d.content).toEqual(content);
+    expect(d.entityId).toBe(CONTRIBUTOR_ID);
   });
 
   test('create-record-unlisted — unlistedAt in the create body suppresses enumeration from create time', async () => {
@@ -862,23 +907,8 @@ describe('version lifecycle fixtures', () => {
 // -------------------------------------------------------
 
 describe('error response fixtures', () => {
-  const SKIPPED = new Set([
-    // Needs a restore target whose snapshot carries an attachment
-    // association the requester can no longer attach fresh — a
-    // reconveyance scenario layered on top of the carve-out machinery
-    // already skipped above.
-    'error-permission-denied-restore-reference-reconveyance',
-    // The carve-out fixtures skipped in createRecord fixtures above; this
-    // is their negative-case sibling.
-    'create-attachment-record-non-owner-without-carve-out-refused',
-    // A corrupted/drifted stored snapshot can't be produced through the
-    // ordinary write API this harness dispatches through — it requires
-    // writing directly to the adapter's storage, bypassing validation.
-    'error-validation-failed-restore',
-    // Not implemented by this server: no query-time bound exists to trip.
-    // A real gap, tracked separately from this harness.
-    'error-timeout-search-exceeds-server-bound',
-  ]);
+  // Every fixture in this block is dispatched — nothing here is skipped.
+  const SKIPPED = new Set<string>();
   const handled = new Set<string>();
 
   function find(name: string) {
@@ -965,6 +995,115 @@ describe('error response fixtures', () => {
     const fixture = find('error-permission-denied-attachment-non-owner-create');
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const { status, data } = await dispatch(fixture, token);
+    expectError(status, data, fixture);
+  });
+
+  test('create-attachment-record-non-owner-without-carve-out-refused', async () => {
+    const fixture = find('create-attachment-record-non-owner-without-carve-out-refused');
+    await t.ctx.stack.grant(CONTRIBUTOR_ID, [{ actions: ['create'], typeId: ATTACHMENT_TYPE }]);
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    // The contributor uploads the bytes themselves, so they end up holding
+    // an _attachment@1 record for this fileId — the "uploaded it themselves"
+    // clause of the getAttachment() access rule. That clause is exactly what
+    // the create() carve-out excludes: nothing else references the file, so
+    // a second metadata record for it is still refused.
+    const upload = await t.app.request('/attachments', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'image/png' },
+      body: new Uint8Array([9, 9, 9]),
+    });
+    expect(upload.status).toBe(200);
+    const own = (await upload.json()) as { content: { fileId: string } };
+    const body = withFreshId(fixture.requestBody as WireRecord & { content: { fileId: string } });
+    const { status, data } = await dispatch(fixture, token, undefined, {
+      ...body,
+      content: { ...body.content, fileId: own.content.fileId },
+    });
+    expectError(status, data, fixture);
+  });
+
+  test('error-permission-denied-restore-reference-reconveyance', async () => {
+    const fixture = find('error-permission-denied-restore-reference-reconveyance');
+    // v1 carries an attachment association; v2 drops it. Nothing else
+    // references the file afterward — an _attachment@1 record holds its
+    // fileId in a plain string field, not a file-ref one, so the owner's
+    // own upload record is not a reference the attachmentFileId filter
+    // sees. The writer therefore cannot attach the file fresh today, and
+    // restoring v1 would hand it back to them.
+    const uploaded = await t.ctx.stack.putAttachment(
+      new Uint8Array([4, 5, 6]),
+      'image/png',
+      'cover.png',
+    );
+    const fileId = (uploaded.content as { fileId: string }).fileId;
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'has a cover' },
+      {
+        permissions: [{ access: 'entity', entityId: WRITER_ID, read: true, write: true }],
+        associations: [{ kind: 'attachment', label: 'cover', fileId }],
+      },
+    );
+    await t.ctx.stack.dissociate(record.id, { kind: 'attachment', label: 'cover', fileId });
+
+    const { token } = await t.ctx.adapter.createToken(WRITER_ID);
+    const { status, data } = await dispatch(fixture, token, `/records/${record.id}/restore/1`);
+    expectError(status, data, fixture);
+    // The refusal is about the reference, not about write access: give the
+    // writer a readable record that carries the same file today and the
+    // identical restore goes through.
+    const cover = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'still has the cover' },
+      {
+        permissions: [{ access: 'entity', entityId: WRITER_ID, read: true, write: true }],
+        associations: [{ kind: 'attachment', label: 'cover', fileId }],
+      },
+    );
+    expect(cover.id).toBeDefined();
+    const retry = await req(t.app, 'POST', `/records/${record.id}/restore/1`, { token });
+    expect(retry.status).toBe(200);
+  });
+
+  test('error-validation-failed-restore', async () => {
+    const fixture = find('error-validation-failed-restore');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original' });
+    // Drift can't be reached through the write API — defineType() refuses
+    // any in-place schema change that would invalidate stored content, and
+    // create()/update() validate everything they write. So the corrupted
+    // snapshot is written straight to the adapter, the way core's own
+    // restoreVersion test produces one, and the assertion is that restore
+    // validates the snapshot against its own stored typeId rather than
+    // trusting it. A create leaves no v1 snapshot of its own, so this adds
+    // one rather than overwriting — the SQLite adapter refuses to replace
+    // an existing version row.
+    await t.ctx.adapter.saveVersion(record.id, {
+      version: 1,
+      typeId: NOTE_TYPE,
+      content: { title: 42 },
+      updatedAt: new Date(),
+    });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}/restore/1`);
+    expectError(status, data, fixture);
+    // Nothing was applied: the record still holds its pre-restore content.
+    const after = await req(t.app, 'GET', `/records/${record.id}`, { token: TEST_TOKEN });
+    expect((after.data as { content: unknown }).content).toEqual({ title: 'original' });
+  });
+
+  test('error-timeout-search-exceeds-server-bound', async () => {
+    const fixture = find('error-timeout-search-exceeds-server-bound');
+    // The fixture's own search isn't costly — per its description it stands
+    // in for one that outruns whatever bound a server sets, pinning the
+    // error shape rather than a particular cost. This server's bound is
+    // config.queryTimeoutMs, enforced at the query worker (see
+    // src/lib/queryWorker/pool.ts), so this dispatches against a deadline
+    // no query can meet — the same substitution
+    // attachment-upload-payload-too-large makes with maxAttachmentBytes.
+    const impatientApp = createApp(t.ctx, { ...testConfig(t.dbPath), queryTimeoutMs: 1 }, logger);
+    const { status, data } = await req(impatientApp, fixture.method, fixture.path, {
+      token: TEST_TOKEN,
+      body: fixture.requestBody,
+    });
     expectError(status, data, fixture);
   });
 
@@ -1135,11 +1274,12 @@ const SEQ_PATTERN = /^[A-Za-z0-9_-]+$/;
 describe('changeFeed fixtures', () => {
   const handled = new Set<string>();
   const SKIPPED = new Set([
-    // Pins a client obligation (ignore an unrecognized SSE event name), by
-    // injecting a synthetic `type` frame between `ready` and the `record`
-    // frame it expects. This server's v1 implementation never emits an
-    // unrecognized frame — there's nothing server-side for this fixture to
-    // exercise until a later minor adds one.
+    // Pins a client obligation, in the fixture's own words — ignore an
+    // unrecognized SSE event name — by injecting a synthetic `type` frame
+    // between `ready` and the `record` frame it expects. A server
+    // implementing only this version emits no such frame, so there is
+    // nothing server-side to exercise until a later minor adds one; the
+    // frame would have to be forged to dispatch this at all.
     'change-feed-unknown-frame-names-are-ignored',
   ]);
 
@@ -1706,16 +1846,9 @@ describe('auth handshake fixtures', () => {
     expect((data as { error: { code: string } }).error.code).toBe('unknown_nonce');
   });
 
-  test('coverage: authChallengeFixtures + authTokenFixtures', () => {
-    assertCoverage(
-      [...authChallengeFixtures, ...authTokenFixtures].map((f) => f.name),
-      handled,
-      new Set(),
-    );
-  });
-
   test('auth-nonce-is-single-use', async () => {
     const sequence = authSequenceFixtures.find((f) => f.name === 'auth-nonce-is-single-use')!;
+    handled.add(sequence.name);
     seedFixtureNonce();
     for (const step of sequence.steps) {
       const { status, data } = await req(t.app, step.method, step.path, {
@@ -1727,6 +1860,16 @@ describe('auth handshake fixtures', () => {
         expect((data as { error: { code: string } }).error.code).toBe(expected.error.code);
       }
     }
+  });
+
+  // Last in the block: `handled` is only complete once every test above has
+  // run, and the sequence fixtures are dispatched at the end.
+  test('coverage: authChallengeFixtures + authTokenFixtures + authSequenceFixtures', () => {
+    assertCoverage(
+      [...authChallengeFixtures, ...authTokenFixtures, ...authSequenceFixtures].map((f) => f.name),
+      handled,
+      new Set(),
+    );
   });
 });
 
