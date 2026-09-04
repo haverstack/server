@@ -1112,6 +1112,113 @@ describe('Records', () => {
     });
   });
 
+  describe('POST /records — createdAt/updatedAt (backdating on import)', () => {
+    it('owner acting alone can backdate createdAt, and updatedAt defaults to it', async () => {
+      // id omitted: derived from createdAt's timestamp rather than "now".
+      const createdAt = new Date('2020-01-01T00:00:00.000Z');
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'imported' }, createdAt },
+      });
+      expect(status).toBe(200);
+      const d = data as { createdAt: string; updatedAt: string };
+      expect(new Date(d.createdAt)).toEqual(createdAt);
+      expect(new Date(d.updatedAt)).toEqual(createdAt);
+    });
+
+    it('owner acting alone can set updatedAt separately from createdAt', async () => {
+      const createdAt = new Date('2020-01-01T00:00:00.000Z');
+      const updatedAt = new Date('2020-06-01T00:00:00.000Z');
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'imported' }, createdAt, updatedAt },
+      });
+      expect(status).toBe(200);
+      const d = data as { createdAt: string; updatedAt: string };
+      expect(new Date(d.createdAt)).toEqual(createdAt);
+      expect(new Date(d.updatedAt)).toEqual(updatedAt);
+    });
+
+    it('rejects updatedAt earlier than createdAt with 422 validation', async () => {
+      const createdAt = new Date('2020-06-01T00:00:00.000Z');
+      const updatedAt = new Date('2020-01-01T00:00:00.000Z');
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'x' }, createdAt, updatedAt },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: { code: string } }).error.code).toBe('validation');
+    });
+
+    it('rejects updatedAt earlier than a defaulted (now) createdAt with 422 validation', async () => {
+      const updatedAt = new Date('2020-01-01T00:00:00.000Z');
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'x' }, updatedAt },
+      });
+      expect(status).toBe(422);
+      expect((data as { error: { code: string } }).error.code).toBe('validation');
+    });
+
+    it('rejects a malformed createdAt with 422 validation instead of forwarding an Invalid Date', async () => {
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'x' }, createdAt: 'not-a-date' },
+      });
+      expect(status).toBe(422);
+      const d = data as { error: { code: string; details: unknown[] } };
+      expect(d.error.code).toBe('validation');
+      expect(d.error.details).toEqual([
+        { path: 'createdAt', message: 'Invalid createdAt: "not-a-date"' },
+      ]);
+    });
+
+    it("an owner's plain id-only create is unaffected — ordinary id-vs-now skew, not id-vs-createdAt", async () => {
+      const id = generateId();
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token: TEST_TOKEN,
+        body: { id, typeId: NOTE_TYPE_ID, content: { body: 'x' } },
+      });
+      expect(status).toBe(200);
+      expect((data as { id: string }).id).toBe(id);
+    });
+
+    it('drops createdAt/updatedAt from a grantee create instead of forwarding them into a 403', async () => {
+      await t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const createdAt = new Date('2020-01-01T00:00:00.000Z');
+      const before = Date.now();
+
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'not backdated' }, createdAt },
+      });
+
+      expect(status).toBe(200);
+      const d = data as { createdAt: string };
+      expect(new Date(d.createdAt).getTime()).toBeGreaterThanOrEqual(before);
+    });
+
+    it('drops createdAt/updatedAt from a delegated session with the owner as principal', async () => {
+      const { token } = await t.ctx.adapter.createToken(TEST_ENTITY_ID, {
+        onBehalfOf: OTHER_ENTITY_ID,
+      });
+      await t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      await t.ctx.stack.grant(TEST_ENTITY_ID, [{ actions: ['create'], typeId: NOTE_TYPE_ID }]);
+      const createdAt = new Date('2020-01-01T00:00:00.000Z');
+      const before = Date.now();
+
+      const { status, data } = await req(t.app, 'POST', '/records', {
+        token,
+        body: { typeId: NOTE_TYPE_ID, content: { body: 'not backdated' }, createdAt },
+      });
+
+      expect(status).toBe(200);
+      const d = data as { createdAt: string };
+      expect(new Date(d.createdAt).getTime()).toBeGreaterThanOrEqual(before);
+    });
+  });
+
   describe('PATCH /records/:id — If-Match / optimistic concurrency', () => {
     it('succeeds when If-Match names the current version', async () => {
       const record = await seedRecord(t.ctx);

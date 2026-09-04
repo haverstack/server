@@ -74,9 +74,21 @@ import type { AppEnv } from '../src/types.js';
  * @haverstack/core). A literal fixture id would fail that freshness check
  * before ever reaching the behavior the fixture is actually pinning, so
  * every dispatched create swaps in a freshly generated id instead.
+ *
+ * Fixture bodies carry the same long-past `createdAt`/`updatedAt` (a
+ * WireRecord is a whole record). Those are stripped here too: since #99, an
+ * owner-token dispatch backdates for real, and a stale `createdAt` paired
+ * with the fresh id above would fail the id-vs-createdAt skew check these
+ * fixtures aren't testing. A fixture that *is* testing backdating passes its
+ * own matching id/createdAt instead of going through this helper.
  */
-function withFreshId<T extends { id?: string }>(body: T): T & { id: string } {
-  return { ...body, id: generateId() };
+function withFreshId<T extends { id?: string; createdAt?: unknown; updatedAt?: unknown }>(
+  body: T,
+): Omit<T, 'createdAt' | 'updatedAt'> & { id: string } {
+  const rest = { ...body };
+  delete rest.createdAt;
+  delete rest.updatedAt;
+  return { ...rest, id: generateId() };
 }
 
 const NOTE_TYPE = 'com.example/note@1';

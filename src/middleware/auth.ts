@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { StackPermissionError } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
@@ -54,17 +55,25 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
 }
 
 /**
- * Gates a route to the owner acting alone. Being the owner is never on its
- * own sufficient under delegation — a delegated session with the owner as
- * principal is still refused, matching `ScopedStack`'s own owner-only gates
- * (e.g. hard delete). See docs/spec/access-control.md § Delegation.
+ * Whether a session is the stack owner acting alone: undelegated, and
+ * authenticated as the owner rather than merely delegated for it. Being the
+ * owner is never on its own sufficient under delegation — a delegated
+ * session with the owner as principal still fails this, matching
+ * `ScopedStack`'s own owner-only gates (e.g. hard delete). See
+ * docs/spec/access-control.md § Delegation.
  */
+export function isOwnerActingAlone(auth: TokenSession | null, ownerEntityId: string): boolean {
+  return auth?.principalId === ownerEntityId && auth?.subjectId === ownerEntityId;
+}
+
+/** Gates a route to the owner acting alone; see `isOwnerActingAlone()`. */
 export function requireOwner(ownerEntityId: string): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const auth = c.get('auth');
     if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    const ownerActingAlone = auth.principalId === ownerEntityId && auth.subjectId === ownerEntityId;
-    if (!ownerActingAlone) throw new StackPermissionError('Owner access required');
+    if (!isOwnerActingAlone(auth, ownerEntityId)) {
+      throw new StackPermissionError('Owner access required');
+    }
     await next();
   };
 }

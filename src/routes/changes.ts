@@ -15,7 +15,7 @@ import { StackQueryError, StackPermissionError } from '@haverstack/core';
 import { serializeChange, isValidSeq } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
-import { safeCompare } from '../middleware/auth.js';
+import { safeCompare, isOwnerActingAlone } from '../middleware/auth.js';
 import { FrameGate } from '../lib/frameGate.js';
 import { decodeCursor } from '../lib/resumeCursor.js';
 import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
@@ -151,11 +151,8 @@ export function changeRoutes(
     // silently, after already answering 200. includeUnlisted needs a real 403,
     // the same as GET /records and POST /records/query answer it as, so the
     // owner-acting-alone check is done here, up front (mirrors requireOwner()).
-    if (includeUnlisted) {
-      const ownerEntityId = ctx.stack.ownerEntityId;
-      const ownerActingAlone =
-        auth?.principalId === ownerEntityId && auth?.subjectId === ownerEntityId;
-      if (!ownerActingAlone) throw new StackPermissionError('includeUnlisted is owner-only');
+    if (includeUnlisted && !isOwnerActingAlone(auth, ctx.stack.ownerEntityId)) {
+      throw new StackPermissionError('includeUnlisted is owner-only');
     }
 
     // A charset-invalid cursor is refused locally rather than treated as a

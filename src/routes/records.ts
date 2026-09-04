@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { ScopedStack, TokenSession } from '@haverstack/core';
-import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { requireAuth, requireOwner, isOwnerActingAlone } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import { parseQueryBody, parseQueryParams, parsePositiveInt } from '../lib/queryParsing.js';
 import { serializeRecord, serializeVersion } from '@haverstack/wire-types';
@@ -14,6 +14,27 @@ function parseIfMatch(header: string | undefined): number | undefined {
   if (!header) return undefined;
   const n = parseInt(header.replace(/^"|"$/g, ''), 10);
   return isNaN(n) ? undefined : n;
+}
+
+/**
+ * Parse a body field into a Date for the owner-only backdating options
+ * (`createdAt`/`updatedAt`). An `Invalid Date` must not reach `create()` as
+ * one — core refuses it outright rather than storing it, since its `NaN`
+ * timestamp would switch off the skew checks instead of failing them, but a
+ * malformed string is better reported here as a validation error.
+ */
+function parseOwnerDate(value: unknown, path: string): Date | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    throw new StackValidationError([{ path, message: `${path} must be a date string` }]);
+  }
+  const date = new Date(value);
+  if (isNaN(date.getTime())) {
+    throw new StackValidationError([
+      { path, message: `Invalid ${path}: ${JSON.stringify(value)}` },
+    ]);
+  }
+  return date;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,10 +100,15 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   // POST /records — accepts a full record body; id is client-minted (12
   // lowercase Crockford base-32 chars, no reserved "_" prefix) and optional
-  // — omit it to let ScopedStack.create() generate one. createdAt/updatedAt/
-  // version are never accepted from the client: those are always freshly
-  // generated for a new record, same as entityId/principalId (stamped from
-  // the authenticated session, never trusted from the body).
+  // — omit it to let ScopedStack.create() generate one. version is never
+  // accepted from the client: it's always freshly generated for a new
+  // record, same as entityId/principalId (stamped from the authenticated
+  // session, never trusted from the body). createdAt/updatedAt are accepted
+  // only from the stack owner acting alone — everyone else's client sends
+  // both on every create (a record body is a whole record, and adapter-api
+  // serializes it with Dates included), and forwarding them unfiltered
+  // would turn an ordinary grantee create into a 403: ScopedStack.create()
+  // refuses backdating outright rather than ignoring it. See #99.
   app.post('/', requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await readJson<Record<string, unknown>>(c);
@@ -94,6 +120,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
       throw new StackValidationError([
         { path: 'typeId', message: `Unknown type: "${body.typeId}"` },
       ]);
+
+    const ownerActingAlone = isOwnerActingAlone(auth, ownerEntityId);
+    const createdAt = ownerActingAlone ? parseOwnerDate(body.createdAt, 'createdAt') : undefined;
+    const updatedAt = ownerActingAlone ? parseOwnerDate(body.updatedAt, 'updatedAt') : undefined;
 
     const created = await stack
       .forSession(auth)
@@ -107,6 +137,12 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
         associations: Array.isArray(body.associations)
           ? (body.associations as Association[])
           : undefined,
+        // Spread in, not passed as plain properties: ScopedStack.create()
+        // gates on `'createdAt' in opts || 'updatedAt' in opts`, so a key
+        // present with an `undefined` value still trips the owner-only
+        // check for a non-owner create.
+        ...(createdAt !== undefined ? { createdAt } : {}),
+        ...(updatedAt !== undefined ? { updatedAt } : {}),
       });
     return c.json(serializeRecord(created), 200);
   });
