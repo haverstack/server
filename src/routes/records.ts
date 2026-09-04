@@ -116,10 +116,6 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
       throw new StackQueryError('typeId is required');
     if (!body.content || typeof body.content !== 'object')
       throw new StackQueryError('content is required');
-    if (!(await stack.getType(body.typeId as TypeId)))
-      throw new StackValidationError([
-        { path: 'typeId', message: `Unknown type: "${body.typeId}"` },
-      ]);
 
     const ownerActingAlone = isOwnerActingAlone(auth, ownerEntityId);
     const createdAt = ownerActingAlone ? parseOwnerDate(body.createdAt, 'createdAt') : undefined;
