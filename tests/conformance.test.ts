@@ -225,8 +225,8 @@ describe('createRecord fixtures', () => {
     // same fileId via an attachment association or file-ref field — exercised
     // by hand in tests/routes/attachments.test.ts instead of reconstructed here.
     'create-attachment-record-non-owner-carve-out-succeeds',
-    // Unlisted records (unlistedAt, PUT .../unlisted, includeUnlisted) are
-    // not implemented by this server.
+    // POST /records does not forward unlistedAt to create(), so an
+    // unlisted create silently produces a listed record.
     'create-record-unlisted',
   ]);
   const handled = new Set<string>();
@@ -865,7 +865,8 @@ describe('error response fixtures', () => {
     // Not implemented by this server: no query-time bound exists to trip.
     // A real gap, tracked separately from this harness.
     'error-timeout-search-exceeds-server-bound',
-    // includeUnlisted isn't wired into this server's filter parsing.
+    // Behaves correctly already — 403 on both query routes — but is not
+    // dispatched here yet.
     'error-permission-denied-includeUnlisted-non-owner',
   ]);
   const handled = new Set<string>();
@@ -1119,9 +1120,8 @@ describe('changeFeed fixtures', () => {
     // unrecognized frame — there's nothing server-side for this fixture to
     // exercise until a later minor adds one.
     'change-feed-unknown-frame-names-are-ignored',
-    // The unlist/list transition (PUT .../unlisted, kind:"deleted"/op:"unlist"
-    // and kind:"changed"/op:"list" frames, includeUnlisted suppression) isn't
-    // implemented by this server.
+    // The unlist/list transitions and the suppression of edits made while
+    // unlisted all behave correctly already, but are not dispatched here yet.
     'change-feed-unlist-frame-is-a-deleted-kind',
     'change-feed-list-frame-is-a-changed-kind',
     'change-feed-unlisted-record-produces-no-frame-by-default',
