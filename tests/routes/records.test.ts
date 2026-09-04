@@ -251,6 +251,228 @@ describe('Records', () => {
       expect(labeledRecords[0]!.id).toBe(child.id);
     });
 
+    it('filters by relatedToEntity, distinct from relatedTo', async () => {
+      const entityChild = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'entity-child' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'author',
+              target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            },
+          ],
+        },
+      );
+
+      const { status, data } = await req(
+        t.app,
+        'GET',
+        `/records?relatedToEntity=${encodeURIComponent(OTHER_ENTITY_ID)}`,
+        { token: TEST_TOKEN },
+      );
+      expect(status).toBe(200);
+      const records = (data as { records: Array<{ id: string }> }).records;
+      expect(records).toHaveLength(1);
+      expect(records[0]!.id).toBe(entityChild.id);
+    });
+
+    it('filters by relatedToNs, and relatedToId narrows to one target in the namespace', async () => {
+      const syndicated = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'syndicated' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'syndicated-to',
+              target: {
+                scope: 'external',
+                ns: 'atproto',
+                id: 'at://did:plc:abc/app.bsky.feed.post/1',
+              },
+            },
+          ],
+        },
+      );
+      await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'other-namespace' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'syndicated-to',
+              target: { scope: 'external', ns: 'activitypub', id: 'https://example.social/1' },
+            },
+          ],
+        },
+      );
+
+      const { data: nsOnly } = await req(t.app, 'GET', '/records?relatedToNs=atproto', {
+        token: TEST_TOKEN,
+      });
+      const nsRecords = (nsOnly as { records: Array<{ id: string }> }).records;
+      expect(nsRecords).toHaveLength(1);
+      expect(nsRecords[0]!.id).toBe(syndicated.id);
+
+      const { data: nsAndId } = await req(
+        t.app,
+        'GET',
+        `/records?relatedToNs=atproto&relatedToId=${encodeURIComponent('at://did:plc:abc/app.bsky.feed.post/1')}`,
+        { token: TEST_TOKEN },
+      );
+      const nsIdRecords = (nsAndId as { records: Array<{ id: string }> }).records;
+      expect(nsIdRecords).toHaveLength(1);
+      expect(nsIdRecords[0]!.id).toBe(syndicated.id);
+    });
+
+    it('relatedToLabel alone (no target) matches every target under that label', async () => {
+      const recordChild = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'record-child' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'reply-to',
+              target: { scope: 'record', recordId: (await seedRecord(t.ctx)).id },
+            },
+          ],
+        },
+      );
+      const entityChild = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'entity-child' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'reply-to',
+              target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            },
+          ],
+        },
+      );
+
+      const { status, data } = await req(t.app, 'GET', '/records?relatedToLabel=reply-to', {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(200);
+      const ids = (data as { records: Array<{ id: string }> }).records.map((r) => r.id).sort();
+      expect(ids).toEqual([recordChild.id, entityChild.id].sort());
+    });
+
+    it('an absent relatedToStack matches only local record targets', async () => {
+      const target = await seedRecord(t.ctx, { body: 'target' });
+      const local = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'local' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'ref',
+              target: { scope: 'record', recordId: target.id },
+            },
+          ],
+        },
+      );
+      await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'remote' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'ref',
+              target: {
+                scope: 'record',
+                recordId: target.id,
+                stackUrl: 'https://other.example/stack',
+              },
+            },
+          ],
+        },
+      );
+
+      const { data: withoutStack } = await req(
+        t.app,
+        'GET',
+        `/records?relatedTo=${encodeURIComponent(target.id)}`,
+        { token: TEST_TOKEN },
+      );
+      const withoutStackRecords = (withoutStack as { records: Array<{ id: string }> }).records;
+      expect(withoutStackRecords).toHaveLength(1);
+      expect(withoutStackRecords[0]!.id).toBe(local.id);
+
+      const { data: withStack } = await req(
+        t.app,
+        'GET',
+        `/records?relatedTo=${encodeURIComponent(target.id)}&relatedToStack=${encodeURIComponent('https://other.example/stack')}`,
+        { token: TEST_TOKEN },
+      );
+      const withStackRecords = (withStack as { records: Array<{ id: string }> }).records;
+      expect(withStackRecords).toHaveLength(1);
+      expect(withStackRecords[0]!.id).not.toBe(local.id);
+    });
+
+    it('rejects mixed relatedTo scopes with 400 bad_request', async () => {
+      const { status, data } = await req(
+        t.app,
+        'GET',
+        `/records?relatedTo=x&relatedToEntity=${encodeURIComponent(OTHER_ENTITY_ID)}`,
+        { token: TEST_TOKEN },
+      );
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('rejects relatedToStack without relatedTo with 400 bad_request', async () => {
+      const { status, data } = await req(
+        t.app,
+        'GET',
+        '/records?relatedToStack=https://other.example/stack',
+        { token: TEST_TOKEN },
+      );
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('rejects relatedToId without relatedToNs with 400 bad_request', async () => {
+      const { status, data } = await req(t.app, 'GET', '/records?relatedToId=at://foo', {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('rejects an empty relatedToStack with 400 rather than treating it as local or a wildcard', async () => {
+      const target = await seedRecord(t.ctx, { body: 'target' });
+      const { status, data } = await req(
+        t.app,
+        'GET',
+        `/records?relatedTo=${encodeURIComponent(target.id)}&relatedToStack=`,
+        { token: TEST_TOKEN },
+      );
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
+    it('rejects an empty relatedToId with 400', async () => {
+      const { status, data } = await req(
+        t.app,
+        'GET',
+        '/records?relatedToNs=atproto&relatedToId=',
+        {
+          token: TEST_TOKEN,
+        },
+      );
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
+    });
+
     it('anonymous query returns only public records', async () => {
       await seedRecord(t.ctx, { body: 'private' });
       await t.ctx.stack.create(
