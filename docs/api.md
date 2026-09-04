@@ -88,6 +88,7 @@ The retryable column is why these carry a `code` at all rather than being bodyle
 | POST   | `/records/:id/undelete`            | Required   | Reverse a soft delete                   |
 | GET    | `/records/:id/permissions`         | Optional   | Get permissions                         |
 | PUT    | `/records/:id/permissions`         | Required   | Replace permissions                     |
+| PUT    | `/records/:id/unlisted`            | Required   | Withhold from enumeration, or relist    |
 | GET    | `/records/:id/associations`        | Optional   | List associations                       |
 | POST   | `/records/:id/associations`        | Required   | Add an association                      |
 | POST   | `/records/:id/associations/delete` | Required   | Remove an association                   |
@@ -116,11 +117,11 @@ A `relationship` association's `target` is a discriminated union naming which id
 
 `POST /records` returns `200`, not `201` — the response is the created record, same shape as every other write. The body is the full record: `id` is client-minted (12 lowercase Crockford base-32 characters, no reserved `_` prefix — omit it to let the server generate one) and, when supplied, must encode a creation timestamp within the server's clock-skew tolerance; `createdAt`/`updatedAt`/`version` are never accepted from the client — those, like `entityId`/`principalId`, are always server-assigned. A duplicate `id` returns `409` with code `conflict`.
 
-`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, `POST /records/:id/associations/delete`, and `PUT /records/:id/permissions`. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins.
+`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, `POST /records/:id/associations/delete`, `PUT /records/:id/permissions`, and `PUT /records/:id/unlisted`. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins.
 
 ### Query parameters
 
-`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToStack`, `relatedToLabel`), `relatedToEntity` (+ `relatedToLabel`), `relatedToNs` (+ `relatedToId`, `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
+`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToStack`, `relatedToLabel`), `relatedToEntity` (+ `relatedToLabel`), `relatedToNs` (+ `relatedToId`, `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `includeUnlisted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `includeUnlisted` is owner-only — see [Unlisted](#unlisted) below. `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
 
 Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
 
@@ -145,7 +146,31 @@ A relationship association's target names one of three scopes — a Record, an i
 
 `DELETE /records/:id` without `?hard=true` leaves a **tombstone**: the record continues to exist and remains reachable by `id`, but its `content` is projected as `{}` and `deletedAt` is set. This applies uniformly everywhere the record is served with content attached — `GET /records/:id`, `GET`/`POST /records/query` with `filter.includeDeleted: true`, and a `deleted`-kind change feed frame with `?include=record` — so a client sees the same emptied shape regardless of which route it came through. `GET /records/:id/versions` and `GET /records/:id/versions/:version` are the deliberate exception: version history is never tombstoned and continues to serve full content.
 
-A soft-deleted record refuses further mutation: `PATCH`, `POST .../associations`, `POST .../associations/delete`, `PUT .../permissions`, `POST .../migrate`, and `POST .../restore/:version` all return `409` with code `conflict` until `POST /records/:id/undelete` reverses the delete. `GET` and version-history reads are unaffected — the refusal applies only to mutation.
+A soft-deleted record refuses further mutation: `PATCH`, `POST .../associations`, `POST .../associations/delete`, `PUT .../permissions`, `PUT .../unlisted`, `POST .../migrate`, and `POST .../restore/:version` all return `409` with code `conflict` until `POST /records/:id/undelete` reverses the delete. `GET` and version-history reads are unaffected — the refusal applies only to mutation.
+
+## Unlisted
+
+`unlistedAt` is orthogonal to `permissions`: it says nothing about who may read a record, only whether it is enumerable. A record with `unlistedAt` set is still reachable by `GET /records/:id` for anyone who may already read it — unlisted withholds a record from enumeration, never from access.
+
+```
+PUT /records/:id/unlisted     body: { "unlisted": boolean }
+```
+
+Answers `200` with the updated record — it bumps `version` like any other mutation, and is snapshotted to version history the same way — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint, and returns `409` on a soft-deleted record like the other mutating endpoints above. Gated exactly like `PUT .../permissions`: owner or creator, asked of both identities under delegation.
+
+**`includeUnlisted` is owner-only.** `GET /records`, `POST /records/query`, and `GET /changes` all accept it (excluded by default, like `includeDeleted`), and all three refuse it with `403` for any requester but the owner acting alone — enumeration standing rests on nothing but ownership, so no grant or delegation carries it. On `GET /changes` the refusal happens before the SSE stream opens.
+
+### The feed transitions
+
+`unlist` and `list` are new change-feed ops (`unlist` maps to `kind: "deleted"`, `list` to `kind: "changed"` — see [Change feed](#change-feed)). Only the `unlist` transition needs special-casing; every other row falls out of checking the record's current `unlistedAt` against the subscriber's `includeUnlisted`:
+
+| Transition                   | Emits to a default subscriber? |
+| ---------------------------- | :----------------------------: |
+| Created unlisted             |               No               |
+| Listed → unlisted (`unlist`) |            **Yes**             |
+| Any change while unlisted    |               No               |
+| Unlisted → listed (`list`)   |            **Yes**             |
+| Hard delete while unlisted   |               No               |
 
 ## Change feed
 
@@ -159,9 +184,9 @@ This server mints resume cursors: `ready` carries the current head as `seq`, and
 
 Resume is per-connection state, not global: each distinct (session, filter) pairing gets its own buffer, retained for a bounded time and depth past the last connection using it — long enough for an ordinary reconnect, not indefinitely. A gap resumption can't close is exactly what `reset` exists for; a client's repair is the same either way — reconcile by querying `GET /records` / `POST /records/query`. A `purged` frame in a replayed backlog is never re-checked against current permissions (there is no record left to check, and the mutation-time decision is the only one that will ever exist); every other replayed frame is.
 
-Query parameters, all optional and composable: `typeId` (repeatable, matched by baseId so a type-version bump never orphans a subscription), `parentId` (`"null"` selects root records, same as `GET /records`), `entityId` (the record's author, not who made the change), `kind` (repeatable: `created`, `changed`, `deleted`, `purged`), `include=record` (attach the record as of the change; ignored for `kind=purged`). Filtering is exact, not advisory — a filtered connection never receives a frame outside its filter, and an unrecognized `kind` or `include` value is a `400`.
+Query parameters, all optional and composable: `typeId` (repeatable, matched by baseId so a type-version bump never orphans a subscription), `parentId` (`"null"` selects root records, same as `GET /records`), `entityId` (the record's author, not who made the change), `kind` (repeatable: `created`, `changed`, `deleted`, `purged`), `include=record` (attach the record as of the change; ignored for `kind=purged`), `includeUnlisted` (owner-only — see [Unlisted](#unlisted)). Filtering is exact, not advisory — a filtered connection never receives a frame outside its filter, and an unrecognized `kind` or `include` value is a `400`.
 
-Every change (`event: record`) carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `op` names the exact verb (`create`, `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`) for a consumer that distinguishes, say, a reshare from an edit. A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
+Every change (`event: record`) carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `op` names the exact verb (`create`, `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`, `unlist`, `list`) for a consumer that distinguishes, say, a reshare from an edit. A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
 
 A record this connection may not read produces no frame at all — not an empty or redacted one — the same reasoning that keeps a scoped query's `total` null: the existence of a change is itself a disclosure.
 

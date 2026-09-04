@@ -432,4 +432,112 @@ describe('GET /changes', () => {
       ctx.nonces.close();
     }
   });
+
+  describe('includeUnlisted', () => {
+    it('refuses a non-owner with 403 before the SSE stream opens', async () => {
+      const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+      const { status } = await req(t.app, 'GET', '/changes?includeUnlisted=true', { token });
+      expect(status).toBe(403);
+    });
+
+    it('refuses an anonymous connection with 403', async () => {
+      const { status } = await req(t.app, 'GET', '/changes?includeUnlisted=true');
+      expect(status).toBe(403);
+    });
+
+    it('is honored for the owner acting alone', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' }, { unlisted: true });
+      const conn = await openChangeFeed(t.app, '/changes?includeUnlisted=true', {
+        token: TEST_TOKEN,
+      });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.update(record.id, { title: 'y' });
+        const [, frame] = await conn.waitForFrames(2);
+        expect((frame.data as { recordId: string }).recordId).toBe(record.id);
+      } finally {
+        await conn.close();
+      }
+    });
+  });
+
+  // docs/spec/events.md § The unlisted transition — pinned row by row. Each
+  // "emits nothing" case proves the connection is still live by making an
+  // unrelated public change land afterward (same technique as "never honors
+  // a bearer token passed as a query parameter" above), so a missing frame
+  // means the transition was excluded, not that the connection died.
+  describe('the unlisted transition table (default subscriber, no includeUnlisted)', () => {
+    it('created unlisted emits nothing', async () => {
+      const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.create(NOTE_TYPE, { title: 'secret' }, { unlisted: true });
+        const proof = await t.ctx.stack.create(NOTE_TYPE, { title: 'public' });
+        const [, frame] = await conn.waitForFrames(2);
+        expect((frame.data as { recordId: string }).recordId).toBe(proof.id);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('listed -> unlisted emits a deleted/unlist frame', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+      const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.setUnlisted(record.id, true);
+        const [, frame] = await conn.waitForFrames(2);
+        const data = frame.data as { kind: string; op: string; recordId: string };
+        expect(data.recordId).toBe(record.id);
+        expect(data.kind).toBe('deleted');
+        expect(data.op).toBe('unlist');
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('an ordinary edit while unlisted emits nothing', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' }, { unlisted: true });
+      const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.update(record.id, { title: 'edited' });
+        const proof = await t.ctx.stack.create(NOTE_TYPE, { title: 'public' });
+        const [, frame] = await conn.waitForFrames(2);
+        expect((frame.data as { recordId: string }).recordId).toBe(proof.id);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('unlisted -> listed emits a changed/list frame', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' }, { unlisted: true });
+      const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.setUnlisted(record.id, false);
+        const [, frame] = await conn.waitForFrames(2);
+        const data = frame.data as { kind: string; op: string; recordId: string };
+        expect(data.recordId).toBe(record.id);
+        expect(data.kind).toBe('changed');
+        expect(data.op).toBe('list');
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('hard delete while unlisted emits nothing', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' }, { unlisted: true });
+      const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.delete(record.id, { hard: true });
+        const proof = await t.ctx.stack.create(NOTE_TYPE, { title: 'public' });
+        const [, frame] = await conn.waitForFrames(2);
+        expect((frame.data as { recordId: string }).recordId).toBe(proof.id);
+      } finally {
+        await conn.close();
+      }
+    });
+  });
 });

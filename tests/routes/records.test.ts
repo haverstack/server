@@ -1285,6 +1285,162 @@ describe('Records', () => {
     });
   });
 
+  describe('PUT /records/:id/unlisted', () => {
+    it('withholds a record from enumeration without changing who may read it', async () => {
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'x' },
+        { permissions: [{ access: 'public' }] },
+      );
+      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: true },
+      });
+      expect(status).toBe(200);
+      expect(typeof (data as { unlistedAt?: string }).unlistedAt).toBe('string');
+      // permissions untouched — orthogonal fields.
+      expect((data as { version: number }).version).toBe(record.version + 1);
+
+      // Still directly reachable by anyone who could already read it.
+      const anon = await req(t.app, 'GET', `/records/${record.id}`);
+      expect(anon.status).toBe(200);
+
+      // But absent from an unfiltered query.
+      const { data: queried } = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+      expect(
+        (queried as { records: Array<{ id: string }> }).records.some((r) => r.id === record.id),
+      ).toBe(false);
+    });
+
+    it('{ unlisted: false } relists a record', async () => {
+      const record = await seedRecord(t.ctx);
+      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: true },
+      });
+      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: false },
+      });
+      expect(status).toBe(200);
+      expect((data as { unlistedAt?: string }).unlistedAt).toBeUndefined();
+
+      const { data: queried } = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+      expect(
+        (queried as { records: Array<{ id: string }> }).records.some((r) => r.id === record.id),
+      ).toBe(true);
+    });
+
+    it('rejects a non-boolean unlisted value with 400', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: 'true' },
+      });
+      expect(status).toBe(400);
+    });
+
+    it('returns 403 when a non-owner without write access tries to PUT', async () => {
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'x' },
+        {
+          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        },
+      );
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token,
+        body: { unlisted: true },
+      });
+      expect(status).toBe(403);
+    });
+
+    it('returns 409 on a soft-deleted record', async () => {
+      const record = await seedRecord(t.ctx);
+      await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: true },
+      });
+      expect(status).toBe(409);
+      expect((data as { error: { code: string } }).error.code).toBe('conflict');
+    });
+
+    it('PUT succeeds when If-Match names the current version', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: true },
+        headers: { 'If-Match': `"${record.version}"` },
+      });
+      expect(status).toBe(200);
+    });
+
+    it('PUT returns 412 version_conflict on an If-Match mismatch', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+        token: TEST_TOKEN,
+        body: { unlisted: true },
+        headers: { 'If-Match': `"${record.version + 1}"` },
+      });
+      expect(status).toBe(412);
+      expect((data as { error: { code: string } }).error.code).toBe('version_conflict');
+    });
+  });
+
+  describe('includeUnlisted', () => {
+    it('is excluded by default from GET /records and POST /records/query', async () => {
+      const record = await seedRecord(t.ctx);
+      await t.ctx.stack.setUnlisted(record.id, true);
+
+      const getRes = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+      expect(
+        (getRes.data as { records: Array<{ id: string }> }).records.some((r) => r.id === record.id),
+      ).toBe(false);
+
+      const postRes = await req(t.app, 'POST', '/records/query', { token: TEST_TOKEN, body: {} });
+      expect(
+        (postRes.data as { records: Array<{ id: string }> }).records.some(
+          (r) => r.id === record.id,
+        ),
+      ).toBe(false);
+    });
+
+    it('surfaces unlisted records for the owner acting alone', async () => {
+      const record = await seedRecord(t.ctx);
+      await t.ctx.stack.setUnlisted(record.id, true);
+
+      const { data } = await req(t.app, 'GET', '/records?includeUnlisted=true', {
+        token: TEST_TOKEN,
+      });
+      expect(
+        (data as { records: Array<{ id: string }> }).records.some((r) => r.id === record.id),
+      ).toBe(true);
+
+      const { data: postData } = await req(t.app, 'POST', '/records/query', {
+        token: TEST_TOKEN,
+        body: { filter: { includeUnlisted: true } },
+      });
+      expect(
+        (postData as { records: Array<{ id: string }> }).records.some((r) => r.id === record.id),
+      ).toBe(true);
+    });
+
+    it('is refused with 403 for a non-owner, on both query endpoints', async () => {
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+
+      const getRes = await req(t.app, 'GET', '/records?includeUnlisted=true', { token });
+      expect(getRes.status).toBe(403);
+
+      const postRes = await req(t.app, 'POST', '/records/query', {
+        token,
+        body: { filter: { includeUnlisted: true } },
+      });
+      expect(postRes.status).toBe(403);
+    });
+  });
+
   describe('reserved content keys — PATCH', () => {
     for (const key of ['__proto__', 'constructor', 'prototype']) {
       it(`rejects "${key}" as a patch field with 422`, async () => {

@@ -194,6 +194,28 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // ------------------------------------------------------------------
+  // Unlisted
+  // ------------------------------------------------------------------
+
+  // PUT /records/:id/unlisted — withhold from enumeration, or relist.
+  // Orthogonal to permissions: decides whether the record is enumerable,
+  // never who may read it. Gated exactly like setPermissions() (owner or
+  // creator) and refused on a soft-deleted record with 409 — both come
+  // free from ScopedStack.setUnlisted(), which (like associate/dissociate)
+  // returns void rather than the record, so the response is a re-fetch.
+  app.put('/:id/unlisted', requireAuth(), async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth')!;
+    const body = await readJson<{ unlisted: boolean }>(c);
+    if (typeof body.unlisted !== 'boolean') throw new StackQueryError('unlisted must be a boolean');
+    const session = stack.forSession(auth);
+    await session.setUnlisted(id, body.unlisted, {
+      ifVersion: parseIfMatch(c.req.header('If-Match')),
+    });
+    return c.json(serializeRecord((await session.get(id))!));
+  });
+
+  // ------------------------------------------------------------------
   // Associations
   // ------------------------------------------------------------------
 

@@ -1639,13 +1639,45 @@ describe('auth handshake fixtures', () => {
 // -------------------------------------------------------
 
 describe('setUnlisted fixtures', () => {
-  // Unlisted records — PUT /records/:id/unlisted, unlistedAt, and
-  // includeUnlisted — are not implemented by this server yet. Pending #98.
+  const handled = new Set<string>();
+
+  // Run together against one seeded record, same as the versions block
+  // below — set-unlisted-false-relists assumes set-unlisted-true already
+  // ran (its own description says so).
+  test('set-unlisted-true then set-unlisted-false-relists', async () => {
+    const trueFixture = setUnlistedFixtures.find((f) => f.name === 'set-unlisted-true')!;
+    const falseFixture = setUnlistedFixtures.find((f) => f.name === 'set-unlisted-false-relists')!;
+    handled.add(trueFixture.name);
+    handled.add(falseFixture.name);
+
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+
+    const unlisted = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      token: TEST_TOKEN,
+      body: trueFixture.requestBody,
+    });
+    expect(unlisted.status).toBe(trueFixture.responseStatus);
+    expect((unlisted.data as WireRecord).unlistedAt).toBeDefined();
+
+    // Excluded from an unfiltered query, same posture as a soft-deleted record.
+    const queried = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+    expect(
+      (queried.data as { records: WireRecord[] }).records.some((r) => r.id === record.id),
+    ).toBe(false);
+
+    const relisted = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      token: TEST_TOKEN,
+      body: falseFixture.requestBody,
+    });
+    expect(relisted.status).toBe(falseFixture.responseStatus);
+    expect((relisted.data as WireRecord).unlistedAt).toBeUndefined();
+  });
+
   test('coverage', () => {
     assertCoverage(
       setUnlistedFixtures.map((f) => f.name),
+      handled,
       new Set(),
-      new Set(setUnlistedFixtures.map((f) => f.name)),
     );
   });
 });
