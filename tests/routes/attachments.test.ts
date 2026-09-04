@@ -225,6 +225,19 @@ describe('GET /attachments/:fileId', () => {
     expect(res.headers.get('Content-Type')).toBe('application/octet-stream');
   });
 
+  it('drops a dangerous ?filename from Content-Disposition once its extension forces the type', async () => {
+    // The filename itself is what makes the type dangerous here — letting it
+    // through unchanged would leave a browser a filename-based sniffing hint
+    // even with Content-Type neutralized (core's AttachmentDownloadContentType.forced).
+    const fileId = await putFile(t.ctx);
+    const res = await t.app.request(`/attachments/${fileId}?filename=payload.html`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/octet-stream');
+    expect(res.headers.get('Content-Disposition')).toBe('attachment');
+  });
+
   it('always sets X-Content-Type-Options: nosniff', async () => {
     const fileId = await putFile(t.ctx);
     const res = await t.app.request(`/attachments/${fileId}`, {

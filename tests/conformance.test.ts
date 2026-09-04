@@ -64,6 +64,7 @@ import {
 import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
 import { changeRoutes } from '../src/routes/changes.js';
 import { authMiddleware } from '../src/middleware/auth.js';
+import { createApp } from '../src/app.js';
 import type { AppEnv } from '../src/types.js';
 
 /**
@@ -1695,26 +1696,186 @@ describe('setUnlisted fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Attachments: download / upload
+// Attachments: download
 // -------------------------------------------------------
 
-describe('attachment download/upload fixtures', () => {
-  // Never wired up in this harness at all — a pre-existing coverage gap
-  // (attachment routes are exercised by hand in tests/routes/attachments.test.ts
-  // instead). Pending #102.
-  test('coverage: attachmentDownloadFixtures', () => {
-    assertCoverage(
-      attachmentDownloadFixtures.map((f) => f.name),
-      new Set(),
-      new Set(attachmentDownloadFixtures.map((f) => f.name)),
+describe('attachmentDownload fixtures', () => {
+  const handled = new Set<string>();
+
+  function find(name: string) {
+    const fixture = attachmentDownloadFixtures.find((f) => f.name === name)!;
+    handled.add(name);
+    return fixture;
+  }
+
+  // Fixture paths embed the fixture authors' own fileIds — sha256 hashes of
+  // bytes this harness never had. Like every other server-generated value
+  // in this file (record ids, cursors), they're illustrative rather than
+  // literal: each dispatch below uploads its own bytes for a real fileId
+  // and checks the fixture's pinned response headers against that, rather
+  // than replaying the fixture's path verbatim.
+  async function uploadFile(mimeType: string): Promise<string> {
+    const record = await t.ctx.stack.putAttachment(
+      new TextEncoder().encode(`conformance-fixture-bytes:${mimeType}`),
+      mimeType,
     );
+    return (record.content as { fileId: string }).fileId;
+  }
+
+  function queryFrom(path: string): string {
+    const i = path.indexOf('?');
+    return i === -1 ? '' : path.slice(i);
+  }
+
+  async function dispatch(
+    fixture: (typeof attachmentDownloadFixtures)[number],
+    fileId: string,
+  ): Promise<void> {
+    const res = await t.app.request(`/attachments/${fileId}${queryFrom(fixture.path)}`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    for (const [name, value] of Object.entries(fixture.responseHeaders)) {
+      expect(res.headers.get(name)).toBe(value);
+    }
+  }
+
+  test('attachment-download-contenttype-param-safe-passes-through', async () => {
+    const fixture = find('attachment-download-contenttype-param-safe-passes-through');
+    await dispatch(fixture, await uploadFile('application/octet-stream'));
   });
 
-  test('coverage: attachmentUploadFixtures', () => {
+  test('attachment-download-contenttype-param-dangerous-forced', async () => {
+    const fixture = find('attachment-download-contenttype-param-dangerous-forced');
+    await dispatch(fixture, await uploadFile('application/octet-stream'));
+  });
+
+  test('attachment-download-filename-extension-safe-passes-through', async () => {
+    const fixture = find('attachment-download-filename-extension-safe-passes-through');
+    await dispatch(fixture, await uploadFile('application/octet-stream'));
+  });
+
+  test('attachment-download-filename-extension-dangerous-forced', async () => {
+    const fixture = find('attachment-download-filename-extension-dangerous-forced');
+    await dispatch(fixture, await uploadFile('application/octet-stream'));
+  });
+
+  test('attachment-download-stored-mimetype-safe-passes-through', async () => {
+    const fixture = find('attachment-download-stored-mimetype-safe-passes-through');
+    await dispatch(fixture, await uploadFile('image/png'));
+  });
+
+  test('attachment-download-stored-mimetype-dangerous-forced', async () => {
+    const fixture = find('attachment-download-stored-mimetype-dangerous-forced');
+    await dispatch(fixture, await uploadFile('text/html'));
+  });
+
+  test('attachment-download-no-metadata-defaults-to-octet-stream', async () => {
+    const fixture = find('attachment-download-no-metadata-defaults-to-octet-stream');
+    // Raw bytes with no _attachment@1 record at all — bypasses
+    // Stack.putAttachment (which creates the record atomically) by writing
+    // straight through the adapter.
+    const fileId = await t.ctx.adapter.putAttachment(new TextEncoder().encode('orphan-bytes'));
+    await dispatch(fixture, fileId);
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      attachmentDownloadFixtures.map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+});
+
+// -------------------------------------------------------
+// Attachments: upload
+// -------------------------------------------------------
+
+describe('attachmentUpload fixtures', () => {
+  const handled = new Set<string>();
+
+  function find(name: string) {
+    const fixture = attachmentUploadFixtures.find((f) => f.name === name)!;
+    handled.add(name);
+    return fixture;
+  }
+
+  async function dispatch(
+    fixture: (typeof attachmentUploadFixtures)[number],
+    opts: { token?: string; app?: TestApp['app'] } = {},
+  ): Promise<{ status: number; data: Record<string, unknown> }> {
+    const path = fixture.appId
+      ? `/attachments?appId=${encodeURIComponent(fixture.appId)}`
+      : '/attachments';
+    const headers: Record<string, string> = { ...fixture.requestHeaders };
+    if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
+    const res = await (opts.app ?? t.app).request(path, {
+      method: 'POST',
+      headers,
+      body: new Uint8Array(fixture.requestBodyBytes),
+    });
+    const data = JSON.parse(await res.text()) as Record<string, unknown>;
+    return { status: res.status, data };
+  }
+
+  test('attachment-upload-creates-metadata-record', async () => {
+    const fixture = find('attachment-upload-creates-metadata-record');
+    const { status, data } = await dispatch(fixture, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    const expected = fixture.responseBody as { content: Record<string, unknown>; version: number };
+    expect(data.content).toEqual(expected.content);
+    expect(data.typeId).toBe('_attachment@1');
+    expect(data.version).toBe(expected.version);
+  });
+
+  test('attachment-upload-carries-appid-query-param', async () => {
+    const fixture = find('attachment-upload-carries-appid-query-param');
+    const { status, data } = await dispatch(fixture, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    const expected = fixture.responseBody as { content: Record<string, unknown>; version: number };
+    expect(data.content).toEqual(expected.content);
+    expect(data.appId).toBe(fixture.appId);
+    expect(data.version).toBe(expected.version);
+  });
+
+  test('attachment-upload-no-content-type-defaults-to-octet-stream', async () => {
+    const fixture = find('attachment-upload-no-content-type-defaults-to-octet-stream');
+    const { status, data } = await dispatch(fixture, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    const expected = fixture.responseBody as { content: Record<string, unknown>; version: number };
+    expect(data.content).toEqual(expected.content);
+    expect(data.version).toBe(expected.version);
+  });
+
+  test('attachment-upload-non-owner-without-create-grant-forbidden', async () => {
+    const fixture = find('attachment-upload-non-owner-without-create-grant-forbidden');
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { status, data } = await dispatch(fixture, { token });
+    expect(status).toBe(fixture.responseStatus);
+    const expected = fixture.responseBody as { error: { code: string } };
+    expect((data as { error: { code: string } }).error.code).toBe(expected.error.code);
+  });
+
+  test('attachment-upload-payload-too-large', async () => {
+    const fixture = find('attachment-upload-payload-too-large');
+    // The fixture's own body doesn't exceed any real limit — per its own
+    // description it stands in for one that does, pinning the error shape
+    // rather than a specific size — so this dispatches against a server
+    // configured with a ceiling below the fixture's body length instead.
+    const smallConfig = { ...testConfig(t.dbPath), maxAttachmentBytes: 2 };
+    const smallApp = createApp(t.ctx, smallConfig, logger);
+    const { status, data } = await dispatch(fixture, { token: TEST_TOKEN, app: smallApp });
+    expect(status).toBe(fixture.responseStatus);
+    const expected = fixture.responseBody as { error: { code: string } };
+    expect((data as { error: { code: string } }).error.code).toBe(expected.error.code);
+  });
+
+  test('coverage', () => {
     assertCoverage(
       attachmentUploadFixtures.map((f) => f.name),
+      handled,
       new Set(),
-      new Set(attachmentUploadFixtures.map((f) => f.name)),
     );
   });
 });
