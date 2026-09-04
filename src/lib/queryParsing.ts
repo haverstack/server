@@ -106,7 +106,10 @@ export function parseQueryBody(raw: unknown): StackQuery {
     if (f.relatedTo !== undefined) {
       const r = requirePlainObject(f.relatedTo, 'filter.relatedTo');
       filter.relatedTo = {
-        recordId: requireString(r.recordId, 'filter.relatedTo.recordId'),
+        target: {
+          scope: 'record',
+          recordId: requireString(r.recordId, 'filter.relatedTo.recordId'),
+        },
         ...(r.label !== undefined && { label: requireString(r.label, 'filter.relatedTo.label') }),
       };
     }
@@ -182,7 +185,10 @@ export function parseQueryParams(url: URL): StackQuery {
   const relatedTo = getOne(url, 'relatedTo');
   if (relatedTo) {
     const label = getOne(url, 'relatedToLabel');
-    filter.relatedTo = { recordId: relatedTo, ...(label && { label }) };
+    filter.relatedTo = {
+      target: { scope: 'record', recordId: relatedTo },
+      ...(label && { label }),
+    };
   }
 
   const search = getOne(url, 'search');

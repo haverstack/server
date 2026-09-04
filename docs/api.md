@@ -19,6 +19,7 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
   "capabilities": {
     "fullTextSearch": true,
     "contentFieldQuery": true,
+    "nestedContentQuery": true,
     "sortableFields": ["createdAt", "updatedAt", "version"],
     "maxAttachmentBytes": 52428800,
     "maxContentBytes": 1048576
@@ -31,6 +32,8 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 `version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.maxAttachmentBytes` and `maxContentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
 
 `changes` is a top-level field, not part of `capabilities` — a client checks it and fails locally at `open()` rather than discovering a missing feed as a 404 partway through a connection. `transports` lists what it speaks (`sse` is the only one this version defines); `resume` is `true` — `GET /changes` mints and honors resume cursors; `records` is `true` because `GET /changes` already honors `?include=record` unconditionally. Both `resume` and `records` false is also a fully conformant response for a server that doesn't implement either — see [Change feed](#change-feed) below.
+
+`capabilities.nestedContentQuery` is `true`, spread through from the underlying sqlite adapter: a `content` filter key may be a dot-separated path (`"profile.email"`), not just a top-level field — see [Content filter keys](#content-filter-keys) below.
 
 ## Authentication
 
@@ -112,6 +115,16 @@ Removing an association is `POST /records/:id/associations/delete`, not a body-b
 `GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
 
 Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
+
+#### Content filter keys
+
+`POST /records/query`'s `filter.content` matches content fields by exact value, keyed by field name. A key may be a dot-separated path (`"profile.email"`) to match a field nested inside an `object`-typed field — this server declares `nestedContentQuery: true` in [Discovery](#discovery), so a multi-segment key is accepted rather than refused with `400`. An array anywhere along the path is matched element-wise.
+
+### Soft delete and tombstones
+
+`DELETE /records/:id` without `?hard=true` leaves a **tombstone**: the record continues to exist and remains reachable by `id`, but its `content` is projected as `{}` and `deletedAt` is set. This applies uniformly everywhere the record is served with content attached — `GET /records/:id`, `GET`/`POST /records/query` with `filter.includeDeleted: true`, and a `deleted`-kind change feed frame with `?include=record` — so a client sees the same emptied shape regardless of which route it came through. `GET /records/:id/versions` and `GET /records/:id/versions/:version` are the deliberate exception: version history is never tombstoned and continues to serve full content.
+
+A soft-deleted record refuses further mutation: `PATCH`, `POST .../associations`, `POST .../associations/delete`, `PUT .../permissions`, `POST .../migrate`, and `POST .../restore/:version` all return `409` with code `conflict` until `POST /records/:id/undelete` reverses the delete. `GET` and version-history reads are unaffected — the refusal applies only to mutation.
 
 ## Change feed
 

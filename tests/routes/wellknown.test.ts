@@ -33,6 +33,12 @@ describe('GET /.well-known/stack', () => {
     expect(capabilities.maxContentBytes).toBe(1 * 1024 * 1024);
   });
 
+  it('advertises nestedContentQuery — spread from the sqlite adapter', async () => {
+    const { data } = await req(t.app, 'GET', '/.well-known/stack');
+    const capabilities = (data as { capabilities: Record<string, unknown> }).capabilities;
+    expect(capabilities.nestedContentQuery).toBe(true);
+  });
+
   it('omits timezone entirely when the stack has none configured', async () => {
     const noTzApp = await buildTestApp({ timezone: undefined });
     try {
