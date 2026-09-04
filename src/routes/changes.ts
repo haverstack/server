@@ -11,7 +11,7 @@ import type {
   ChangeKind,
   RecordChange,
 } from '@haverstack/core';
-import { StackQueryError } from '@haverstack/core';
+import { StackQueryError, StackPermissionError } from '@haverstack/core';
 import { serializeChange, isValidSeq } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
@@ -94,6 +94,11 @@ function parseIncludeRecord(url: URL): boolean {
   return true;
 }
 
+/** Whether `?includeUnlisted=true` was requested. Sits on SubscribeOptions, not ChangeFilter. */
+function parseIncludeUnlisted(url: URL): boolean {
+  return url.searchParams.get('includeUnlisted') === 'true';
+}
+
 /**
  * Raw cursor text presented on this connection, if any — `Last-Event-ID`
  * takes priority over `?since=` (a browser EventSource-style reconnect
@@ -137,7 +142,21 @@ export function changeRoutes(
     const auth = c.get('auth');
     const filter = parseChangeFilter(url);
     const includeRecords = parseIncludeRecord(url);
+    const includeUnlisted = parseIncludeUnlisted(url);
     const presentedRaw = presentedCursorRaw(c, url);
+
+    // Refused before the SSE stream opens, not inside it: a StackPermissionError
+    // thrown from ScopedStack.subscribe() once streaming has started would be
+    // caught by the generic catch below and the connection would just close —
+    // silently, after already answering 200. includeUnlisted needs a real 403,
+    // the same as GET /records and POST /records/query answer it as, so the
+    // owner-acting-alone check is done here, up front (mirrors requireOwner()).
+    if (includeUnlisted) {
+      const ownerEntityId = ctx.stack.ownerEntityId;
+      const ownerActingAlone =
+        auth?.principalId === ownerEntityId && auth?.subjectId === ownerEntityId;
+      if (!ownerActingAlone) throw new StackPermissionError('includeUnlisted is owner-only');
+    }
 
     // A charset-invalid cursor is refused locally rather than treated as a
     // cache miss — it isn't a value this (or any conformant) server could
@@ -193,7 +212,7 @@ export function changeRoutes(
             (change: RecordChange) => {
               send('record', serializeChange(change));
             },
-            { filter, includeRecords },
+            { filter, includeRecords, includeUnlisted },
           );
         } else {
           const key = resumeBufferKey({
@@ -201,10 +220,11 @@ export function changeRoutes(
             subjectId: auth?.subjectId ?? null,
             filter,
             includeRecords,
+            includeUnlisted,
           });
           const scoped = scopeFor(auth);
           const buffer = await resumeBuffers.acquire(key, (onChange) =>
-            scoped.subscribe(onChange, { filter, includeRecords }),
+            scoped.subscribe(onChange, { filter, includeRecords, includeUnlisted }),
           );
 
           // Attached before anything below reads or awaits, so nothing this

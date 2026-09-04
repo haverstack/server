@@ -211,6 +211,7 @@ export function parseQueryBody(raw: unknown): StackQuery {
     if (f.content !== undefined) filter.content = requirePlainObject(f.content, 'filter.content');
     if (f.search !== undefined) filter.search = requireString(f.search, 'filter.search');
     if (f.includeDeleted) filter.includeDeleted = true;
+    if (f.includeUnlisted) filter.includeUnlisted = true;
 
     if (f.createdAt) {
       const r = f.createdAt as Record<string, unknown>;
@@ -302,6 +303,7 @@ export function parseQueryParams(url: URL): StackQuery {
   }
 
   if (getOne(url, 'includeDeleted') === 'true') filter.includeDeleted = true;
+  if (getOne(url, 'includeUnlisted') === 'true') filter.includeUnlisted = true;
 
   const query: StackQuery = {};
   if (Object.keys(filter).length) query.filter = filter;

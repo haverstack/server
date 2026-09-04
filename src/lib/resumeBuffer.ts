@@ -104,6 +104,7 @@ export type ResumeBufferKeyParts = {
   subjectId: string | null;
   filter: ChangeFilter;
   includeRecords: boolean;
+  includeUnlisted: boolean;
 };
 
 /**
@@ -137,6 +138,7 @@ export function resumeBufferKey(parts: ResumeBufferKeyParts): string {
     principalId: parts.principalId,
     subjectId: parts.subjectId,
     includeRecords: parts.includeRecords,
+    includeUnlisted: parts.includeUnlisted,
     ...(typeId !== undefined && { typeId }),
     ...(filter.parentId !== undefined && { parentId: filter.parentId }),
     ...(filter.entityId !== undefined && { entityId: filter.entityId }),

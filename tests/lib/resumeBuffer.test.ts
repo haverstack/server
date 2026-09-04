@@ -89,18 +89,20 @@ describe('resumeBufferKey', () => {
       subjectId: 's1',
       filter: { typeId: ['b', 'a'], kinds: ['deleted', 'created'] },
       includeRecords: true,
+      includeUnlisted: false,
     });
     const b = resumeBufferKey({
       principalId: 'p1',
       subjectId: 's1',
       filter: { typeId: ['a', 'b'], kinds: ['created', 'deleted'] },
       includeRecords: true,
+      includeUnlisted: false,
     });
     expect(a).toBe(b);
   });
 
-  it('differs across sessions, filters, or the includeRecords choice', () => {
-    const base = { filter: {}, includeRecords: false };
+  it('differs across sessions, filters, the includeRecords choice, or the includeUnlisted choice', () => {
+    const base = { filter: {}, includeRecords: false, includeUnlisted: false };
     const anon = resumeBufferKey({ principalId: null, subjectId: null, ...base });
     const authed = resumeBufferKey({ principalId: 'p1', subjectId: 's1', ...base });
     const filtered = resumeBufferKey({
@@ -108,6 +110,7 @@ describe('resumeBufferKey', () => {
       subjectId: null,
       filter: { entityId: 'e1' },
       includeRecords: false,
+      includeUnlisted: false,
     });
     const withRecords = resumeBufferKey({
       principalId: null,
@@ -115,9 +118,15 @@ describe('resumeBufferKey', () => {
       ...base,
       includeRecords: true,
     });
+    const withUnlisted = resumeBufferKey({
+      principalId: null,
+      subjectId: null,
+      ...base,
+      includeUnlisted: true,
+    });
 
-    const keys = new Set([anon, authed, filtered, withRecords]);
-    expect(keys.size).toBe(4);
+    const keys = new Set([anon, authed, filtered, withRecords, withUnlisted]);
+    expect(keys.size).toBe(5);
   });
 
   // A buffer opens one subscription carrying the filter of whichever
@@ -128,7 +137,12 @@ describe('resumeBufferKey', () => {
   // array, so "no parentId filter" and `parentId: null` collapsed onto
   // one key.
   it('distinguishes an absent parentId filter from parentId: null', () => {
-    const base = { principalId: null, subjectId: null, includeRecords: false };
+    const base = {
+      principalId: null,
+      subjectId: null,
+      includeRecords: false,
+      includeUnlisted: false,
+    };
     const unfiltered = resumeBufferKey({ ...base, filter: {} });
     const rootsOnly = resumeBufferKey({ ...base, filter: { parentId: null } });
     const oneParent = resumeBufferKey({ ...base, filter: { parentId: 'rec-1' } });
@@ -137,7 +151,12 @@ describe('resumeBufferKey', () => {
   });
 
   it('distinguishes an absent filter field from every value that field can hold', () => {
-    const base = { principalId: null, subjectId: null, includeRecords: false };
+    const base = {
+      principalId: null,
+      subjectId: null,
+      includeRecords: false,
+      includeUnlisted: false,
+    };
     expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
       resumeBufferKey({ ...base, filter: { entityId: 'e1' } }),
     );
@@ -150,7 +169,12 @@ describe('resumeBufferKey', () => {
   });
 
   it("does not let one field's value imitate another's", () => {
-    const base = { principalId: null, subjectId: null, includeRecords: false };
+    const base = {
+      principalId: null,
+      subjectId: null,
+      includeRecords: false,
+      includeUnlisted: false,
+    };
     expect(resumeBufferKey({ ...base, filter: { parentId: 'x' } })).not.toBe(
       resumeBufferKey({ ...base, filter: { entityId: 'x' } }),
     );
