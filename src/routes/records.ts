@@ -137,12 +137,8 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
         associations: Array.isArray(body.associations)
           ? (body.associations as Association[])
           : undefined,
-        // Spread in, not passed as plain properties: ScopedStack.create()
-        // gates on `'createdAt' in opts || 'updatedAt' in opts`, so a key
-        // present with an `undefined` value still trips the owner-only
-        // check for a non-owner create.
-        ...(createdAt !== undefined ? { createdAt } : {}),
-        ...(updatedAt !== undefined ? { updatedAt } : {}),
+        createdAt,
+        updatedAt,
       });
     return c.json(serializeRecord(created), 200);
   });
