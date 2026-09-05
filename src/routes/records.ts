@@ -2,39 +2,19 @@ import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { ScopedStack, TokenSession } from '@haverstack/core';
-import { requireAuth, requireOwner, isOwnerActingAlone } from '../middleware/auth.js';
+import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import {
   parseQueryBody,
   parseQueryParams,
   parsePositiveInt,
   parseIfMatch,
+  createOptionsFromWireRecord,
 } from '@haverstack/core/wire';
 import { clampLimit } from '../lib/queryLimit.js';
 import { serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
 import type { Association, Permission, TypeId } from '@haverstack/core';
-
-/**
- * Parse a body field into a Date for the owner-only backdating options
- * (`createdAt`/`updatedAt`). An `Invalid Date` must not reach `create()` as
- * one — core refuses it outright rather than storing it, since its `NaN`
- * timestamp would switch off the skew checks instead of failing them, but a
- * malformed string is better reported here as a validation error.
- */
-function parseOwnerDate(value: unknown, path: string): Date | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== 'string' && typeof value !== 'number') {
-    throw new StackValidationError([{ path, message: `${path} must be a date string` }]);
-  }
-  const date = new Date(value);
-  if (isNaN(date.getTime())) {
-    throw new StackValidationError([
-      { path, message: `Invalid ${path}: ${JSON.stringify(value)}` },
-    ]);
-  }
-  return date;
-}
 
 // ---------------------------------------------------------------------------
 // Route factory
@@ -91,46 +71,17 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // POST /records — a full record body, but version, entityId and
-  // principalId are stamped here and never trusted from it. createdAt and
-  // updatedAt are read only for the owner acting alone: every client sends
-  // both on any create (a record body is a whole record), and forwarding
-  // them unfiltered would turn an ordinary grantee create into a 403, since
-  // ScopedStack.create() refuses backdating rather than ignoring it.
-  //
-  // unlistedAt is different: it's opt-in (only present when a client
-  // actually wants an unlisted create), so it's forwarded unconditionally
-  // as the `unlisted` boolean ScopedStack.create() expects — same as
-  // permissions/associations below. ScopedStack.create() gates it itself
-  // (mayGrantAccess(), the same rule as the permissions field), refusing
-  // with 403 rather than silently dropping it.
+  // principalId are stamped here and never trusted from it. Everything else
+  // a wire record body can carry — which fields are forwarded as-is, which
+  // are owner-acting-alone-only, and which reduce to a boolean rather than
+  // their literal value — is `createOptionsFromWireRecord()`'s disposition
+  // to make, not this route's: see `@haverstack/core/wire` and
+  // docs/spec/wire-format.md § Records.
   app.post('/', requireAuth(), async (c) => {
     const auth = c.get('auth')!;
-    const body = await readJson<Record<string, unknown>>(c);
-    if (!body.typeId || typeof body.typeId !== 'string')
-      throw new StackQueryError('typeId is required');
-    if (!body.content || typeof body.content !== 'object')
-      throw new StackQueryError('content is required');
-
-    const ownerActingAlone = isOwnerActingAlone(auth, ownerEntityId);
-    const createdAt = ownerActingAlone ? parseOwnerDate(body.createdAt, 'createdAt') : undefined;
-    const updatedAt = ownerActingAlone ? parseOwnerDate(body.updatedAt, 'updatedAt') : undefined;
-
-    const created = await stack
-      .forSession(auth)
-      .create(body.typeId as TypeId, body.content as Record<string, unknown>, {
-        id: typeof body.id === 'string' ? body.id : undefined,
-        parentId: typeof body.parentId === 'string' ? body.parentId : undefined,
-        appId: typeof body.appId === 'string' ? body.appId : undefined,
-        permissions: Array.isArray(body.permissions)
-          ? (body.permissions as Permission[])
-          : undefined,
-        associations: Array.isArray(body.associations)
-          ? (body.associations as Association[])
-          : undefined,
-        unlisted: typeof body.unlistedAt === 'string' ? true : undefined,
-        createdAt,
-        updatedAt,
-      });
+    const body = await readJson(c);
+    const { typeId, content, options } = createOptionsFromWireRecord(body, auth, ownerEntityId);
+    const created = await stack.forSession(auth).create(typeId, content, options);
     return c.json(serializeRecord(created), 200);
   });
 
