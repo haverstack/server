@@ -1421,6 +1421,29 @@ describe('Records', () => {
       expect(status).toBe(403);
     });
 
+    it("returns the record even when the PUT revokes the caller's own read access", async () => {
+      // setPermissions() is gated on mayReshare(), owner-or-creator rather
+      // than plain write access — OTHER_ENTITY_ID must be the record's
+      // author, not merely a grantee, to reach it as a non-owner.
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE_ID,
+        { body: 'x' },
+        { entityId: OTHER_ENTITY_ID },
+      );
+      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+        token,
+        body: { permissions: [] },
+      });
+      expect(status).toBe(200);
+      expect((data as { id: string }).id).toBe(record.id);
+
+      // Confirms the write actually landed and the caller lost read access —
+      // otherwise the 200 above wouldn't distinguish this from any other PUT.
+      const { status: followUp } = await req(t.app, 'GET', `/records/${record.id}`, { token });
+      expect(followUp).toBe(404);
+    });
+
     it('PUT succeeds when If-Match names the current version', async () => {
       const record = await seedRecord(t.ctx);
       const { status } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
