@@ -4,14 +4,9 @@ import { streamSSE } from 'hono/streaming';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { Config } from '../config.js';
-import type {
-  ScopedStack,
-  TokenSession,
-  ChangeFilter,
-  ChangeKind,
-  RecordChange,
-} from '@haverstack/core';
+import type { ScopedStack, TokenSession, RecordChange } from '@haverstack/core';
 import { StackQueryError, StackPermissionError } from '@haverstack/core';
+import { parseChangeParams } from '@haverstack/core/wire';
 import { serializeChange, isValidSeq } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
@@ -19,8 +14,6 @@ import { safeCompare, isOwnerActingAlone } from '../middleware/auth.js';
 import { FrameGate } from '../lib/frameGate.js';
 import { decodeCursor } from '../lib/resumeCursor.js';
 import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
-
-const CHANGE_KINDS: ReadonlySet<ChangeKind> = new Set(['created', 'changed', 'deleted', 'purged']);
 
 // Keepalive cadence, and how often an authenticated session is re-checked
 // against the token store — a stream's authority is fixed at connect, so
@@ -54,44 +47,6 @@ export type ChangeRouteOptions = {
   resumeBufferDepth?: number;
   resumeRetentionMs?: number;
 };
-
-/** Parse GET /changes' query params into a ChangeFilter. Exact, not advisory. */
-function parseChangeFilter(url: URL): ChangeFilter {
-  const filter: ChangeFilter = {};
-
-  const typeIds = url.searchParams.getAll('typeId');
-  if (typeIds.length) filter.typeId = typeIds.length === 1 ? typeIds[0] : typeIds;
-
-  const parentId = url.searchParams.get('parentId');
-  if (parentId !== null) filter.parentId = parentId === 'null' ? null : parentId;
-
-  const entityId = url.searchParams.get('entityId');
-  if (entityId !== null) filter.entityId = entityId;
-
-  const kinds = url.searchParams.getAll('kind');
-  if (kinds.length) {
-    for (const kind of kinds) {
-      if (!CHANGE_KINDS.has(kind as ChangeKind))
-        throw new StackQueryError(`Invalid kind: "${kind}"`);
-    }
-    filter.kinds = kinds as ChangeKind[];
-  }
-
-  return filter;
-}
-
-/** Whether `?include=record` was requested. Any other value is a 400. */
-function parseIncludeRecord(url: URL): boolean {
-  const include = url.searchParams.get('include');
-  if (include === null) return false;
-  if (include !== 'record') throw new StackQueryError(`Invalid include: "${include}"`);
-  return true;
-}
-
-/** Whether `?includeUnlisted=true` was requested. Sits on SubscribeOptions, not ChangeFilter. */
-function parseIncludeUnlisted(url: URL): boolean {
-  return url.searchParams.get('includeUnlisted') === 'true';
-}
 
 /**
  * Raw cursor text presented on this connection, if any — `Last-Event-ID`
@@ -132,9 +87,7 @@ export function changeRoutes(
   app.get('/', async (c) => {
     const url = new URL(c.req.url);
     const auth = c.get('auth');
-    const filter = parseChangeFilter(url);
-    const includeRecords = parseIncludeRecord(url);
-    const includeUnlisted = parseIncludeUnlisted(url);
+    const { filter, includeRecords, includeUnlisted } = parseChangeParams(url);
     const presentedRaw = presentedCursorRaw(c, url);
 
     // Refused before the stream opens: a throw from subscribe() after

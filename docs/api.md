@@ -17,23 +17,20 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
   "entityId": "did:key:z6Mk...",
   "timezone": "America/New_York",
   "capabilities": {
-    "fullTextSearch": true,
-    "contentFieldQuery": true,
-    "nestedContentQuery": true,
-    "sortableFields": ["createdAt", "updatedAt", "version"],
-    "maxAttachmentBytes": 52428800,
-    "maxContentBytes": 1048576
+    "filter": { "content": "path", "contentPresent": true, "search": true },
+    "sort": { "fields": ["createdAt", "updatedAt", "version"], "contentField": true },
+    "limits": { "attachmentBytes": 52428800, "contentBytes": 1048576 }
   },
   "auth": { "methods": ["did-challenge"] },
   "changes": { "transports": ["sse"], "resume": true, "records": true }
 }
 ```
 
-`version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.maxAttachmentBytes` and `maxContentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
+`version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.limits.attachmentBytes` and `contentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
 
 `changes` is a top-level field, not part of `capabilities` — a client checks it and fails locally at `open()` rather than discovering a missing feed as a 404 partway through a connection. `transports` lists what it speaks (`sse` is the only one this version defines); `resume` is `true` — `GET /changes` mints and honors resume cursors; `records` is `true` because `GET /changes` already honors `?include=record` unconditionally. Both `resume` and `records` false is also a fully conformant response for a server that doesn't implement either — see [Change feed](#change-feed) below.
 
-`capabilities.nestedContentQuery` is `true`, spread through from the underlying sqlite adapter: a `content` filter key may be a dot-separated path (`"profile.email"`), not just a top-level field — see [Content filter keys](#content-filter-keys) below.
+`capabilities.filter.content` is `"path"`, spread through from the underlying sqlite adapter: a `content` filter key may be a dot-separated path (`"profile.email"`), not just a top-level field — see [Content filter keys](#content-filter-keys) below. `capabilities` and its shape are defined by `@haverstack/core`'s `AdapterCapabilities`; see core's `wire-format.md` § Discovery for the normative reach ladder and field-by-field meaning.
 
 ## Authentication
 
@@ -119,11 +116,13 @@ A `relationship` association's `target` is a discriminated union naming which id
 
 `createdAt`/`updatedAt` are honored only from the stack owner acting alone (undelegated, authenticated as the owner) — the same tier that gates hard delete, `commitMigration()`, and `includeUnlisted`. From anyone else, both are dropped rather than forwarded: forwarding them would otherwise turn an ordinary grantee's create into a `403`, since a non-owner backdating attempt is refused outright rather than silently ignored. For an owner-acting-alone create: `updatedAt` defaults to `createdAt` (never to now), so a plain import doesn't fabricate an edit; `updatedAt` earlier than `createdAt` is a `422` validation error, including when `createdAt` itself defaulted to now; omitting `id` derives it from `createdAt` instead of the current time; supplying both `id` and `createdAt` checks them against each other under the same clock-skew tolerance. An owner's plain `id`-only create (no `createdAt`) is unaffected — it still gets the ordinary id-vs-now check. A malformed `createdAt`/`updatedAt` value returns `422` with code `validation`.
 
-`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, `POST /records/:id/associations/delete`, `PUT /records/:id/permissions`, and `PUT /records/:id/unlisted`. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins.
+`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, `POST /records/:id/associations/delete`, `PUT /records/:id/permissions`, and `PUT /records/:id/unlisted`. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins. A malformed value (not a bare, optionally quoted version — a weak comparator like `W/"5"` included) is `400`, not read as absent: a header sent to fence a write that silently degrades to unconditional last-writer-wins defeats the only thing it was sent to do.
 
 ### Query parameters
 
-`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToStack`, `relatedToLabel`), `relatedToEntity` (+ `relatedToLabel`), `relatedToNs` (+ `relatedToId`, `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `includeUnlisted`, `sort`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `includeUnlisted` is owner-only — see [Unlisted](#unlisted) below. `POST /records/query` accepts the same filters as a JSON body, plus a `content` field-equality filter. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal.
+`GET /records` accepts, among others: `typeId`, `parentId`, `appId`, `entityId`, `principalId`, `tag`, `hasAttachment`, `attachmentFileId`, `relatedTo` (+ `relatedToStack`, `relatedToLabel`), `relatedToEntity` (+ `relatedToLabel`), `relatedToNs` (+ `relatedToId`, `relatedToLabel`), `search`, `createdBefore`/`createdAfter`, `updatedBefore`/`updatedAfter`, `includeDeleted`, `includeUnlisted`, `sort`/`sortContent`/`direction`, `limit`, `cursor`. `entityId` filters by the record's attributed subject; `principalId` filters by the delegating app, if any (see [Permissions](#permissions) below). `includeUnlisted` is owner-only — see [Unlisted](#unlisted) below. `POST /records/query` accepts the same filters as a JSON body, plus `content` (field-equality) and `contentPresent` (field-presence) filters. Omitting `limit` returns one default-sized page (50 records), never the whole result set — `cursor` is the only end-of-results signal; a `limit` above this server's own ceiling (1000) is clamped down to it rather than rejected.
+
+Parsing and encoding these parameters is `@haverstack/core/wire`'s job, not this server's — `parseQueryParams`, `parseQueryBody`, and `parseChangeParams` there are the exact inverse of what `@haverstack/adapter-api` builds, and are the normative reference for every rule below. `docs/spec/wire-format.md` § Query parameters in `haverstack/core` documents the full parameter set and its edge cases; what follows here is a summary, kept for this server's own reference.
 
 Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
 
@@ -142,7 +141,7 @@ A relationship association's target names one of three scopes — a Record, an i
 
 #### Content filter keys
 
-`POST /records/query`'s `filter.content` matches content fields by exact value, keyed by field name. A key may be a dot-separated path (`"profile.email"`) to match a field nested inside an `object`-typed field — this server declares `nestedContentQuery: true` in [Discovery](#discovery), so a multi-segment key is accepted rather than refused with `400`. An array anywhere along the path is matched element-wise.
+`POST /records/query`'s `filter.content` matches content fields by exact value, keyed by field name. A key may be a dot-separated path (`"profile.email"`) to match a field nested inside an `object`-typed field — this server declares `capabilities.filter.content: "path"` in [Discovery](#discovery), so a multi-segment key is accepted rather than refused with `400`. An array anywhere along the path is matched element-wise. `filter.contentPresent` lists paths that must hold a value, the question an exact-match filter value can't ask.
 
 ### Soft delete and tombstones
 

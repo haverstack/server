@@ -173,10 +173,10 @@ describe('discovery fixtures', () => {
       (fixture.responseBody!.version as string).split('.')[0],
     );
     expect(typeof d.entityId).toBe('string');
-    const capabilities = d.capabilities as Record<string, unknown>;
-    expect(Array.isArray(capabilities.sortableFields)).toBe(true);
-    for (const field of fixture.responseBody!.capabilities.sortableFields) {
-      expect(capabilities.sortableFields).toContain(field);
+    const capabilities = d.capabilities as { sort: { fields: unknown } };
+    expect(Array.isArray(capabilities.sort.fields)).toBe(true);
+    for (const field of fixture.responseBody!.capabilities!.sort!.fields!) {
+      expect(capabilities.sort.fields).toContain(field);
     }
   });
 
@@ -454,6 +454,61 @@ describe('queryRecords fixtures', () => {
     expect(page.total).toBeNull();
   });
 
+  test('query-filters-by-content-presence — filter.contentPresent is accepted', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-filters-by-content-presence',
+    )!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      token: TEST_TOKEN,
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    expect(page.records).toEqual([]);
+    expect(page.cursor).toBeNull();
+    expect(page.total).toBeNull();
+  });
+
+  test('query-sorts-by-a-content-field — sort.contentField is accepted on POST', async () => {
+    const fixture = queryRecordsFixtures.find((f) => f.name === 'query-sorts-by-a-content-field')!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      token: TEST_TOKEN,
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    expect(page.records).toEqual([]);
+    expect(page.cursor).toBeNull();
+    expect(page.total).toBeNull();
+  });
+
+  test('query-content-sort-folds-case-and-accents — a content-field sort request is accepted', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-content-sort-folds-case-and-accents',
+    )!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      token: TEST_TOKEN,
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    expect(page.records).toEqual([]);
+    expect(page.cursor).toBeNull();
+    expect(page.total).toBeNull();
+  });
+
+  test('query-get-sorts-by-a-content-field — ?sortContent= is accepted on GET', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-get-sorts-by-a-content-field',
+    )!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    expect(page.records).toEqual([]);
+    expect(page.cursor).toBeNull();
+    expect(page.total).toBeNull();
+  });
+
   test('coverage', () => {
     // query-empty-page-with-live-cursor and query-get-records-uses-the-same-
     // envelope pin narrower edge cases of the same two invariants (a
@@ -469,6 +524,10 @@ describe('queryRecords fixtures', () => {
         'query-related-to-record-target',
         'query-related-to-entity-target',
         'query-related-to-external-namespace',
+        'query-filters-by-content-presence',
+        'query-sorts-by-a-content-field',
+        'query-content-sort-folds-case-and-accents',
+        'query-get-sorts-by-a-content-field',
       ]),
       new Set(),
     );
@@ -1171,6 +1230,12 @@ describe('error response fixtures', () => {
 
   test('error-bad-request-unknown-sort-field-cursor', async () => {
     const fixture = find('error-bad-request-unknown-sort-field-cursor');
+    const { status, data } = await dispatch(fixture, TEST_TOKEN);
+    expectError(status, data, fixture);
+  });
+
+  test('error-bad-request-both-sort-parameters', async () => {
+    const fixture = find('error-bad-request-both-sort-parameters');
     const { status, data } = await dispatch(fixture, TEST_TOKEN);
     expectError(status, data, fixture);
   });

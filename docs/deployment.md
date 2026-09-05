@@ -135,7 +135,7 @@ docker compose up -d
 
 ## Request body size limits
 
-The server enforces two ceilings of its own — `MAX_CONTENT_BYTES` (default 1 MB, JSON bodies: records, patches, and every other JSON-accepting route) and `MAX_ATTACHMENT_BYTES` (default 50 MB, `POST /attachments` only) — and declares both in `GET /.well-known/stack` (`capabilities.maxContentBytes`/`maxAttachmentBytes`) so clients can pre-check.
+The server enforces two ceilings of its own — `MAX_CONTENT_BYTES` (default 1 MB, JSON bodies: records, patches, and every other JSON-accepting route) and `MAX_ATTACHMENT_BYTES` (default 50 MB, `POST /attachments` only) — and declares both in `GET /.well-known/stack` (`capabilities.limits.contentBytes`/`attachmentBytes`) so clients can pre-check.
 
 A reverse proxy sitting in front, however, often has its own request-body limit, independent of the app's. If that limit is smaller than `MAX_ATTACHMENT_BYTES`, the proxy rejects large uploads before they ever reach the server — usually with a proxy-branded error page, not the server's `413 payload_too_large` wire response. Raise the proxy's own limit to at least `MAX_ATTACHMENT_BYTES` (or match it exactly, so the two ceilings agree and the server's typed error is what clients actually see):
 

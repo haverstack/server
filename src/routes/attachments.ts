@@ -5,6 +5,7 @@ import type { AttachmentContent, StackRecord } from '@haverstack/core';
 import {
   resolveAttachmentDownloadContentType,
   firstRecordedAttachment,
+  parseUploadFilename,
   NOSNIFF_HEADER_NAME,
   NOSNIFF_HEADER_VALUE,
 } from '@haverstack/core/wire';
@@ -127,24 +128,4 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   });
 
   return app;
-}
-
-/**
- * Parse a filename from an upload's Content-Disposition header. Prefers
- * the RFC 5987 extended form (`filename*=UTF-8''name.txt`), which is what
- * clients that carry non-ASCII names use; falls back to the plain quoted
- * form for everyone else.
- */
-function parseUploadFilename(header: string | undefined): string | undefined {
-  if (!header) return undefined;
-  const extended = /filename\*\s*=\s*[^']*'[^']*'([^;]+)/i.exec(header);
-  if (extended) {
-    try {
-      return decodeURIComponent(extended[1].trim());
-    } catch {
-      // Malformed percent-encoding — fall through to the plain form.
-    }
-  }
-  const plain = /filename\s*=\s*"([^"]+)"/i.exec(header);
-  return plain ? plain[1] : undefined;
 }
