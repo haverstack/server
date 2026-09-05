@@ -158,11 +158,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth')!;
     const body = await readJson<{ permissions: Permission[] }>(c);
     if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
-    const session = stack.forSession(auth);
-    await session.setPermissions(id, body.permissions, {
+    const updated = await stack.forSession(auth).setPermissions(id, body.permissions, {
       ifVersion: parseIfMatch(c.req.header('If-Match')),
     });
-    return c.json(serializeRecord((await session.get(id))!));
+    return c.json(serializeRecord(updated));
   });
 
   // ------------------------------------------------------------------
@@ -172,18 +171,16 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // PUT /records/:id/unlisted — withhold from enumeration, or relist.
   // Orthogonal to permissions: decides whether the record is enumerable,
   // never who may read it. The owner-or-creator gate and the 409 on a
-  // soft-deleted record both come from ScopedStack.setUnlisted(), which
-  // returns void, so the response is a re-fetch.
+  // soft-deleted record both come from ScopedStack.setUnlisted().
   app.put('/:id/unlisted', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<{ unlisted: boolean }>(c);
     if (typeof body.unlisted !== 'boolean') throw new StackQueryError('unlisted must be a boolean');
-    const session = stack.forSession(auth);
-    await session.setUnlisted(id, body.unlisted, {
+    const updated = await stack.forSession(auth).setUnlisted(id, body.unlisted, {
       ifVersion: parseIfMatch(c.req.header('If-Match')),
     });
-    return c.json(serializeRecord((await session.get(id))!));
+    return c.json(serializeRecord(updated));
   });
 
   // ------------------------------------------------------------------
@@ -208,9 +205,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth')!;
     const body = await readJson<Association>(c);
     if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
-    const session = stack.forSession(auth);
-    await session.associate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    return c.json(serializeRecord((await session.get(id))!));
+    const updated = await stack
+      .forSession(auth)
+      .associate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    return c.json(serializeRecord(updated));
   });
 
   // POST, not DELETE — a DELETE request body has no defined semantics
@@ -220,9 +218,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<Association>(c);
-    const session = stack.forSession(auth);
-    await session.dissociate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    return c.json(serializeRecord((await session.get(id))!));
+    const updated = await stack
+      .forSession(auth)
+      .dissociate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    return c.json(serializeRecord(updated));
   });
 
   // ------------------------------------------------------------------
