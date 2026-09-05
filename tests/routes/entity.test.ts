@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildTestApp,
   req,
@@ -68,45 +68,12 @@ describe('GET /entity', () => {
     expect(status).toBe(404);
   });
 
-  it("a non-owner's denial does not evict the cached owner record id", async () => {
-    await seedEntityRecord(t.ctx);
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
-    const querySpy = vi.spyOn(t.ctx.stack, 'query');
-
-    // Populate the cache, then have a non-owner get denied against it. The
-    // denied request may itself run a query internally to evaluate the
-    // permission grant — that's unrelated to the id cache this test is
-    // pinning down, so only the *delta* across it matters below.
-    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
-    const { status: deniedStatus } = await req(t.app, 'GET', '/entity', { token });
-    expect(deniedStatus).toBe(404);
-    const countAfterDenial = querySpy.mock.calls.length;
-
-    // The card was never deleted, so a well-behaved cache doesn't re-resolve
-    // it on the next request — a non-owner's null read() is ambiguous
-    // (denied vs. gone) and must not be trusted to evict a valid entry. A
-    // stale eviction would show up here as an extra query call.
-    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
-    expect(querySpy.mock.calls.length).toBe(countAfterDenial);
-  });
-
   it('returns 401 for an unauthenticated request', async () => {
     const { status } = await req(t.app, 'GET', '/entity');
     expect(status).toBe(401);
   });
 
-  it('resolves the owner record id once and reuses it on later requests', async () => {
-    await seedEntityRecordWithGeneratedId(t.ctx);
-    const querySpy = vi.spyOn(t.ctx.stack, 'query');
-
-    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
-    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
-    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
-
-    expect(querySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('re-resolves after the cached record is deleted, and again once it is recreated', async () => {
+  it('resolves the current owner record on each request, including after delete and recreate', async () => {
     const first = await seedEntityRecordWithGeneratedId(t.ctx);
 
     const populate = await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
@@ -182,22 +149,9 @@ describe('PATCH /entity', () => {
     expect(status).toBe(401);
   });
 
-  it('reuses the record id cache GET already populated, without re-querying', async () => {
-    await seedEntityRecordWithGeneratedId(t.ctx);
-    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
-
-    const querySpy = vi.spyOn(t.ctx.stack, 'query');
-    const { status } = await req(t.app, 'PATCH', '/entity', {
-      token: TEST_TOKEN,
-      body: { content: { name: 'Renamed' } },
-    });
-    expect(status).toBe(200);
-    expect(querySpy).not.toHaveBeenCalled();
-  });
-
-  it('re-resolves on the next request after PATCHing a since-deleted cached record', async () => {
+  it('resolves the current owner record on each PATCH request after a since-deleted record', async () => {
     const record = await seedEntityRecordWithGeneratedId(t.ctx);
-    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN }); // populate the cache
+    await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
 
     await t.ctx.adapter.deleteRecord(record.id, { hard: true });
     const stale = await req(t.app, 'PATCH', '/entity', {
