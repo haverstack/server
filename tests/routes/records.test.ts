@@ -418,35 +418,12 @@ describe('Records', () => {
       expect(withStackRecords[0]!.id).not.toBe(local.id);
     });
 
-    it('rejects mixed relatedTo scopes with 400 bad_request', async () => {
-      const { status, data } = await req(
-        t.app,
-        'GET',
-        `/records?relatedTo=x&relatedToEntity=${encodeURIComponent(OTHER_ENTITY_ID)}`,
-        { token: TEST_TOKEN },
-      );
-      expect(status).toBe(400);
-      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
-    });
-
-    it('rejects relatedToStack without relatedTo with 400 bad_request', async () => {
-      const { status, data } = await req(
-        t.app,
-        'GET',
-        '/records?relatedToStack=https://other.example/stack',
-        { token: TEST_TOKEN },
-      );
-      expect(status).toBe(400);
-      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
-    });
-
-    it('rejects relatedToId without relatedToNs with 400 bad_request', async () => {
-      const { status, data } = await req(t.app, 'GET', '/records?relatedToId=at://foo', {
-        token: TEST_TOKEN,
-      });
-      expect(status).toBe(400);
-      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
-    });
+    // Mixed relatedTo scopes, and a qualifier param without the param it
+    // qualifies, are parsing rejections pinned once at the unit level in
+    // @haverstack/core's wire-request.test.ts rather than here — see
+    // server#114. What stays below is validation deeper than parsing: an
+    // empty relatedToStack/relatedToId passes the parser raw and is only
+    // rejected by target validation, which the parser doesn't own.
 
     it('rejects an empty relatedToStack with 400 rather than treating it as local or a wildcard', async () => {
       const target = await seedRecord(t.ctx, { body: 'target' });

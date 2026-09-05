@@ -23,8 +23,10 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
       // docs/spec/wire-format.md § Discovery.
       capabilities: {
         ...ctx.stack.features,
-        maxAttachmentBytes: config.maxAttachmentBytes,
-        maxContentBytes: config.maxContentBytes,
+        limits: {
+          attachmentBytes: config.maxAttachmentBytes,
+          contentBytes: config.maxContentBytes,
+        },
       },
       // The DID challenge-response handshake is always implemented by this
       // server, so it's always advertised — a client holding a DID

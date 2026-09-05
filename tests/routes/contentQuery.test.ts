@@ -1,6 +1,6 @@
 /**
  * Content filters and search over this server's query routes: the sqlite
- * adapter's nestedContentQuery capability, and FTS5 full-text search,
+ * adapter's path-reach content filtering, and FTS5 full-text search,
  * pinned at the HTTP surface rather than assumed to arrive intact.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';

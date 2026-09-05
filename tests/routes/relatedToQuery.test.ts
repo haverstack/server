@@ -146,14 +146,9 @@ describe('POST /records/query filter.relatedTo', () => {
     expect((data as { error: { code: string } }).error.code).toBe('bad_request');
   });
 
-  it('rejects an unrecognized target scope with 400', async () => {
-    const { status, data } = await req(t.app, 'POST', '/records/query', {
-      token: TEST_TOKEN,
-      body: { filter: { relatedTo: { target: { scope: 'bogus', id: 'x' } } } },
-    });
-    expect(status).toBe(400);
-    expect((data as { error: { code: string } }).error.code).toBe('bad_request');
-  });
+  // An unrecognized target scope is a parsing rejection, pinned once at the
+  // unit level in @haverstack/core's wire-request.test.ts rather than here
+  // — see server#114.
 
   it('rejects a record target with an empty recordId with 400', async () => {
     const { status, data } = await req(t.app, 'POST', '/records/query', {

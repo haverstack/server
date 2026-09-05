@@ -4,17 +4,16 @@ import type { StackContext } from '../stack.js';
 import type { ScopedStack, TokenSession } from '@haverstack/core';
 import { requireAuth, requireOwner, isOwnerActingAlone } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
-import { parseQueryBody, parseQueryParams, parsePositiveInt } from '../lib/queryParsing.js';
+import {
+  parseQueryBody,
+  parseQueryParams,
+  parsePositiveInt,
+  parseIfMatch,
+} from '@haverstack/core/wire';
+import { clampLimit } from '../lib/queryLimit.js';
 import { serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
 import type { Association, Permission, TypeId } from '@haverstack/core';
-
-/** Parse an `If-Match: "5"` header into the version number for `ifVersion`. */
-function parseIfMatch(header: string | undefined): number | undefined {
-  if (!header) return undefined;
-  const n = parseInt(header.replace(/^"|"$/g, ''), 10);
-  return isNaN(n) ? undefined : n;
-}
 
 /**
  * Parse a body field into a Date for the owner-only backdating options
@@ -64,7 +63,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // the literal "query" segment.
   app.post('/query', async (c) => {
     const auth = c.get('auth');
-    const query = parseQueryBody(await readJson(c));
+    const query = clampLimit(parseQueryBody(await readJson(c)));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
     return c.json({
       records: result.records.map(serializeRecord),
@@ -79,7 +78,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // GET /records — query by native fields via URL params
   app.get('/', async (c) => {
     const auth = c.get('auth');
-    const query = parseQueryParams(new URL(c.req.url));
+    const query = clampLimit(parseQueryParams(new URL(c.req.url)));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
     return c.json({
       records: result.records.map(serializeRecord),

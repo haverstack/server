@@ -28,15 +28,17 @@ describe('GET /.well-known/stack', () => {
 
   it("declares the server's own size ceilings, not the adapter's null", async () => {
     const { data } = await req(t.app, 'GET', '/.well-known/stack');
-    const capabilities = (data as { capabilities: Record<string, unknown> }).capabilities;
-    expect(capabilities.maxAttachmentBytes).toBe(50 * 1024 * 1024);
-    expect(capabilities.maxContentBytes).toBe(1 * 1024 * 1024);
+    const capabilities = (data as { capabilities: { limits: Record<string, unknown> } })
+      .capabilities;
+    expect(capabilities.limits.attachmentBytes).toBe(50 * 1024 * 1024);
+    expect(capabilities.limits.contentBytes).toBe(1 * 1024 * 1024);
   });
 
-  it('advertises nestedContentQuery — spread from the sqlite adapter', async () => {
+  it('advertises path-reach content filtering — spread from the sqlite adapter', async () => {
     const { data } = await req(t.app, 'GET', '/.well-known/stack');
-    const capabilities = (data as { capabilities: Record<string, unknown> }).capabilities;
-    expect(capabilities.nestedContentQuery).toBe(true);
+    const capabilities = (data as { capabilities: { filter: Record<string, unknown> } })
+      .capabilities;
+    expect(capabilities.filter.content).toBe('path');
   });
 
   it('omits timezone entirely when the stack has none configured', async () => {
