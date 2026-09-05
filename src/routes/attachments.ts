@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { StackPermissionError, StackPayloadTooLargeError } from '@haverstack/core';
-import type { AttachmentContent, StackRecord } from '@haverstack/core';
 import {
   resolveAttachmentDownloadContentType,
   firstRecordedAttachment,
@@ -67,11 +66,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       throw e;
     }
 
-    const metaResult = await stack.query({
-      filter: { typeId: '_attachment@1', content: { fileId }, includeDeleted: true },
-      limit: 1000,
-    });
-    const metaRecords = metaResult.records as (StackRecord & { content: AttachmentContent })[];
+    const metaRecords = await stack.getAttachmentRecords(fileId);
     const firstRecord = firstRecordedAttachment(metaRecords);
     const ownRecord = auth
       ? firstRecordedAttachment(metaRecords.filter((r) => r.entityId === auth.subjectId))
