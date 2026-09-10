@@ -157,8 +157,7 @@ describe('Records', () => {
       await seedRecord(t.ctx, { body: 'Note 2' });
       const { status, data } = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
       expect(status).toBe(200);
-      const d = data as { records: unknown[]; total: null };
-      expect(d.total).toBeNull();
+      const d = data as { records: unknown[] };
       expect(d.records).toHaveLength(2);
     });
 
@@ -458,8 +457,7 @@ describe('Records', () => {
         { permissions: [{ access: 'public' }] },
       );
       const { data } = await req(t.app, 'GET', '/records');
-      const d = data as { records: Array<{ content: { body: string } }>; total: null };
-      expect(d.total).toBeNull();
+      const d = data as { records: Array<{ content: { body: string } }> };
       expect(d.records).toHaveLength(1);
       expect(d.records[0].content.body).toBe('public');
     });
@@ -477,9 +475,8 @@ describe('Records', () => {
         },
       });
       expect(status).toBe(200);
-      const d = data as { records: unknown[]; total: null };
+      const d = data as { records: unknown[] };
       expect(d.records).toHaveLength(1);
-      expect(d.total).toBeNull();
     });
 
     it('anonymous query returns only public records', async () => {
@@ -493,8 +490,7 @@ describe('Records', () => {
         body: { filter: { typeId: NOTE_TYPE_ID } },
       });
       expect(status).toBe(200);
-      const d = data as { records: Array<{ content: { body: string } }>; total: null };
-      expect(d.total).toBeNull();
+      const d = data as { records: Array<{ content: { body: string } }> };
       expect(d.records).toHaveLength(1);
       expect(d.records[0].content.body).toBe('public');
     });

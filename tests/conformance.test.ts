@@ -377,26 +377,26 @@ describe('createRecord fixtures', () => {
 // -------------------------------------------------------
 
 describe('queryRecords fixtures', () => {
-  // These pin the query *envelope* (total always null; cursor, not
-  // records.length, signals exhaustion), not the fixtures' literal opaque
-  // cursor strings or record ids, which are this server's own pagination
-  // implementation detail. Exercised with real seeded data and real
-  // returned cursors rather than replayed fixture cursors.
+  // These pin the query *envelope* (records and cursor, and nothing else;
+  // cursor, not records.length, signals exhaustion), not the fixtures'
+  // literal opaque cursor strings or record ids, which are this server's own
+  // pagination implementation detail. Exercised with real seeded data and
+  // real returned cursors rather than replayed fixture cursors.
 
-  test('query-reports-null-total — POST /records/query and GET /records agree', async () => {
+  test('query-envelope-is-records-and-cursor — POST /records/query and GET /records agree', async () => {
     await t.ctx.stack.create(NOTE_TYPE, { title: 'Readable' });
     const post = await req(t.app, 'POST', '/records/query', {
       token: TEST_TOKEN,
       body: { filter: { typeId: NOTE_TYPE } },
     });
     expect(post.status).toBe(200);
-    expect((post.data as { total: unknown }).total).toBeNull();
+    expect(Object.keys(post.data as object).sort()).toEqual(['cursor', 'records']);
 
     const get = await req(t.app, 'GET', `/records?typeId=${encodeURIComponent(NOTE_TYPE)}`, {
       token: TEST_TOKEN,
     });
     expect(get.status).toBe(200);
-    expect((get.data as { total: unknown }).total).toBeNull();
+    expect(Object.keys(get.data as object).sort()).toEqual(['cursor', 'records']);
   });
 
   test('query-final-page-closes-the-cursor — paging with limit exhausts to cursor: null', async () => {
@@ -411,8 +411,7 @@ describe('queryRecords fixtures', () => {
         body: { filter: { typeId: NOTE_TYPE }, limit: 1, ...(cursor && { cursor }) },
       });
       expect(status).toBe(200);
-      const page = data as { records: unknown[]; cursor: string | null; total: unknown };
-      expect(page.total).toBeNull();
+      const page = data as { records: unknown[]; cursor: string | null };
       seen += page.records.length;
       cursor = page.cursor;
       pages++;
@@ -426,20 +425,18 @@ describe('queryRecords fixtures', () => {
     const fixture = queryRecordsFixtures.find((f) => f.name === 'query-related-to-record-target')!;
     const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
     expect(status).toBe(fixture.responseStatus);
-    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    const page = data as { records: unknown[]; cursor: unknown };
     expect(page.records).toEqual([]);
     expect(page.cursor).toBeNull();
-    expect(page.total).toBeNull();
   });
 
   test('query-related-to-entity-target — relatedToEntity accepts an entity-target filter', async () => {
     const fixture = queryRecordsFixtures.find((f) => f.name === 'query-related-to-entity-target')!;
     const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
     expect(status).toBe(fixture.responseStatus);
-    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    const page = data as { records: unknown[]; cursor: unknown };
     expect(page.records).toEqual([]);
     expect(page.cursor).toBeNull();
-    expect(page.total).toBeNull();
   });
 
   test('query-related-to-external-namespace — relatedToNs alone matches the whole namespace', async () => {
@@ -448,10 +445,9 @@ describe('queryRecords fixtures', () => {
     )!;
     const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
     expect(status).toBe(fixture.responseStatus);
-    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    const page = data as { records: unknown[]; cursor: unknown };
     expect(page.records).toEqual([]);
     expect(page.cursor).toBeNull();
-    expect(page.total).toBeNull();
   });
 
   test('query-filters-by-content-presence — filter.contentPresent is accepted', async () => {
@@ -463,10 +459,9 @@ describe('queryRecords fixtures', () => {
       body: fixture.requestBody,
     });
     expect(status).toBe(fixture.responseStatus);
-    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    const page = data as { records: unknown[]; cursor: unknown };
     expect(page.records).toEqual([]);
     expect(page.cursor).toBeNull();
-    expect(page.total).toBeNull();
   });
 
   test('query-sorts-by-a-content-field — sort.contentField is accepted on POST', async () => {
@@ -476,10 +471,9 @@ describe('queryRecords fixtures', () => {
       body: fixture.requestBody,
     });
     expect(status).toBe(fixture.responseStatus);
-    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    const page = data as { records: unknown[]; cursor: unknown };
     expect(page.records).toEqual([]);
     expect(page.cursor).toBeNull();
-    expect(page.total).toBeNull();
   });
 
   test('query-content-sort-folds-case-and-accents — a content-field sort request is accepted', async () => {
@@ -491,10 +485,9 @@ describe('queryRecords fixtures', () => {
       body: fixture.requestBody,
     });
     expect(status).toBe(fixture.responseStatus);
-    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    const page = data as { records: unknown[]; cursor: unknown };
     expect(page.records).toEqual([]);
     expect(page.cursor).toBeNull();
-    expect(page.total).toBeNull();
   });
 
   test('query-get-sorts-by-a-content-field — ?sortContent= is accepted on GET', async () => {
@@ -503,10 +496,9 @@ describe('queryRecords fixtures', () => {
     )!;
     const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
     expect(status).toBe(fixture.responseStatus);
-    const page = data as { records: unknown[]; cursor: unknown; total: unknown };
+    const page = data as { records: unknown[]; cursor: unknown };
     expect(page.records).toEqual([]);
     expect(page.cursor).toBeNull();
-    expect(page.total).toBeNull();
   });
 
   test('coverage', () => {
@@ -517,7 +509,7 @@ describe('queryRecords fixtures', () => {
     assertCoverage(
       queryRecordsFixtures.map((f) => f.name),
       new Set([
-        'query-reports-null-total',
+        'query-envelope-is-records-and-cursor',
         'query-empty-page-with-live-cursor',
         'query-final-page-closes-the-cursor',
         'query-get-records-uses-the-same-envelope',

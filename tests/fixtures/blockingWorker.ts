@@ -22,6 +22,6 @@ port.on('message', (req: QueryRequest) => {
   port.postMessage({
     id: req.id,
     ok: true,
-    result: { records: [], cursor: null, total: null },
+    result: { records: [], cursor: null },
   } satisfies QueryResponse);
 });
