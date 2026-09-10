@@ -22,7 +22,7 @@
     "@haverstack/core": "^0.27.0",
     "@haverstack/wire-types": "^0.26.0",
     "@hono/node-server": "^2.1.1",
-    "hono": "^4.13.3",
+    "hono": "^4.13.7",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3"
   },
