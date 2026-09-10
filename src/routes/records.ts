@@ -13,6 +13,7 @@ import {
 } from '@haverstack/core/wire';
 import { clampLimit } from '../lib/queryLimit.js';
 import { serializeRecord, serializeVersion } from '@haverstack/wire-types';
+import type { WireQueryResponse } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
 import type { Association, Permission, TypeId } from '@haverstack/core';
 
@@ -45,14 +46,11 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth');
     const query = clampLimit(parseQueryBody(await readJson(c)));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
-    return c.json({
+    const body: WireQueryResponse = {
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
-      // Always null: an unscoped count would leak how many Records exist
-      // beyond what this requester may read. Set here rather than trusted
-      // from result.total, so it holds whichever path produced the result.
-      total: null,
-    });
+    };
+    return c.json(body);
   });
 
   // GET /records — query by native fields via URL params
@@ -60,14 +58,11 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth');
     const query = clampLimit(parseQueryParams(new URL(c.req.url)));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
-    return c.json({
+    const body: WireQueryResponse = {
       records: result.records.map(serializeRecord),
       cursor: result.cursor,
-      // Always null: an unscoped count would leak how many Records exist
-      // beyond what this requester may read. Set here rather than trusted
-      // from result.total, so it holds whichever path produced the result.
-      total: null,
-    });
+    };
+    return c.json(body);
   });
 
   // POST /records — a full record body, but version, entityId and

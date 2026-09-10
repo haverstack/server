@@ -124,7 +124,7 @@ A `relationship` association's `target` is a discriminated union naming which id
 
 Parsing and encoding these parameters is `@haverstack/core/wire`'s job, not this server's — `parseQueryParams`, `parseQueryBody`, and `parseChangeParams` there are the exact inverse of what `@haverstack/adapter-api` builds, and are the normative reference for every rule below. `docs/spec/wire-format.md` § Query parameters in `haverstack/core` documents the full parameter set and its edge cases; what follows here is a summary, kept for this server's own reference.
 
-Both query endpoints' response envelope is `{ records, cursor, total }`. `total` is always `null` — every response has passed a permission boundary, so an unscoped count would leak how many records exist beyond what the requester may read; clients must not rely on it. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
+Both query endpoints' response envelope is `{ records, cursor }`. It carries no count of the whole match — every response has passed a permission boundary, so a count that ignores pagination would report how many records exist beyond what the requester may read. An empty `records` array with a non-null `cursor` is a valid response and does not mean the result set is exhausted — a low-visibility requester can see several empty pages before results appear, so `cursor: null` is the only end-of-results signal.
 
 #### Relationship target filter (`relatedTo` family)
 
@@ -191,7 +191,7 @@ Query parameters, all optional and composable: `typeId` (repeatable, matched by 
 
 Every change (`event: record`) carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `op` names the exact verb (`create`, `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`, `unlist`, `list`) for a consumer that distinguishes, say, a reshare from an edit. A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
 
-A record this connection may not read produces no frame at all — not an empty or redacted one — the same reasoning that keeps a scoped query's `total` null: the existence of a change is itself a disclosure.
+A record this connection may not read produces no frame at all — not an empty or redacted one — the same reasoning that keeps a count of the whole match off the query envelope: the existence of a change is itself a disclosure.
 
 `: keepalive` comment lines go out on an otherwise-idle connection periodically, same as any SSE comment — a conforming client ignores them. A connection whose bearer token is revoked or expires is closed by the server rather than left delivering on stale authority; a reconnect gets the same `401` every other endpoint already answers with. A connection that falls too far behind (more in-flight frames than it's draining) is also closed rather than queued without bound — a client that can't tell it missed something can't repair it either, so the server disconnects instead of silently dropping a frame.
 
