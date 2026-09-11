@@ -25,7 +25,7 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     const body = await readJson<Record<string, unknown>>(c);
     const updated = await stack
       .forSession(auth)
-      .update(record.id, (body.content ?? {}) as Record<string, unknown>);
+      .patchContent(record.id, (body.content ?? {}) as Record<string, unknown>);
     return c.json(serializeRecord(updated));
   });
 

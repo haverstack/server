@@ -80,12 +80,10 @@ The retryable column is why these carry a `code` at all rather than being bodyle
 | POST   | `/records/query`                   | Optional   | Query records with content filters      |
 | POST   | `/records`                         | Required   | Create a record                         |
 | GET    | `/records/:id`                     | Optional   | Get a record by ID                      |
-| PATCH  | `/records/:id`                     | Required   | Update record content (merge patch)     |
+| PATCH  | `/records/:id`                     | Required   | Apply a change set to a record          |
 | DELETE | `/records/:id`                     | Required   | Soft-delete (or hard with `?hard=true`) |
 | POST   | `/records/:id/undelete`            | Required   | Reverse a soft delete                   |
 | GET    | `/records/:id/permissions`         | Optional   | Get permissions                         |
-| PUT    | `/records/:id/permissions`         | Required   | Replace permissions                     |
-| PUT    | `/records/:id/unlisted`            | Required   | Withhold from enumeration, or relist    |
 | GET    | `/records/:id/associations`        | Optional   | List associations                       |
 | POST   | `/records/:id/associations`        | Required   | Add an association                      |
 | POST   | `/records/:id/associations/delete` | Required   | Remove an association                   |
@@ -93,6 +91,32 @@ The retryable column is why these carry a `code` at all rather than being bodyle
 | GET    | `/records/:id/versions/:version`   | Optional   | Get a specific version                  |
 | POST   | `/records/:id/restore/:version`    | Required   | Restore a previous version              |
 | POST   | `/records/:id/migrate`             | Owner only | Change a record's typeId                |
+
+### The change set
+
+`PATCH /records/:id` takes a **change set**: an envelope naming any combination of a record's native aspects, applied as one atomic write that produces exactly one version.
+
+```json
+{
+  "contentPatch": { "title": "Q3 plan" },
+  "parentId": "1hk153x0000f",
+  "permissions": [{ "access": "public" }],
+  "associations": [{ "kind": "tag", "label": "planning" }],
+  "unlisted": false
+}
+```
+
+Keys are read for **presence, not truthiness** — `unlisted: false` and `parentId: null` name aspects and are applied, while an omitted key is left alone. A change set naming no key at all is `400`: it addresses nothing, so there is nothing it could have failed to satisfy. One already satisfied in every key writes nothing and answers with the record unchanged.
+
+`contentPatch` is the one key that **merges**; every other key replaces the aspect it names. The merge is one level deep — a nested object in a patch replaces rather than merges — and a `null` field value removes the field. Because content is a key rather than the whole body, a `parentId` naming a container is unambiguously distinct from a content field of that name.
+
+Authority resolves **per key, against the record as it stands**: content is reachable by a write-holder or an `update-*` grantee, while `permissions` and `unlisted` need the owner or the record's own creator. A requester who may perform every key may perform the set; a requester who may not perform one of them may not perform any of it. Every gate reads the record's pre-change state, so a widened `permissions` in a change set never satisfies the read check on a `parentId` named in the same call. A refused key refuses the whole call — nothing is partially applied and no key is silently dropped.
+
+An unrecognized top-level key is `400`; a key whose value is the wrong shape is `422`, as is a key the type does not declare inside `contentPatch`. A `parentId` a caller names must be well-formed (`400` otherwise — the empty string is not a spelling of the root, `null` is) and must name a record that exists (`409` otherwise).
+
+`associate()` / `dissociate()` keep their own endpoints: they amend the association set where the `associations` key replaces it, so two clients tagging one record both succeed through `POST .../associations` and race through the key.
+
+This replaces the four single-aspect endpoints a previous version of this server exposed — `PUT /records/:id/permissions`, `PUT /records/:id/unlisted`, `PUT /records/:id/parent`, and a `PATCH` whose body was the bare content patch. Each aspect used to cost a version and a round trip of its own, and could not be fenced by one `If-Match`, since the second call had to be pinned against a version only the first call's response could supply. `GET /records/:id/permissions` stays.
 
 Version history requires the same access `PATCH`/`DELETE` require — a write-holder, or the owner — not plain read. A read-only requester gets `403`.
 
@@ -108,7 +132,7 @@ A `relationship` association's `target` is a discriminated union naming which id
 { "kind": "relationship", "label": "syndicated-to", "target": { "scope": "external", "ns": "atproto", "id": "at://..." } }
 ```
 
-`PUT /records/:id/permissions` returns `204` with no body; the body and (when read back via `GET`) response both use the `{ "permissions": [...] }` envelope. An empty array makes the record private (owner-only).
+A change set's `permissions` key replaces every permission on the record and answers `200` with the updated record. An empty array makes the record private (owner-only). `GET /records/:id/permissions` reads them back under the `{ "permissions": [...] }` envelope.
 
 `POST /records/:id/undelete` reverses a soft delete and returns the record as it now stands (`deletedAt` absent). Idempotent — a second call on an already-active record returns the same result.
 
@@ -116,7 +140,7 @@ A `relationship` association's `target` is a discriminated union naming which id
 
 `createdAt`/`updatedAt` are honored only from the stack owner acting alone (undelegated, authenticated as the owner) — the same tier that gates hard delete, `commitMigration()`, and `includeUnlisted`. From anyone else, both are dropped rather than forwarded: forwarding them would otherwise turn an ordinary grantee's create into a `403`, since a non-owner backdating attempt is refused outright rather than silently ignored. For an owner-acting-alone create: `updatedAt` defaults to `createdAt` (never to now), so a plain import doesn't fabricate an edit; `updatedAt` earlier than `createdAt` is a `422` validation error, including when `createdAt` itself defaulted to now; omitting `id` derives it from `createdAt` instead of the current time; supplying both `id` and `createdAt` checks them against each other under the same clock-skew tolerance. An owner's plain `id`-only create (no `createdAt`) is unaffected — it still gets the ordinary id-vs-now check. A malformed `createdAt`/`updatedAt` value returns `422` with code `validation`.
 
-`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, `POST /records/:id/associations/delete`, `PUT /records/:id/permissions`, and `PUT /records/:id/unlisted`. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins. A malformed value (not a bare, optionally quoted version — a weak comparator like `W/"5"` included) is `400`, not read as absent: a header sent to fence a write that silently degrades to unconditional last-writer-wins defeats the only thing it was sent to do.
+`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, and `POST /records/:id/associations/delete`. One `If-Match` fences a whole multi-aspect change set. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins. A malformed value (not a bare, optionally quoted version — a weak comparator like `W/"5"` included) is `400`, not read as absent: a header sent to fence a write that silently degrades to unconditional last-writer-wins defeats the only thing it was sent to do.
 
 ### Query parameters
 
@@ -147,21 +171,23 @@ A relationship association's target names one of three scopes — a Record, an i
 
 `DELETE /records/:id` without `?hard=true` leaves a **tombstone**: the record continues to exist and remains reachable by `id`, but its `content` is projected as `{}` and `deletedAt` is set. This applies uniformly everywhere the record is served with content attached — `GET /records/:id`, `GET`/`POST /records/query` with `filter.includeDeleted: true`, and a `deleted`-kind change feed frame with `?include=record` — so a client sees the same emptied shape regardless of which route it came through. `GET /records/:id/versions` and `GET /records/:id/versions/:version` are the deliberate exception: version history is never tombstoned and continues to serve full content.
 
-A soft-deleted record refuses further mutation: `PATCH`, `POST .../associations`, `POST .../associations/delete`, `PUT .../permissions`, `PUT .../unlisted`, `POST .../migrate`, and `POST .../restore/:version` all return `409` with code `conflict` until `POST /records/:id/undelete` reverses the delete. `GET` and version-history reads are unaffected — the refusal applies only to mutation.
+A soft-deleted record refuses further mutation: `PATCH`, `POST .../associations`, `POST .../associations/delete`, `POST .../migrate`, and `POST .../restore/:version` all return `409` with code `conflict` until `POST /records/:id/undelete` reverses the delete. `GET` and version-history reads are unaffected — the refusal applies only to mutation.
 
 ## Unlisted
 
 `unlistedAt` is orthogonal to `permissions`: it says nothing about who may read a record, only whether it is enumerable. A record with `unlistedAt` set is still reachable by `GET /records/:id` for anyone who may already read it — unlisted withholds a record from enumeration, never from access.
 
 ```
-PUT /records/:id/unlisted     body: { "unlisted": boolean }
+PATCH /records/:id     body: { "unlisted": boolean }
 ```
 
-Answers `200` with the updated record — it bumps `version` like any other mutation, and is snapshotted to version history the same way — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint, and returns `409` on a soft-deleted record like the other mutating endpoints above. Gated exactly like `PUT .../permissions`: owner or creator, asked of both identities under delegation.
+Answers `200` with the updated record — it bumps `version` like any other mutation, and is snapshotted to version history the same way — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint, and returns `409` on a soft-deleted record like the other mutating endpoints above. Gated exactly like the `permissions` key: owner or creator, asked of both identities under delegation. A non-boolean value is `422`, the shape error every change-set key answers with.
 
 **`includeUnlisted` is owner-only.** `GET /records`, `POST /records/query`, and `GET /changes` all accept it (excluded by default, like `includeDeleted`), and all three refuse it with `403` for any requester but the owner acting alone — enumeration standing rests on nothing but ownership, so no grant or delegation carries it. On `GET /changes` the refusal happens before the SSE stream opens.
 
-A `POST /records` body may carry `unlistedAt` to create the record already unlisted, so there is no window where it exists and is enumerable before a later `PUT .../unlisted` catches up — presence of the field is what matters; its value is not honored (`unlistedAt` on the response is stamped to the real create time, like `version`). This is **not** owner-only, unlike `createdAt`/`updatedAt`: it's gated the same way the `permissions` field is at create time — refused with `403` for a delegated app acting for anyone but the owner, but available to any other creator holding a create grant for the type.
+A `POST /records` body may carry `unlistedAt` to create the record already unlisted, so there is no window where it exists and is enumerable before a later change set catches up — presence of the field is what matters; its value is not honored (`unlistedAt` on the response is stamped to the real create time, like `version`). This is **not** owner-only, unlike `createdAt`/`updatedAt`: it's gated the same way the `permissions` field is at create time — refused with `403` for a delegated app acting for anyone but the owner, but available to any other creator holding a create grant for the type.
+
+A `reparent` is matched against **both** containers the move concerns, so a subscription filtered on the origin learns the record left it — the record's post-change state alone would answer only for the destination. The frame carries the destination in `parentId`, as every frame carries the record's state at the moment of the change, so a subscriber compares it against its own filter to tell a departure from an arrival. Its `kind` is `changed`, not `deleted`: the record is still there and still readable, only its container moved.
 
 ### The feed transitions
 
@@ -189,7 +215,7 @@ Resume is per-connection state, not global: each distinct (session, filter) pair
 
 Query parameters, all optional and composable: `typeId` (repeatable, matched by baseId so a type-version bump never orphans a subscription), `parentId` (`"null"` selects root records, same as `GET /records`), `entityId` (the record's author, not who made the change), `kind` (repeatable: `created`, `changed`, `deleted`, `purged`), `include=record` (attach the record as of the change; ignored for `kind=purged`), `includeUnlisted` (owner-only — see [Unlisted](#unlisted)). Filtering is exact, not advisory — a filtered connection never receives a frame outside its filter, and an unrecognized `kind` or `include` value is a `400`.
 
-Every change (`event: record`) carries `kind`, `op`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `op` names the exact verb (`create`, `update`, `associate`, `dissociate`, `permissions`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`, `unlist`, `list`) for a consumer that distinguishes, say, a reshare from an edit. A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
+Every change (`event: record`) carries `kind`, `ops`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `ops` names every aspect the version actually moved (`create`, `patch`, `associate`, `dissociate`, `permissions`, `reparent`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`, `unlist`, `list`) for a consumer that distinguishes, say, a reshare from an edit. It is derived by diffing the record against its prior state rather than read off the request, so a change set naming an aspect without moving it is never reported as moving it; it is never empty, and is multi-entry only for a change set, since every other op names a whole-record transition and is emitted alone. `kind` resolves to the most conservative entry — a change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it. A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
 
 A record this connection may not read produces no frame at all — not an empty or redacted one — the same reasoning that keeps a count of the whole match off the query envelope: the existence of a change is itself a disclosure.
 
@@ -248,4 +274,4 @@ A type-level grant names a specific entity (`grant(<did>, ...)`) or no entity at
 
 ### Principal and subject
 
-A token names two identities: the **principal**, who authenticated (governs authority — grant lookups, `setPermissions`), and the **subject**, who the principal acts for (governs attribution — `record.entityId` on writes, `-own` matching). They're equal unless the token was issued with `onBehalfOf`. A delegated write stamps both: `entityId` is the subject, and `principalId` appears on the record when the two differ. `GET /records` and `POST /records/query` can filter on either via `entityId`/`principalId`. Effective authority under delegation is the intersection of both parties' grants — a delegated app can't act beyond what the subject itself also permits.
+A token names two identities: the **principal**, who authenticated (governs authority — grant lookups, a change set's `permissions` key), and the **subject**, who the principal acts for (governs attribution — `record.entityId` on writes, `-own` matching). They're equal unless the token was issued with `onBehalfOf`. A delegated write stamps both: `entityId` is the subject, and `principalId` appears on the record when the two differ. `GET /records` and `POST /records/query` can filter on either via `entityId`/`principalId`. Effective authority under delegation is the intersection of both parties' grants — a delegated app can't act beyond what the subject itself also permits.

@@ -9,17 +9,17 @@ importers:
   .:
     dependencies:
       '@haverstack/adapter-local':
-        specifier: ^0.26.0
-        version: 0.26.0
+        specifier: ^0.29.0
+        version: 0.29.0
       '@haverstack/commons':
-        specifier: ^0.21.0
-        version: 0.21.0
+        specifier: ^0.24.0
+        version: 0.24.0
       '@haverstack/core':
-        specifier: ^0.27.0
-        version: 0.27.0
+        specifier: ^0.30.0
+        version: 0.30.0
       '@haverstack/wire-types':
-        specifier: ^0.26.0
-        version: 0.26.0
+        specifier: ^0.29.0
+        version: 0.29.0
       '@hono/node-server':
         specifier: ^2.1.1
         version: 2.1.1(hono@4.13.7)
@@ -37,8 +37,8 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.8.1)
       '@haverstack/conformance-fixtures':
-        specifier: ^0.20.0
-        version: 0.20.0
+        specifier: ^0.23.0
+        version: 0.23.0
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -264,28 +264,28 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@haverstack/adapter-local@0.26.0':
-    resolution: {integrity: sha512-S7H7GSwKMJ+cB/9pyqf4278OOuQ63qtykJ0SeokR5X9bpLh887+nfwPHDVreV/TdAcsvAed/2Q7Tvw5rUSAWuA==}
+  '@haverstack/adapter-local@0.29.0':
+    resolution: {integrity: sha512-etEQE4ZysLmwipwGYagSggwlQWLmj/86kRZawwmmeYXLVfWQpxLqSC+hVv15t9suwa7WgqALTQv61BIPvCXQFw==}
     engines: {node: '>=22.5.0'}
 
-  '@haverstack/blob-adapter-disk@0.25.0':
-    resolution: {integrity: sha512-fla7UDlf1j64d9pVsSMAqjUWDVxKgIZe/2pCzEyQ5ncTvV18vqTtGDjLP6X+Ju/pLeeuktnDBm427iM+nSJBJQ==}
+  '@haverstack/blob-adapter-disk@0.28.0':
+    resolution: {integrity: sha512-BoPJzI2nas9IIiAQcBouDRWnRSkzWJNnaH1HDEfuV4ZV4zMCHdVbQ4+DA8wdmGss7IrHWF2YRbpAGu4D0KTnHA==}
 
-  '@haverstack/commons@0.21.0':
-    resolution: {integrity: sha512-DXFOXtGyWR6RSrFKDXy8A4c9bESCcKEwujjgyn7i/72/S1WJFUb9DyqpzHWjAJokR+1wHWxsaEKU0IdU0/2x3A==}
+  '@haverstack/commons@0.24.0':
+    resolution: {integrity: sha512-AnvkgphMkvMqUf1KUx4gVDvjrwaLzKiWWVpWqicwxcNoyU+MMrKdHZzRi9J+m1Jk4ogqJ4uOR1UFbz8okN+TgA==}
 
-  '@haverstack/conformance-fixtures@0.20.0':
-    resolution: {integrity: sha512-or1hQR2hiIF9/vAWtBnNUqcUA2BnfEqskZfo0zDUE9FjAlDBLeDHV57sXVZr9lP4Qvv3IWq2fbiOKl2FU/s5NA==}
+  '@haverstack/conformance-fixtures@0.23.0':
+    resolution: {integrity: sha512-ogmhhqDEZg16hPFIigEP97M/ZB2C0qe3qxFnloO4ge72UJLCbSwslaxtsLvafrDNgXgWUBXEv3Ovyq4q6+nImA==}
 
-  '@haverstack/core@0.27.0':
-    resolution: {integrity: sha512-++qnrnmgCAIA6vvUiwkTC8OifurCIC9/klQoQW9vfHNEujh03XAFiAuPm6doNvKYpP4zTanZGNHdkoyiSJgKGQ==}
+  '@haverstack/core@0.30.0':
+    resolution: {integrity: sha512-5jeKjREqX0XnXnz/AIjJaRQ+dhV7Ps+Boz3iJjXLr8raIrgnnb4QERNC/xB/OOTWLFYMcMzBGISqqvwRxEcQGQ==}
 
-  '@haverstack/record-adapter-sqlite@0.19.0':
-    resolution: {integrity: sha512-/ju4wrNtaIp1JdbC56zG8KqE/mcQqyZvzPmNjudpVb+EwGCIfTUXgWvG+GzoQfthjqLNNzXyRYVN0ufG4b3Rog==}
+  '@haverstack/record-adapter-sqlite@0.22.0':
+    resolution: {integrity: sha512-lvEYCAIcQS2+tdVUCBzmZRUsragAFY+mPTlB7AGfVn8NR7A0p3vMrYeBtUW3DEsZatn9htHo2nIOl+5En+DoGQ==}
     engines: {node: '>=22.5.0'}
 
-  '@haverstack/wire-types@0.26.0':
-    resolution: {integrity: sha512-anOV4QRRGing1J3u9kpaFj39A6MeOgYMsBPiHrt23TPNLRhFNp4slhPRhTP621BSFGJ3tf5XL1fZcfOQNTBVmw==}
+  '@haverstack/wire-types@0.29.0':
+    resolution: {integrity: sha512-dggrLjQa0XcxgFBY+KufuGZs3VGjNJiVl/SXPva9NpUfZUmF5d+c8ZpBR4xTQbHAxDVBCpfg+O8m/3OnLUjYOA==}
 
   '@hono/node-server@2.1.1':
     resolution: {integrity: sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==}
@@ -1261,33 +1261,33 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@haverstack/adapter-local@0.26.0':
+  '@haverstack/adapter-local@0.29.0':
     dependencies:
-      '@haverstack/blob-adapter-disk': 0.25.0
-      '@haverstack/core': 0.27.0
-      '@haverstack/record-adapter-sqlite': 0.19.0
+      '@haverstack/blob-adapter-disk': 0.28.0
+      '@haverstack/core': 0.30.0
+      '@haverstack/record-adapter-sqlite': 0.22.0
 
-  '@haverstack/blob-adapter-disk@0.25.0':
+  '@haverstack/blob-adapter-disk@0.28.0':
     dependencies:
-      '@haverstack/core': 0.27.0
+      '@haverstack/core': 0.30.0
 
-  '@haverstack/commons@0.21.0':
+  '@haverstack/commons@0.24.0':
     dependencies:
-      '@haverstack/core': 0.27.0
+      '@haverstack/core': 0.30.0
 
-  '@haverstack/conformance-fixtures@0.20.0':
+  '@haverstack/conformance-fixtures@0.23.0':
     dependencies:
-      '@haverstack/wire-types': 0.26.0
+      '@haverstack/wire-types': 0.29.0
 
-  '@haverstack/core@0.27.0': {}
+  '@haverstack/core@0.30.0': {}
 
-  '@haverstack/record-adapter-sqlite@0.19.0':
+  '@haverstack/record-adapter-sqlite@0.22.0':
     dependencies:
-      '@haverstack/core': 0.27.0
+      '@haverstack/core': 0.30.0
 
-  '@haverstack/wire-types@0.26.0':
+  '@haverstack/wire-types@0.29.0':
     dependencies:
-      '@haverstack/core': 0.27.0
+      '@haverstack/core': 0.30.0
 
   '@hono/node-server@2.1.1(hono@4.13.7)':
     dependencies:

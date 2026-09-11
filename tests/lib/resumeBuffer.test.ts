@@ -8,7 +8,7 @@ function change(overrides: Partial<RecordChange> = {}): RecordChange {
   counter += 1;
   return {
     kind: 'changed',
-    op: 'update',
+    ops: ['patch'],
     recordId: `record-${counter}`,
     typeId: 'com.example/note@1',
     version: counter,

@@ -74,7 +74,7 @@ describe('tombstone projection and mutation refusal', () => {
     await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
     const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
-      body: { title: 'edited' },
+      body: { contentPatch: { title: 'edited' } },
     });
     expect(status).toBe(409);
     expect((data as { error: { code: string } }).error.code).toBe('conflict');
