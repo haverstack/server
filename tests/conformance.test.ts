@@ -1026,8 +1026,9 @@ describe('error response fixtures', () => {
     //
     // Nothing this server can do fixes it: pre-checking existence here
     // would be the oracle for non-owners that core is right to refuse.
-    // Tracked for core — `canReadReferent()` has to exempt the owner
-    // acting alone before it resolves the record. Un-skip both once it does.
+    // Tracked as haverstack/core#276 — `canReadReferent()` has to exempt
+    // the owner acting alone before it resolves the record. Un-skip both
+    // once it does.
     'error-bad-request-malformed-parent-id',
     'error-conflict-parent-does-not-exist',
   ]);
