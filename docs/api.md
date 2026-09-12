@@ -118,8 +118,6 @@ An unrecognized top-level key is `400`; a key whose value is the wrong shape is 
 
 `associate()` / `dissociate()` keep their own endpoints: they amend the association set where the `associations` key replaces it, so two clients tagging one record both succeed through `POST .../associations` and race through the key.
 
-This replaces the four single-aspect endpoints a previous version of this server exposed — `PUT /records/:id/permissions`, `PUT /records/:id/unlisted`, `PUT /records/:id/parent`, and a `PATCH` whose body was the bare content patch. Each aspect used to cost a version and a round trip of its own, and could not be fenced by one `If-Match`, since the second call had to be pinned against a version only the first call's response could supply. `GET /records/:id/permissions` stays.
-
 Version history requires the same access `PATCH`/`DELETE` require — a write-holder, or the owner — not plain read. A read-only requester gets `403`.
 
 `POST /records/:id/migrate` is the only way a record's `typeId` changes after creation, and is owner-acting-alone only — a non-owner gets `403` regardless of any write grant or record-level permission they hold. Body is `{ toTypeId, content }`: `content` is the full post-migration content, computed client-side by the type's owning app; the server validates it against `toTypeId`'s schema before writing and leaves a pre-migration snapshot in version history. Accepts the same `If-Match` header as `PATCH`.

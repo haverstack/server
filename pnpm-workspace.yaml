@@ -1,10 +1,13 @@
 allowBuilds:
   esbuild: true
+# pnpm 11 waits `minimumReleaseAge` (default 1440 — a day) before it will
+# resolve a newly published version, and appends every package it had to
+# hold to this list on the install that hits one. Haverstack releases in
+# lockstep, so a sync lands the whole scope on its release day and every
+# one of them was being written back here, a version at a time.
+#
+# The scope pattern says once what those entries said one by one: these are
+# this project's own packages, published by its own CI, and the cooldown is
+# not the check that vets them. Third-party dependencies keep it.
 minimumReleaseAgeExclude:
-  - '@haverstack/adapter-local@0.20.0 || 0.25.0 || 0.26.0 || 0.29.0 || 0.30.0'
-  - '@haverstack/blob-adapter-disk@0.19.0 || 0.24.0 || 0.25.0 || 0.28.0 || 0.29.0'
-  - '@haverstack/commons@0.15.0 || 0.20.0 || 0.21.0 || 0.24.0 || 0.25.0'
-  - '@haverstack/conformance-fixtures@0.14.0 || 0.19.0 || 0.20.0 || 0.23.0 || 0.24.0'
-  - '@haverstack/core@0.21.0 || 0.26.0 || 0.27.0 || 0.30.0 || 0.31.0'
-  - '@haverstack/record-adapter-sqlite@0.13.0 || 0.18.0 || 0.19.0 || 0.22.0 || 0.23.0'
-  - '@haverstack/wire-types@0.20.0 || 0.25.0 || 0.26.0 || 0.29.0 || 0.30.0'
+  - '@haverstack/*'

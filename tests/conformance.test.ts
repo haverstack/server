@@ -1088,10 +1088,10 @@ describe('error response fixtures', () => {
   test('error-conflict-parent-does-not-exist', async () => {
     const fixture = find('error-conflict-parent-does-not-exist');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    // Well-formed and simply names nothing, which is the conflict. Reaching
-    // it at all takes core 0.31's owner exemption from the reference gate
-    // (core#276): before that, the gate refused a missing destination ahead
-    // of this check and the answer was a 403.
+    // Well-formed and simply names nothing, which is the conflict. Only the
+    // owner sees it: the reference gate exempts them, so the existence check
+    // behind it is theirs to reach. Anyone else gets one indistinguishable
+    // 403 for a destination they cannot read and one that is not there.
     const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
     expectError(status, data, fixture);
   });
