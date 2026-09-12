@@ -114,6 +114,8 @@ Authority resolves **per key, against the record as it stands**: content is reac
 
 An unrecognized top-level key is `400`; a key whose value is the wrong shape is `422`, as is a key the type does not declare inside `contentPatch`. A `parentId` a caller names must be well-formed (`400` otherwise — the empty string is not a spelling of the root, `null` is) and must name a record that exists (`409` otherwise).
 
+**Which of those two a requester sees depends on who they are.** Both answers are the owner's: for anyone else, a destination they cannot read and one that is not there are a single indistinguishable `403`, which is what stops the gate being an existence oracle. So a non-owner write-holder naming a missing container gets `403`, not `409` — they learn they may not name it, never whether it exists.
+
 `associate()` / `dissociate()` keep their own endpoints: they amend the association set where the `associations` key replaces it, so two clients tagging one record both succeed through `POST .../associations` and race through the key.
 
 This replaces the four single-aspect endpoints a previous version of this server exposed — `PUT /records/:id/permissions`, `PUT /records/:id/unlisted`, `PUT /records/:id/parent`, and a `PATCH` whose body was the bare content patch. Each aspect used to cost a version and a round trip of its own, and could not be fenced by one `If-Match`, since the second call had to be pinned against a version only the first call's response could supply. `GET /records/:id/permissions` stays.

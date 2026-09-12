@@ -1007,31 +1007,8 @@ describe('version lifecycle fixtures', () => {
 // -------------------------------------------------------
 
 describe('error response fixtures', () => {
-  const SKIPPED = new Set([
-    // Both need a `parentId` a caller names to reach the format and
-    // existence checks in `Stack.mutate()`, which answer exactly these two
-    // fixtures — `StackQueryError` with "Invalid parentId ..." and
-    // `StackConflictError` with "no such record". Every request here goes
-    // through a `ScopedStack`, and its reference gate runs first:
-    // `canReadReferent()` resolves the destination and treats missing and
-    // unreadable alike, so both answer 403 `permission` before either check
-    // is reached. That indistinguishability is deliberate and right for a
-    // non-owner — it is what stops the gate being an existence oracle — but
-    // it also catches the owner, who is documented as exempt from the
-    // parentId gate (ScopedStack's own suite: "the owner is exempt from
-    // parentId and relationship gates") and is entitled to be told a
-    // container is not there. The exemption is keyed on readability, and a
-    // record that does not exist is unreadable by everyone, so the owner
-    // never reaches the conflict either.
-    //
-    // Nothing this server can do fixes it: pre-checking existence here
-    // would be the oracle for non-owners that core is right to refuse.
-    // Tracked as haverstack/core#276 — `canReadReferent()` has to exempt
-    // the owner acting alone before it resolves the record. Un-skip both
-    // once it does.
-    'error-bad-request-malformed-parent-id',
-    'error-conflict-parent-does-not-exist',
-  ]);
+  // Every fixture in this block is dispatched — nothing here is skipped.
+  const SKIPPED = new Set<string>();
   const handled = new Set<string>();
 
   function find(name: string) {
@@ -1094,6 +1071,27 @@ describe('error response fixtures', () => {
   test('error-validation-permission-write-without-read', async () => {
     const fixture = find('error-validation-permission-write-without-read');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-bad-request-malformed-parent-id', async () => {
+    const fixture = find('error-bad-request-malformed-parent-id');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    // Format is checked before existence, so the empty string answers for
+    // being malformed rather than for naming nothing. It is not a spelling
+    // of the root here — `null` is.
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-conflict-parent-does-not-exist', async () => {
+    const fixture = find('error-conflict-parent-does-not-exist');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    // Well-formed and simply names nothing, which is the conflict. Reaching
+    // it at all takes core 0.31's owner exemption from the reference gate
+    // (core#276): before that, the gate refused a missing destination ahead
+    // of this check and the answer was a 403.
     const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
     expectError(status, data, fixture);
   });
