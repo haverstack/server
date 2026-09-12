@@ -84,7 +84,7 @@ describe('GET /changes', () => {
       await conn.waitForFrames(1); // ready
       await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'still private' },
+        body: { contentPatch: { title: 'still private' } },
       });
       // Prove the connection is otherwise live (so a missing frame above
       // isn't just a dead connection) by making a public edit land.
@@ -95,7 +95,7 @@ describe('GET /changes', () => {
       );
       await req(t.app, 'PATCH', `/records/${publicRecord.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'still public' },
+        body: { contentPatch: { title: 'still public' } },
       });
       const [, frame] = await conn.waitForFrames(2);
       expect((frame.data as { recordId: string }).recordId).toBe(publicRecord.id);
@@ -209,9 +209,9 @@ describe('GET /changes', () => {
       // While disconnected: edit recordA (still readable at that moment,
       // so it's buffered), then revoke recordA's grant, then edit recordB
       // (still readable throughout).
-      await t.ctx.stack.update(recordA.id, { title: 'a, edited' });
-      await t.ctx.stack.setPermissions(recordA.id, []);
-      await t.ctx.stack.update(recordB.id, { title: 'b, edited' });
+      await t.ctx.stack.patchContent(recordA.id, { title: 'a, edited' });
+      await t.ctx.stack.mutate(recordA.id, { permissions: [] });
+      await t.ctx.stack.patchContent(recordB.id, { title: 'b, edited' });
 
       const resumed = await openChangeFeed(t.app, '/changes', {
         token,
@@ -277,7 +277,7 @@ describe('GET /changes', () => {
       // delivery through its own permission-check chain), so give each
       // append a moment to land before relying on the eviction it causes.
       for (const title of ['v2', 'v3', 'v4']) {
-        await t.ctx.stack.update(record.id, { title });
+        await t.ctx.stack.patchContent(record.id, { title });
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
 
@@ -452,7 +452,7 @@ describe('GET /changes', () => {
       });
       try {
         await conn.waitForFrames(1); // ready
-        await t.ctx.stack.update(record.id, { title: 'y' });
+        await t.ctx.stack.patchContent(record.id, { title: 'y' });
         const [, frame] = await conn.waitForFrames(2);
         expect((frame.data as { recordId: string }).recordId).toBe(record.id);
       } finally {
@@ -509,12 +509,12 @@ describe('GET /changes', () => {
       const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
       try {
         await conn.waitForFrames(1); // ready
-        await t.ctx.stack.setUnlisted(record.id, true);
+        await t.ctx.stack.mutate(record.id, { unlisted: true });
         const [, frame] = await conn.waitForFrames(2);
-        const data = frame.data as { kind: string; op: string; recordId: string };
+        const data = frame.data as { kind: string; ops: string[]; recordId: string };
         expect(data.recordId).toBe(record.id);
         expect(data.kind).toBe('deleted');
-        expect(data.op).toBe('unlist');
+        expect(data.ops).toEqual(['unlist']);
       } finally {
         await conn.close();
       }
@@ -525,7 +525,7 @@ describe('GET /changes', () => {
       const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
       try {
         await conn.waitForFrames(1); // ready
-        await t.ctx.stack.update(record.id, { title: 'edited' });
+        await t.ctx.stack.patchContent(record.id, { title: 'edited' });
         const proof = await t.ctx.stack.create(NOTE_TYPE, { title: 'public' });
         const [, frame] = await conn.waitForFrames(2);
         expect((frame.data as { recordId: string }).recordId).toBe(proof.id);
@@ -539,12 +539,12 @@ describe('GET /changes', () => {
       const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
       try {
         await conn.waitForFrames(1); // ready
-        await t.ctx.stack.setUnlisted(record.id, false);
+        await t.ctx.stack.mutate(record.id, { unlisted: false });
         const [, frame] = await conn.waitForFrames(2);
-        const data = frame.data as { kind: string; op: string; recordId: string };
+        const data = frame.data as { kind: string; ops: string[]; recordId: string };
         expect(data.recordId).toBe(record.id);
         expect(data.kind).toBe('changed');
-        expect(data.op).toBe('list');
+        expect(data.ops).toEqual(['list']);
       } finally {
         await conn.close();
       }

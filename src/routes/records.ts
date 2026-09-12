@@ -10,12 +10,13 @@ import {
   parsePositiveInt,
   parseIfMatch,
   createOptionsFromWireRecord,
+  changesFromWireBody,
 } from '@haverstack/core/wire';
 import { clampLimit } from '../lib/queryLimit.js';
 import { serializeRecord, serializeVersion } from '@haverstack/wire-types';
 import type { WireQueryResponse } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
-import type { Association, Permission, TypeId } from '@haverstack/core';
+import type { Association, TypeId } from '@haverstack/core';
 
 // ---------------------------------------------------------------------------
 // Route factory
@@ -89,25 +90,32 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json(serializeRecord(record));
   });
 
-  // PATCH /records/:id — the body IS the content patch (RFC 7396 merge
-  // patch), never an envelope: a conforming client sends { "title": "New" }
-  // directly, not { "content": { "title": "New" } }. Wrapping it here would
-  // make every field the client sends invisible to Stack.update(), turning
-  // a real edit into a silent no-op that still bumps version. null field
-  // values remove the field.
+  // PATCH /records/:id — the body is a change set: an envelope naming any
+  // combination of `contentPatch`, `parentId`, `permissions`, `associations`
+  // and `unlisted`, applied as one atomic write that produces exactly one
+  // version. A conforming client sends { "contentPatch": { "title": "New" } },
+  // never the bare patch — content is one aspect among five here, so the
+  // envelope is what tells a `parentId` naming a container from a content
+  // field of that name. One If-Match fences the whole multi-aspect edit.
+  //
+  // `changesFromWireBody()` owns the entire read of that envelope: which
+  // keys it may carry, the 400 an unrecognized or wholly absent key earns,
+  // and the 422 a malformed value earns. Content keys stay Stack's to judge,
+  // so nothing here inspects the patch. See docs/spec/wire-format.md § Records.
   //
   // No route-level guard belongs here: ScopedStack owns the _attachment@1
   // immutable-field and _grant@1 owner-only rules (docs/spec/attachments.md,
-  // docs/spec/access-control.md), so a denial round-trips as the core error
-  // it is rather than a guess made before the permission check ran.
+  // docs/spec/access-control.md) and resolves each change-set key against its
+  // own gate, so a denial round-trips as the core error it is rather than a
+  // guess made before the permission check ran.
   app.patch('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const patch = await readJson<Record<string, unknown>>(c);
+    const changes = changesFromWireBody(await readJson(c));
 
     const updated = await stack
       .forSession(auth)
-      .update(id, patch, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+      .mutate(id, changes, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(updated));
   });
 
@@ -146,36 +154,6 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const record = await scopeFor(auth).get(id);
     if (!record) throw new StackNotFoundError('Record not found');
     return c.json({ permissions: record.permissions ?? [] });
-  });
-
-  app.put('/:id/permissions', requireAuth(), async (c) => {
-    const id = c.req.param('id');
-    const auth = c.get('auth')!;
-    const body = await readJson<{ permissions: Permission[] }>(c);
-    if (!Array.isArray(body.permissions)) throw new StackQueryError('permissions must be an array');
-    const updated = await stack.forSession(auth).setPermissions(id, body.permissions, {
-      ifVersion: parseIfMatch(c.req.header('If-Match')),
-    });
-    return c.json(serializeRecord(updated));
-  });
-
-  // ------------------------------------------------------------------
-  // Unlisted
-  // ------------------------------------------------------------------
-
-  // PUT /records/:id/unlisted — withhold from enumeration, or relist.
-  // Orthogonal to permissions: decides whether the record is enumerable,
-  // never who may read it. The owner-or-creator gate and the 409 on a
-  // soft-deleted record both come from ScopedStack.setUnlisted().
-  app.put('/:id/unlisted', requireAuth(), async (c) => {
-    const id = c.req.param('id');
-    const auth = c.get('auth')!;
-    const body = await readJson<{ unlisted: boolean }>(c);
-    if (typeof body.unlisted !== 'boolean') throw new StackQueryError('unlisted must be a boolean');
-    const updated = await stack.forSession(auth).setUnlisted(id, body.unlisted, {
-      ifVersion: parseIfMatch(c.req.header('If-Match')),
-    });
-    return c.json(serializeRecord(updated));
   });
 
   // ------------------------------------------------------------------

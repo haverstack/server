@@ -38,7 +38,7 @@ import {
   undeleteRecordFixtures,
   associateFixtures,
   dissociateFixtures,
-  setPermissionsFixtures,
+  permissionsChangeFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsAfterMutateFixtures,
@@ -50,7 +50,8 @@ import {
   authSequenceFixtures,
   changeFeedFixtures,
   changeFeedSequenceFixtures,
-  setUnlistedFixtures,
+  unlistedChangeFixtures,
+  parentChangeFixtures,
   attachmentDownloadFixtures,
   attachmentUploadFixtures,
   AUTH_FIXTURE_DID,
@@ -762,14 +763,14 @@ describe('dissociate fixtures', () => {
 // Permissions
 // -------------------------------------------------------
 
-describe('setPermissions fixtures', () => {
+describe('permissions change fixtures', () => {
   const handled = new Set<string>();
 
   test('set-permissions-public', async () => {
-    const fixture = setPermissionsFixtures.find((f) => f.name === 'set-permissions-public')!;
+    const fixture = permissionsChangeFixtures.find((f) => f.name === 'set-permissions-public')!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+    const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
       body: fixture.requestBody,
     });
@@ -779,7 +780,7 @@ describe('setPermissions fixtures', () => {
   });
 
   test('set-permissions-empty-is-private', async () => {
-    const fixture = setPermissionsFixtures.find(
+    const fixture = permissionsChangeFixtures.find(
       (f) => f.name === 'set-permissions-empty-is-private',
     )!;
     handled.add(fixture.name);
@@ -788,7 +789,7 @@ describe('setPermissions fixtures', () => {
       { title: 'x' },
       { permissions: [{ access: 'public' }] },
     );
-    const { status } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+    const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
       body: fixture.requestBody,
     });
@@ -802,7 +803,7 @@ describe('setPermissions fixtures', () => {
 
   test('coverage', () => {
     assertCoverage(
-      setPermissionsFixtures.map((f) => f.name),
+      permissionsChangeFixtures.map((f) => f.name),
       handled,
       new Set(),
     );
@@ -849,7 +850,7 @@ describe('version lifecycle fixtures', () => {
     // /versions returns historical snapshots, not the current live state —
     // a record still at its original version has no history yet, so bump
     // it once to give version 1 a snapshot to appear in.
-    await t.ctx.stack.update(record.id, { title: 'updated title' });
+    await t.ctx.stack.patchContent(record.id, { title: 'updated title' });
 
     const owner = await req(t.app, 'GET', `/records/${record.id}/versions`, { token: TEST_TOKEN });
     expect(owner.status).toBe(ownerFixture.responseStatus);
@@ -894,12 +895,12 @@ describe('version lifecycle fixtures', () => {
     // pre-restore auto-snapshot colliding with the create itself.
     await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
-      body: { title: 'intermediate title' },
+      body: { contentPatch: { title: 'intermediate title' } },
     });
     // v3 — the state restore-version will move away from
     await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
-      body: { title: 'title before restore' },
+      body: { contentPatch: { title: 'title before restore' } },
     });
 
     // v3 (auto pre-restore snapshot of v2) + v4 (restored content, from v1)
@@ -939,6 +940,54 @@ describe('version lifecycle fixtures', () => {
     );
     const v4Snapshot = versionList.find((v) => v.version === 4)!;
     expect(v4Snapshot.typeId).toBe(NOTE_TYPE);
+  });
+
+  test('a snapshot carries its container, and a restore puts the record back in it', async () => {
+    const snapshotFixture = getVersionFixtures.find(
+      (f) => f.name === 'get-version-carries-the-container-the-snapshot-was-taken-in',
+    )!;
+    const restoreFixture = restoreVersionFixtures.find(
+      (f) => f.name === 'restore-version-puts-the-record-back-in-its-old-container',
+    )!;
+    handled.add(snapshotFixture.name);
+    handled.add(restoreFixture.name);
+
+    const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'Container' });
+    // v1, in the container
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'original title' },
+      { parentId: container.id },
+    );
+    // v2 — the state the restore below will return to, still in the container
+    await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: { contentPatch: { title: 'title before restore' } },
+    });
+    // v3 — moved to the root, which is what gives v2 a container to have been in
+    await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: { parentId: null },
+    });
+
+    const snapshot = await req(t.app, 'GET', `/records/${record.id}/versions/2`, {
+      token: TEST_TOKEN,
+    });
+    expect(snapshot.status).toBe(snapshotFixture.responseStatus);
+    const v2 = snapshot.data as { parentId?: string; content: unknown };
+    expect(v2.parentId).toBe(container.id);
+    expect(v2.content).toEqual(snapshotFixture.responseBody!.content);
+
+    const restore = await req(t.app, 'POST', `/records/${record.id}/restore/2`, {
+      token: TEST_TOKEN,
+    });
+    expect(restore.status).toBe(restoreFixture.responseStatus);
+    const restored = restore.data as { parentId?: string; content: unknown; version: number };
+    // A restore settles containment rather than leaving the record where it
+    // sits: the snapshot names the container, so the record goes back to it.
+    expect(restored.parentId).toBe(container.id);
+    expect(restored.content).toEqual(restoreFixture.responseBody!.content);
+    expect(restored.version).toBe(4);
   });
 
   test('coverage', () => {
@@ -1022,11 +1071,28 @@ describe('error response fixtures', () => {
   test('error-validation-permission-write-without-read', async () => {
     const fixture = find('error-validation-permission-write-without-read');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status, data } = await dispatch(
-      fixture,
-      TEST_TOKEN,
-      `/records/${record.id}/permissions`,
-    );
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-bad-request-malformed-parent-id', async () => {
+    const fixture = find('error-bad-request-malformed-parent-id');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    // Format is checked before existence, so the empty string answers for
+    // being malformed rather than for naming nothing. It is not a spelling
+    // of the root here — `null` is.
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-conflict-parent-does-not-exist', async () => {
+    const fixture = find('error-conflict-parent-does-not-exist');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    // Well-formed and simply names nothing, which is the conflict. Only the
+    // owner sees it: the reference gate exempts them, so the existence check
+    // behind it is theirs to reach. Anyone else gets one indistinguishable
+    // 403 for a destination they cannot read and one that is not there.
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
     expectError(status, data, fixture);
   });
 
@@ -1377,7 +1443,7 @@ describe('changeFeed fixtures', () => {
       expect(frame.id).toBe((frameData(frame) as { seq?: string }).seq);
       const data = frameData(frame);
       expect(data.kind).toBe('created');
-      expect(data.op).toBe('create');
+      expect(data.ops).toEqual(['create']);
       expect(data.recordId).toBe(recordId);
       expect(data.typeId).toBe(NOTE_TYPE);
       expect(data.version).toBe(1);
@@ -1403,12 +1469,12 @@ describe('changeFeed fixtures', () => {
       await conn.waitForFrames(1); // ready
       await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
-        body: { title: 'edited by a contributor' },
+        body: { contentPatch: { title: 'edited by a contributor' } },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('changed');
-      expect(data.op).toBe('update');
+      expect(data.ops).toEqual(['patch']);
       expect(data.recordId).toBe(record.id);
       expect((data.actor as { entityId: string }).entityId).toBe(CONTRIBUTOR_ID);
     } finally {
@@ -1429,7 +1495,7 @@ describe('changeFeed fixtures', () => {
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('deleted');
-      expect(data.op).toBe('delete');
+      expect(data.ops).toEqual(['delete']);
       expect(data.recordId).toBe(record.id);
     } finally {
       await conn.close();
@@ -1454,7 +1520,7 @@ describe('changeFeed fixtures', () => {
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('purged');
-      expect(data.op).toBe('hard-delete');
+      expect(data.ops).toEqual(['hard-delete']);
       expect(data.recordId).toBe(record.id);
       expect(data.typeId).toBe(NOTE_TYPE);
       expect('record' in data).toBe(false);
@@ -1479,7 +1545,7 @@ describe('changeFeed fixtures', () => {
       await conn.waitForFrames(1); // ready
       await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'Updated title' },
+        body: { contentPatch: { title: 'Updated title' } },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
@@ -1508,11 +1574,11 @@ describe('changeFeed fixtures', () => {
       await conn.waitForFrames(1); // ready
       await req(t.app, 'PATCH', `/records/${privateRecord.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'still private' },
+        body: { contentPatch: { title: 'still private' } },
       });
       await req(t.app, 'PATCH', `/records/${sharedRecord.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'shared, updated' },
+        body: { contentPatch: { title: 'shared, updated' } },
       });
       // Exactly one more frame — the readable record's — proves the
       // private edit produced none rather than merely arriving later.
@@ -1538,7 +1604,7 @@ describe('changeFeed fixtures', () => {
       await conn.waitForFrames(1); // ready
       await req(t.app, 'PATCH', `/records/${comment.id}`, {
         token: TEST_TOKEN,
-        body: { body: 'still unrelated' },
+        body: { contentPatch: { body: 'still unrelated' } },
       });
       await req(t.app, 'POST', `/records/${note.id}/migrate`, {
         token: TEST_TOKEN,
@@ -1550,7 +1616,7 @@ describe('changeFeed fixtures', () => {
       const data = frameData(frame);
       expect(data.recordId).toBe(note.id);
       expect(data.typeId).toBe(NOTE_TYPE_V2);
-      expect(data.op).toBe('migrate');
+      expect(data.ops).toEqual(['migrate']);
     } finally {
       await conn.close();
     }
@@ -1594,14 +1660,14 @@ describe('changeFeed fixtures', () => {
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: true },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('deleted');
-      expect(data.op).toBe('unlist');
+      expect(data.ops).toEqual(['unlist']);
       expect(data.recordId).toBe(record.id);
     } finally {
       await conn.close();
@@ -1614,18 +1680,18 @@ describe('changeFeed fixtures', () => {
     )!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
-    await t.ctx.stack.setUnlisted(record.id, true);
+    await t.ctx.stack.mutate(record.id, { unlisted: true });
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: false },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('changed');
-      expect(data.op).toBe('list');
+      expect(data.ops).toEqual(['list']);
       expect(data.recordId).toBe(record.id);
     } finally {
       await conn.close();
@@ -1638,24 +1704,61 @@ describe('changeFeed fixtures', () => {
     )!;
     handled.add(fixture.name);
     const unlistedRecord = await t.ctx.stack.create(NOTE_TYPE, { title: 'Unlisted' });
-    await t.ctx.stack.setUnlisted(unlistedRecord.id, true);
+    await t.ctx.stack.mutate(unlistedRecord.id, { unlisted: true });
     const visibleRecord = await t.ctx.stack.create(NOTE_TYPE, { title: 'Visible' });
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
       await req(t.app, 'PATCH', `/records/${unlistedRecord.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'Edited while unlisted' },
+        body: { contentPatch: { title: 'Edited while unlisted' } },
       });
       await req(t.app, 'PATCH', `/records/${visibleRecord.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'Edited, visible' },
+        body: { contentPatch: { title: 'Edited, visible' } },
       });
       // Exactly one more frame — the visible record's — proves the
       // unlisted edit produced none rather than merely arriving later.
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.recordId).toBe(visibleRecord.id);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-reparent-reaches-the-container-a-record-left', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-reparent-reaches-the-container-a-record-left',
+    )!;
+    handled.add(fixture.name);
+
+    const origin = await t.ctx.stack.create(NOTE_TYPE, { title: 'Origin' });
+    const destination = await t.ctx.stack.create(NOTE_TYPE, { title: 'Destination' });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' }, { parentId: origin.id });
+
+    // Filtered on the container the record is about to leave: the record's
+    // post-change state names only the destination, so a subscriber watching
+    // the origin hears about the departure only because a reparent is
+    // matched against both sides of the move.
+    const conn = await openChangeFeed(t.app, `/changes?parentId=${origin.id}`, {
+      token: TEST_TOKEN,
+    });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { parentId: destination.id },
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      // Still there and still readable — only its container moved.
+      expect(data.kind).toBe('changed');
+      expect(data.ops).toEqual(['reparent']);
+      expect(data.recordId).toBe(record.id);
+      // The frame carries the destination, as every frame carries the
+      // record's state at the moment of the change.
+      expect(data.parentId).toBe(destination.id);
     } finally {
       await conn.close();
     }
@@ -1691,7 +1794,7 @@ describe('changeFeed sequence fixtures', () => {
       expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
       await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { title: 'first' },
+        body: { contentPatch: { title: 'first' } },
       });
       const [, changeFrame] = await first.waitForFrames(2);
       expect(changeFrame.event).toBe('record');
@@ -1705,7 +1808,7 @@ describe('changeFeed sequence fixtures', () => {
     // past disconnect) keeps collecting on its own.
     await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
-      body: { title: 'second' },
+      body: { contentPatch: { title: 'second' } },
     });
 
     // Step 2: reconnect presenting the last id seen. ready still leads,
@@ -1931,24 +2034,26 @@ describe('auth handshake fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Records: setUnlisted (new in fixtures 0.8.0)
+// Records: the unlisted change-set key
 // -------------------------------------------------------
 
-describe('setUnlisted fixtures', () => {
+describe('unlisted change fixtures', () => {
   const handled = new Set<string>();
 
   // Run together against one seeded record, same as the versions block
   // below — set-unlisted-false-relists assumes set-unlisted-true already
   // ran (its own description says so).
   test('set-unlisted-true then set-unlisted-false-relists', async () => {
-    const trueFixture = setUnlistedFixtures.find((f) => f.name === 'set-unlisted-true')!;
-    const falseFixture = setUnlistedFixtures.find((f) => f.name === 'set-unlisted-false-relists')!;
+    const trueFixture = unlistedChangeFixtures.find((f) => f.name === 'set-unlisted-true')!;
+    const falseFixture = unlistedChangeFixtures.find(
+      (f) => f.name === 'set-unlisted-false-relists',
+    )!;
     handled.add(trueFixture.name);
     handled.add(falseFixture.name);
 
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
 
-    const unlisted = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+    const unlisted = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
       body: trueFixture.requestBody,
     });
@@ -1961,7 +2066,7 @@ describe('setUnlisted fixtures', () => {
       (queried.data as { records: WireRecord[] }).records.some((r) => r.id === record.id),
     ).toBe(false);
 
-    const relisted = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+    const relisted = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
       body: falseFixture.requestBody,
     });
@@ -1971,7 +2076,60 @@ describe('setUnlisted fixtures', () => {
 
   test('coverage', () => {
     assertCoverage(
-      setUnlistedFixtures.map((f) => f.name),
+      unlistedChangeFixtures.map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+});
+
+// -------------------------------------------------------
+// Records: the parentId change-set key
+// -------------------------------------------------------
+
+describe('parent change fixtures', () => {
+  const handled = new Set<string>();
+
+  // Run together against one seeded record: the null fixture moves a
+  // record back to the root, which only means anything once something
+  // has moved it off the root.
+  test('set-parent-moves-a-record-into-a-container then back to the root', async () => {
+    const intoFixture = parentChangeFixtures.find(
+      (f) => f.name === 'set-parent-moves-a-record-into-a-container',
+    )!;
+    const rootFixture = parentChangeFixtures.find(
+      (f) => f.name === 'set-parent-null-moves-a-record-to-the-root',
+    )!;
+    handled.add(intoFixture.name);
+    handled.add(rootFixture.name);
+
+    // The destination has to exist: a caller-named parentId is checked for
+    // format and then for existence, so the fixture's own literal id would
+    // answer 409 here rather than moving anything.
+    const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'Container' });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+
+    const moved = await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: { ...intoFixture.requestBody, parentId: container.id },
+    });
+    expect(moved.status).toBe(intoFixture.responseStatus);
+    expect((moved.data as WireRecord).parentId).toBe(container.id);
+    // A move touches containment and nothing else.
+    expect((moved.data as WireRecord).content).toEqual({ title: 'Hello', body: 'World' });
+
+    const toRoot = await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: rootFixture.requestBody,
+    });
+    expect(toRoot.status).toBe(rootFixture.responseStatus);
+    // State spells the root by omission, where the input spelled it null.
+    expect((toRoot.data as WireRecord).parentId).toBeUndefined();
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      parentChangeFixtures.map((f) => f.name),
       handled,
       new Set(),
     );

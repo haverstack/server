@@ -19,7 +19,7 @@ describe('Versions', () => {
     const record = await t.ctx.stack.create(TYPE_ID, { body: 'v1' });
     await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
-      body: { content: { body: 'v2' }, version: 2, updatedAt: new Date().toISOString() },
+      body: { contentPatch: { body: 'v2' } },
     });
     return record;
   }
@@ -109,7 +109,7 @@ describe('Versions', () => {
           permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write }],
         },
       );
-      await t.ctx.stack.update(record.id, { body: 'v2' });
+      await t.ctx.stack.patchContent(record.id, { body: 'v2' });
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       return { record, token };
     }
@@ -144,7 +144,7 @@ describe('Versions', () => {
         permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
       },
     );
-    await t.ctx.stack.update(record.id, { body: 'v2' });
+    await t.ctx.stack.patchContent(record.id, { body: 'v2' });
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
 
     const { data } = await req(t.app, 'GET', `/records/${record.id}/versions`, { token });
@@ -165,7 +165,7 @@ describe('Versions', () => {
     await t.ctx.stack.associate(record.id, { kind: 'tag', label: 'starred' });
     expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(2);
 
-    await t.ctx.stack.setPermissions(record.id, [{ access: 'public' }]);
+    await t.ctx.stack.mutate(record.id, { permissions: [{ access: 'public' }] });
     expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(3);
 
     await t.ctx.stack.delete(record.id);

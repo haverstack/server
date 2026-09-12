@@ -501,7 +501,7 @@ describe('Records', () => {
       const record = await seedRecord(t.ctx, { body: 'original', title: 'My title' });
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { body: 'Updated body' },
+        body: { contentPatch: { body: 'Updated body' } },
       });
       expect(status).toBe(200);
       const d = data as Record<string, unknown>;
@@ -515,7 +515,7 @@ describe('Records', () => {
       const record = await seedRecord(t.ctx);
       await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { body: 'v2' },
+        body: { contentPatch: { body: 'v2' } },
       });
       const versions = await t.ctx.adapter.getVersions(record.id);
       expect(versions).toHaveLength(1);
@@ -533,7 +533,7 @@ describe('Records', () => {
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
-        body: { body: 'hacked' },
+        body: { contentPatch: { body: 'hacked' } },
       });
       expect(status).toBe(403);
     });
@@ -633,7 +633,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { fileId: 'tampered-id' },
+        body: { contentPatch: { fileId: 'tampered-id' } },
       });
       expect(status).toBe(422);
       expect(detailPaths(data)).toContain('fileId');
@@ -643,7 +643,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { size: 9999 },
+        body: { contentPatch: { size: 9999 } },
       });
       expect(status).toBe(422);
       expect(detailPaths(data)).toContain('size');
@@ -653,7 +653,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { mimeType: 'text/html' },
+        body: { contentPatch: { mimeType: 'text/html' } },
       });
       expect(status).toBe(422);
       expect(detailPaths(data)).toContain('mimeType');
@@ -663,7 +663,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { fileId: 'x', size: 0, mimeType: 'text/html' },
+        body: { contentPatch: { fileId: 'x', size: 0, mimeType: 'text/html' } },
       });
       expect(status).toBe(422);
       const paths = detailPaths(data);
@@ -676,7 +676,7 @@ describe('Records', () => {
       const { record } = await seedAttachment(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { filename: 'renamed.txt' },
+        body: { contentPatch: { filename: 'renamed.txt' } },
       });
       expect(status).toBe(200);
       const content = (data as { content: Record<string, unknown> }).content;
@@ -711,7 +711,7 @@ describe('Records', () => {
 
       const { status } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
         token,
-        body: { actions: ['read-any', 'update-any', 'delete-any'] },
+        body: { contentPatch: { actions: ['read-any', 'update-any', 'delete-any'] } },
       });
       expect(status).toBe(403);
     });
@@ -745,7 +745,7 @@ describe('Records', () => {
 
       const { status, data } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
         token: TEST_TOKEN,
-        body: { actions: ['read-own', 'read-any'] },
+        body: { contentPatch: { actions: ['read-own', 'read-any'] } },
       });
       expect(status).toBe(200);
       const content = (data as { content: Record<string, unknown> }).content;
@@ -781,7 +781,9 @@ describe('Records', () => {
 
       const { status } = await req(t.app, 'PATCH', `/records/${readGrant.id}`, {
         token,
-        body: { typeId: NOTE_TYPE_ID, actions: ['read-any', 'update-any', 'delete-any'] },
+        body: {
+          contentPatch: { typeId: NOTE_TYPE_ID, actions: ['read-any', 'update-any', 'delete-any'] },
+        },
       });
       expect(status).toBe(403);
 
@@ -808,7 +810,7 @@ describe('Records', () => {
     it('refuses to change _config.entityId', async () => {
       const { status } = await req(t.app, 'PATCH', '/records/_config', {
         token: TEST_TOKEN,
-        body: { entityId: 'someone-else' },
+        body: { contentPatch: { entityId: 'someone-else' } },
       });
       expect(status).toBe(409);
     });
@@ -882,19 +884,19 @@ describe('Records', () => {
 
       const { status: didChange } = await req(t.app, 'PATCH', `/records/${id}`, {
         token: TEST_TOKEN,
-        body: { did: 'did:key:zChanged' },
+        body: { contentPatch: { did: 'did:key:zChanged' } },
       });
       expect(didChange).toBe(422);
 
       const { status: appIdChange } = await req(t.app, 'PATCH', `/records/${id}`, {
         token: TEST_TOKEN,
-        body: { appId: 'changed' },
+        body: { contentPatch: { appId: 'changed' } },
       });
       expect(appIdChange).toBe(422);
 
       const { status: nameChange, data: renamed } = await req(t.app, 'PATCH', `/records/${id}`, {
         token: TEST_TOKEN,
-        body: { name: 'Renamed' },
+        body: { contentPatch: { name: 'Renamed' } },
       });
       expect(nameChange).toBe(200);
       expect((renamed as { content: { name: string } }).content.name).toBe('Renamed');
@@ -1271,7 +1273,7 @@ describe('Records', () => {
       const record = await seedRecord(t.ctx);
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { body: 'updated' },
+        body: { contentPatch: { body: 'updated' } },
         headers: { 'If-Match': `"${record.version}"` },
       });
       expect(status).toBe(200);
@@ -1281,7 +1283,7 @@ describe('Records', () => {
       const record = await seedRecord(t.ctx);
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
-        body: { body: 'updated' },
+        body: { contentPatch: { body: 'updated' } },
         headers: { 'If-Match': `"${record.version + 1}"` },
       });
       expect(status).toBe(412);
@@ -1351,11 +1353,11 @@ describe('Records', () => {
     });
   });
 
-  describe('PUT/GET /records/:id/permissions', () => {
-    it('PUT replaces permissions and returns the updated record', async () => {
+  describe('the permissions change-set key, and GET /records/:id/permissions', () => {
+    it('the permissions key replaces permissions and returns the updated record', async () => {
       const record = await seedRecord(t.ctx);
-      const res = await t.app.request(`/records/${record.id}/permissions`, {
-        method: 'PUT',
+      const res = await t.app.request(`/records/${record.id}`, {
+        method: 'PATCH',
         headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ permissions: [{ access: 'public' }] }),
       });
@@ -1376,7 +1378,7 @@ describe('Records', () => {
         { body: 'was public' },
         { permissions: [{ access: 'public' }] },
       );
-      await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { permissions: [] },
       });
@@ -1401,7 +1403,7 @@ describe('Records', () => {
       expect((data as { permissions: unknown[] }).permissions).toEqual([{ access: 'public' }]);
     });
 
-    it('returns 403 when a non-owner without write access tries to PUT', async () => {
+    it('returns 403 when a non-owner without write access names the key', async () => {
       const record = await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'x' },
@@ -1410,15 +1412,15 @@ describe('Records', () => {
         },
       );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
-      const { status } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+      const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
         body: { permissions: [{ access: 'public' }] },
       });
       expect(status).toBe(403);
     });
 
-    it("returns the record even when the PUT revokes the caller's own read access", async () => {
-      // setPermissions() is gated on mayReshare(), owner-or-creator rather
+    it("returns the record even when the change revokes the caller's own read access", async () => {
+      // The permissions key is gated on mayReshare(), owner-or-creator rather
       // than plain write access — OTHER_ENTITY_ID must be the record's
       // author, not merely a grantee, to reach it as a non-owner.
       const record = await t.ctx.stack.create(
@@ -1427,7 +1429,7 @@ describe('Records', () => {
         { entityId: OTHER_ENTITY_ID },
       );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
-      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
         body: { permissions: [] },
       });
@@ -1435,14 +1437,14 @@ describe('Records', () => {
       expect((data as { id: string }).id).toBe(record.id);
 
       // Confirms the write actually landed and the caller lost read access —
-      // otherwise the 200 above wouldn't distinguish this from any other PUT.
+      // otherwise the 200 above wouldn't distinguish this from any other change.
       const { status: followUp } = await req(t.app, 'GET', `/records/${record.id}`, { token });
       expect(followUp).toBe(404);
     });
 
-    it('PUT succeeds when If-Match names the current version', async () => {
+    it('succeeds when If-Match names the current version', async () => {
       const record = await seedRecord(t.ctx);
-      const { status } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+      const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { permissions: [{ access: 'public' }] },
         headers: { 'If-Match': `"${record.version}"` },
@@ -1450,9 +1452,9 @@ describe('Records', () => {
       expect(status).toBe(200);
     });
 
-    it('PUT returns 412 version_conflict on an If-Match mismatch', async () => {
+    it('returns 412 version_conflict on an If-Match mismatch', async () => {
       const record = await seedRecord(t.ctx);
-      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { permissions: [{ access: 'public' }] },
         headers: { 'If-Match': `"${record.version + 1}"` },
@@ -1462,14 +1464,14 @@ describe('Records', () => {
     });
   });
 
-  describe('PUT /records/:id/unlisted', () => {
+  describe('the unlisted change-set key', () => {
     it('withholds a record from enumeration without changing who may read it', async () => {
       const record = await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'x' },
         { permissions: [{ access: 'public' }] },
       );
-      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: true },
       });
@@ -1491,11 +1493,11 @@ describe('Records', () => {
 
     it('{ unlisted: false } relists a record', async () => {
       const record = await seedRecord(t.ctx);
-      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: true },
       });
-      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: false },
       });
@@ -1508,16 +1510,58 @@ describe('Records', () => {
       ).toBe(true);
     });
 
-    it('rejects a non-boolean unlisted value with 400', async () => {
+    // A key that addresses nothing is 400; a key whose value is the wrong
+    // shape is 422. `unlisted` is a change-set key the envelope recognizes,
+    // so a non-boolean is the second of those.
+    it('rejects a non-boolean unlisted value with 422', async () => {
       const record = await seedRecord(t.ctx);
-      const { status } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: 'true' },
+      });
+      expect(status).toBe(422);
+      const details = (data as { error: { details: Array<{ path: string }> } }).error.details;
+      expect(details.some((d) => d.path === 'unlisted')).toBe(true);
+    });
+
+    // The same 422 is owed by every key carrying a structured value, not just
+    // the boolean one. `permissions` and `associations` are each replaced
+    // wholesale by the key, so a non-array is the shape error rather than a
+    // content one — and without this, a core bump that quietly stopped
+    // rejecting either would pass the whole suite on the `unlisted` case alone.
+    it.each([
+      ['permissions', { permissions: 'nope' }],
+      ['associations', { associations: 'nope' }],
+    ])('rejects a non-array %s value with 422', async (key, body) => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body,
+      });
+      expect(status).toBe(422);
+      const details = (data as { error: { details: Array<{ path: string }> } }).error.details;
+      expect(details.some((d) => d.path === key)).toBe(true);
+    });
+
+    it('rejects an unrecognized change-set key with 400', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: { unlistd: true },
       });
       expect(status).toBe(400);
     });
 
-    it('returns 403 when a non-owner without write access tries to PUT', async () => {
+    it('rejects an empty change set with 400', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body: {},
+      });
+      expect(status).toBe(400);
+    });
+
+    it('returns 403 when a non-owner without write access names the key', async () => {
       const record = await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'x' },
@@ -1526,7 +1570,7 @@ describe('Records', () => {
         },
       );
       const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
-      const { status } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
         body: { unlisted: true },
       });
@@ -1536,7 +1580,7 @@ describe('Records', () => {
     it('returns 409 on a soft-deleted record', async () => {
       const record = await seedRecord(t.ctx);
       await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
-      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: true },
       });
@@ -1544,9 +1588,9 @@ describe('Records', () => {
       expect((data as { error: { code: string } }).error.code).toBe('conflict');
     });
 
-    it('PUT succeeds when If-Match names the current version', async () => {
+    it('succeeds when If-Match names the current version', async () => {
       const record = await seedRecord(t.ctx);
-      const { status } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: true },
         headers: { 'If-Match': `"${record.version}"` },
@@ -1554,9 +1598,9 @@ describe('Records', () => {
       expect(status).toBe(200);
     });
 
-    it('PUT returns 412 version_conflict on an If-Match mismatch', async () => {
+    it('returns 412 version_conflict on an If-Match mismatch', async () => {
       const record = await seedRecord(t.ctx);
-      const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { unlisted: true },
         headers: { 'If-Match': `"${record.version + 1}"` },
@@ -1569,7 +1613,7 @@ describe('Records', () => {
   describe('includeUnlisted', () => {
     it('is excluded by default from GET /records and POST /records/query', async () => {
       const record = await seedRecord(t.ctx);
-      await t.ctx.stack.setUnlisted(record.id, true);
+      await t.ctx.stack.mutate(record.id, { unlisted: true });
 
       const getRes = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
       expect(
@@ -1586,7 +1630,7 @@ describe('Records', () => {
 
     it('surfaces unlisted records for the owner acting alone', async () => {
       const record = await seedRecord(t.ctx);
-      await t.ctx.stack.setUnlisted(record.id, true);
+      await t.ctx.stack.mutate(record.id, { unlisted: true });
 
       const { data } = await req(t.app, 'GET', '/records?includeUnlisted=true', {
         token: TEST_TOKEN,
@@ -1625,7 +1669,7 @@ describe('Records', () => {
         const body = JSON.parse(`{"${key}":{"evil":true}}`);
         const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
           token: TEST_TOKEN,
-          body,
+          body: { contentPatch: body },
         });
         expect(status).toBe(422);
         const details = (data as { error: { details: Array<{ path: string }> } }).error.details;
