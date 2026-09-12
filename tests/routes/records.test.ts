@@ -1524,6 +1524,25 @@ describe('Records', () => {
       expect(details.some((d) => d.path === 'unlisted')).toBe(true);
     });
 
+    // The same 422 is owed by every key carrying a structured value, not just
+    // the boolean one. `permissions` and `associations` are each replaced
+    // wholesale by the key, so a non-array is the shape error rather than a
+    // content one — and without this, a core bump that quietly stopped
+    // rejecting either would pass the whole suite on the `unlisted` case alone.
+    it.each([
+      ['permissions', { permissions: 'nope' }],
+      ['associations', { associations: 'nope' }],
+    ])('rejects a non-array %s value with 422', async (key, body) => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+        token: TEST_TOKEN,
+        body,
+      });
+      expect(status).toBe(422);
+      const details = (data as { error: { details: Array<{ path: string }> } }).error.details;
+      expect(details.some((d) => d.path === key)).toBe(true);
+    });
+
     it('rejects an unrecognized change-set key with 400', async () => {
       const record = await seedRecord(t.ctx);
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
