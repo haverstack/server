@@ -27,4 +27,4 @@ ENV NODE_ENV=production
 ENV DB_PATH=/app/data/stack.db
 EXPOSE 3000
 USER app
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/main.js"]
