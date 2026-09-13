@@ -6,6 +6,10 @@
   "engines": {
     "node": ">=22.9"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/haverstack/server.git"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
