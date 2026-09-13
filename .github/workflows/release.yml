@@ -13,6 +13,7 @@ jobs:
     permissions:
       contents: write # push version bump + tag, create release
       packages: write # push Docker image to ghcr.io
+      id-token: write # OIDC for npm Trusted Publishing
 
     steps:
       - uses: actions/checkout@v4
@@ -25,6 +26,9 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+
+      # npm's OIDC Trusted Publishing needs npm >= 11.5.1; setup-node ships older.
+      - run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile
 
@@ -77,6 +81,16 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository }}:${{ steps.version.outputs.new_version }}
             ghcr.io/${{ github.repository }}:latest
+
+      # Publishes the library surface (src/index.ts + src/testing.ts) so
+      # other packages (e.g. @haverstack/cli's server-path tests) can depend
+      # on it — the Docker image above is the deployable app; this is the
+      # importable half. prepublishOnly builds dist/ first. Auth is the
+      # repo's Trusted Publisher (OIDC) — no NPM_TOKEN.
+      - name: Publish to npm
+        run: npm publish --provenance
+        env:
+          NPM_CONFIG_PROVENANCE: 'true'
 
       # Commit the package.json bump, tag it, and push. Requires that the
       # github-actions bot is allowed to push to main (configure via branch
