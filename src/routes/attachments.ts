@@ -3,7 +3,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { StackPermissionError, StackPayloadTooLargeError } from '@haverstack/core';
 import {
   resolveAttachmentDownloadContentType,
-  firstRecordedAttachment,
+  resolveReferencedAttachment,
   parseUploadFilename,
   NOSNIFF_HEADER_NAME,
   NOSNIFF_HEADER_VALUE,
@@ -67,10 +67,16 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     }
 
     const metaRecords = await stack.getAttachmentRecords(fileId);
-    const firstRecord = firstRecordedAttachment(metaRecords);
-    const ownRecord = auth
-      ? firstRecordedAttachment(metaRecords.filter((r) => r.entityId === auth.subjectId))
-      : undefined;
+    // mimeType is a property of the fileId, not the requester's perspective:
+    // always the first-recorded record, regardless of who is asking.
+    const firstRecord = resolveReferencedAttachment(metaRecords);
+    // A plain fileId download carries no association to resolve
+    // attachmentRecordId from — a client holding one resolves it themselves
+    // and passes the result as ?filename. This falls back to the
+    // requester's own upload, then the first-recorded record.
+    const referenced = resolveReferencedAttachment(metaRecords, {
+      requesterEntityId: auth?.subjectId,
+    });
 
     const contentTypeParam = c.req.query('contentType');
     const filenameParam = c.req.query('filename');
@@ -84,9 +90,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     // goes too: forcing Content-Type alone won't stop a browser sniffing
     // the body back into the original type without both nosniff and a
     // non-inline disposition.
-    const filename = forced
-      ? undefined
-      : (filenameParam ?? ownRecord?.content.filename ?? firstRecord?.content.filename);
+    const filename = forced ? undefined : (filenameParam ?? referenced?.content.filename);
 
     const disposition = filename
       ? `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`

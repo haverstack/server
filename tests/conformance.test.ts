@@ -719,6 +719,36 @@ describe('associate fixtures', () => {
     expect((data as { associations: unknown[] }).associations).toEqual([fixture.requestBody]);
   });
 
+  test('associate-attachment-record-id', async () => {
+    const fixture = associateFixtures.find((f) => f.name === 'associate-attachment-record-id')!;
+    handled.add(fixture.name);
+    const body = fixture.requestBody as Association & {
+      kind: 'attachment';
+      fileId: string;
+      attachmentRecordId: string;
+    };
+    const uploaded = await t.ctx.stack.putAttachment(
+      new Uint8Array([1, 2, 3]),
+      'image/png',
+      'embed.png',
+    );
+    const fileId = (uploaded.content as { fileId: string }).fileId;
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { ...body, fileId, attachmentRecordId: uploaded.id },
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+    });
+    // attachmentRecordId travels verbatim, in both directions — the pointer
+    // annotates the reference rather than identifying it.
+    expect((data as { associations: unknown[] }).associations).toEqual([
+      { ...body, fileId, attachmentRecordId: uploaded.id },
+    ]);
+  });
+
   test('coverage', () => {
     assertCoverage(
       associateFixtures.map((f) => f.name),
@@ -742,6 +772,35 @@ describe('dissociate fixtures', () => {
     const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
       token: TEST_TOKEN,
       body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+    });
+    expect((data as { associations: unknown[] }).associations).toEqual([]);
+  });
+
+  test('dissociate-attachment-by-identity', async () => {
+    const fixture = dissociateFixtures.find((f) => f.name === 'dissociate-attachment-by-identity')!;
+    handled.add(fixture.name);
+    const body = fixture.requestBody as Association & { kind: 'attachment'; fileId: string };
+    const uploaded = await t.ctx.stack.putAttachment(
+      new Uint8Array([1, 2, 3]),
+      'image/png',
+      'embed.png',
+    );
+    const fileId = (uploaded.content as { fileId: string }).fileId;
+    // The stored association carries an attachmentRecordId, but identity
+    // stays (kind, label, fileId) — dissociating without the pointer still
+    // matches and removes it.
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'x' },
+      { associations: [{ ...body, fileId, attachmentRecordId: uploaded.id }] },
+    );
+    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+      token: TEST_TOKEN,
+      body: { ...body, fileId },
     });
     expect(status).toBe(fixture.responseStatus);
     const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {

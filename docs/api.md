@@ -246,6 +246,8 @@ This server is single-process: `GET /changes` reports only writes made through t
 
 `POST /attachments/gc` sweeps for attachment bytes unreachable from any record — live or soft-deleted — and deletes both the bytes and their `_attachment@1` metadata. Body is `{ graceMs?, dryRun? }`, both optional: `graceMs` is how recently-uploaded an unreferenced file must be to survive collection (default 24 hours, covering the upload-then-associate window; `0` collects immediately), `dryRun` computes the result without deleting anything. Returns `{ deleted: [fileId...], reclaimedBytes }`. No built-in scheduling — invoke it directly, or drive it from an external cron; `dryRun` makes a probe-first workflow safe.
 
+An `attachment` association (`{ kind: "attachment", label, fileId }`, set via `POST /records/:id/associations`) may carry an optional `attachmentRecordId`, naming the `_attachment` record whose upload established that particular reference — useful when several records share one `fileId` but each wants its own uploader's filename. The pointer annotates the reference rather than identifying it: association identity stays `(kind, label, fileId)`, so `dissociate()` matches without it, and re-associating with a different (or absent) `attachmentRecordId` re-points the existing association in place rather than adding a second one. `GET /attachments/:fileId` itself never resolves this pointer — a plain download names a fileId, not a reference — so a client holding the association resolves the filename itself (via `resolveReferencedAttachment()` from `@haverstack/core/wire`) and passes it as `?filename`.
+
 ## Entity & Tokens
 
 | Method | Path          | Auth       | Description                    |
