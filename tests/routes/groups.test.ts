@@ -30,7 +30,15 @@ describe('_group ACL', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'group-visible' },
-      { permissions: [{ access: 'group', groupId: group.id, read: true, write: false }] },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+          },
+        ],
+      },
     );
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
     const { status } = await req(t.app, 'GET', `/records/${record.id}`, { token });
@@ -58,7 +66,15 @@ describe('_group ACL', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'should stay private' },
-      { permissions: [{ access: 'group', groupId: notAGroup.id, read: true, write: false }] },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'group', groupId: notAGroup.id, role: 'member' },
+          },
+        ],
+      },
     );
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
     const { status } = await req(t.app, 'GET', `/records/${record.id}`, { token });

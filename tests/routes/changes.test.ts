@@ -91,7 +91,7 @@ describe('GET /changes', () => {
       const publicRecord = await t.ctx.stack.create(
         NOTE_TYPE,
         { title: 'public' },
-        { permissions: [{ access: 'public' }] },
+        { permissions: [{ kind: 'anyone', label: 'read' }] },
       );
       await req(t.app, 'PATCH', `/records/${publicRecord.id}`, {
         token: TEST_TOKEN,
@@ -188,12 +188,28 @@ describe('GET /changes', () => {
       const recordA = await t.ctx.stack.create(
         NOTE_TYPE,
         { title: 'a' },
-        { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+        {
+          permissions: [
+            {
+              kind: 'permission',
+              label: 'read',
+              grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            },
+          ],
+        },
       );
       const recordB = await t.ctx.stack.create(
         NOTE_TYPE,
         { title: 'b' },
-        { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+        {
+          permissions: [
+            {
+              kind: 'permission',
+              label: 'read',
+              grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            },
+          ],
+        },
       );
       const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
 

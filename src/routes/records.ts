@@ -7,16 +7,17 @@ import { readJson } from '../lib/json.js';
 import {
   parseQueryBody,
   parseQueryParams,
+  parseJournalParams,
   parsePositiveInt,
   parseIfMatch,
   createOptionsFromWireRecord,
   changesFromWireBody,
 } from '@haverstack/core/wire';
-import { clampLimit } from '../lib/queryLimit.js';
-import { serializeRecord, serializeVersion } from '@haverstack/wire-types';
-import type { WireQueryResponse } from '@haverstack/wire-types';
+import { clampLimit, clampJournalLimit } from '../lib/queryLimit.js';
+import { serializeRecord, serializeVersion, serializeJournalEntry } from '@haverstack/wire-types';
+import type { WireQueryResponse, WireJournalResponse } from '@haverstack/wire-types';
 import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
-import type { Association, TypeId } from '@haverstack/core';
+import type { AuthorityAssociation, DataAssociation, TypeId } from '@haverstack/core';
 
 // ---------------------------------------------------------------------------
 // Route factory
@@ -119,18 +120,27 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json(serializeRecord(updated));
   });
 
-  // DELETE /records/:id  (?hard=true for permanent). A soft delete bumps
-  // the version like any other mutation, so it answers with the record it
-  // produced (carrying deletedAt); a hard delete leaves nothing to answer
-  // with, so that one stays 204.
+  // DELETE /records/:id  (?hard=true for permanent). Both answer 200 with
+  // a record: a soft delete with the tombstone it produced, a hard delete
+  // with the record as it last stood — read ahead of the write, because a
+  // purge leaves nothing to read afterwards. That body is the requester's
+  // only report of the files the purge stranded; every other row naming
+  // them is gone by the time it lands. See docs/spec/wire-format.md
+  // § Records and docs/spec/attachments.md § A purge strands the bytes it
+  // referenced.
   app.delete('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
     const session = stack.forSession(auth);
 
+    // Read before the gate runs, so an unreadable record is the 404 the
+    // disclosure rule requires rather than the 403 delete() would raise.
+    const purged = hard ? await session.get(id) : null;
+    if (hard && !purged) throw new StackNotFoundError('Record not found');
+
     await session.delete(id, { hard, ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    if (hard) return c.body(null, 204);
+    if (hard) return c.json(serializeRecord(purged!));
     return c.json(serializeRecord((await session.get(id))!));
   });
 
@@ -156,6 +166,31 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json({ permissions: record.permissions ?? [] });
   });
 
+  // The amending spelling, where the change set's `permissions` key
+  // replaces the whole set — which is what survives two admins sharing one
+  // record at once. Both carry the reshare gate rather than the write bit,
+  // and both are ScopedStack's to apply: it refuses a data kind sent to
+  // this surface and holds the set to `write` implying `read`, so nothing
+  // here inspects the body. See docs/spec/access-control.md
+  // § Record-level permissions.
+  app.post('/:id/permissions', requireAuth(), async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth')!;
+    const body = await readJson<AuthorityAssociation>(c);
+    const updated = await stack.forSession(auth).grantAccess(id, body);
+    return c.json(serializeRecord(updated));
+  });
+
+  // POST to a /delete sub-path for the reason the association endpoints
+  // use one, below.
+  app.post('/:id/permissions/delete', requireAuth(), async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth')!;
+    const body = await readJson<AuthorityAssociation>(c);
+    const updated = await stack.forSession(auth).revokeAccess(id, body);
+    return c.json(serializeRecord(updated));
+  });
+
   // ------------------------------------------------------------------
   // Associations
   // ------------------------------------------------------------------
@@ -173,14 +208,17 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json({ associations: assocs });
   });
 
+  // Neither mutating endpoint reads If-Match, and one sent to either is
+  // ignored rather than refused: a set add/remove composes whatever the
+  // write order, so there is no race for a precondition to fence. Both
+  // answer with a record carrying whatever version it already had. See
+  // docs/spec/wire-format.md § Associations.
   app.post('/:id/associations', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await readJson<Association>(c);
+    const body = await readJson<DataAssociation>(c);
     if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
-    const updated = await stack
-      .forSession(auth)
-      .associate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    const updated = await stack.forSession(auth).associate(id, body);
     return c.json(serializeRecord(updated));
   });
 
@@ -190,11 +228,38 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.post('/:id/associations/delete', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await readJson<Association>(c);
-    const updated = await stack
-      .forSession(auth)
-      .dissociate(id, body, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    const body = await readJson<DataAssociation>(c);
+    const updated = await stack.forSession(auth).dissociate(id, body);
     return c.json(serializeRecord(updated));
+  });
+
+  // ------------------------------------------------------------------
+  // Journal
+  // ------------------------------------------------------------------
+
+  // GET /records/:id/journal — the change journal, oldest first. Not
+  // optional and never answered empty for a record this server doesn't
+  // hold: an empty log means "nothing changed" unconditionally, so a
+  // missing or purged record is the 404 ScopedStack raises.
+  //
+  // The mutate-surface gate and the authority-element projection a
+  // non-resharer gets are both ScopedStack.getJournal()'s, so this route
+  // decodes the window, bounds the page and serializes. `cursor` is the
+  // only end-of-log signal — a page filled to the ceiling carries the seq
+  // to resume from, whether or not the log ends there. See
+  // docs/spec/journal.md and docs/spec/wire-format.md § Journal.
+  app.get('/:id/journal', async (c) => {
+    const id = c.req.param('id');
+    const auth = c.get('auth');
+    const query = parseJournalParams(new URL(c.req.url));
+    const limit = clampJournalLimit(query.limit);
+
+    const entries = await scopeFor(auth).getJournal(id, { ...query, limit });
+    const body: WireJournalResponse = {
+      entries: entries.map(serializeJournalEntry),
+      cursor: entries.length === limit ? entries[entries.length - 1]!.seq : null,
+    };
+    return c.json(body);
   });
 
   // ------------------------------------------------------------------
