@@ -37,8 +37,8 @@ importers:
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.8.1)
       '@haverstack/conformance-fixtures':
-        specifier: ^0.30.0
-        version: 0.30.0
+        specifier: ^0.31.0
+        version: 0.31.0
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
@@ -274,8 +274,8 @@ packages:
   '@haverstack/commons@0.31.0':
     resolution: {integrity: sha512-OhKy1IzXtZ9r6tFVwZ3fQb2Q+SbwBUu08FliU5BhwJXku/cFwVNBaOnZcrx1TQiOJ0i04ftz+WXq+BIDGblYxQ==}
 
-  '@haverstack/conformance-fixtures@0.30.0':
-    resolution: {integrity: sha512-20/m1byn9aUh96f2ny7fdAWwMgmrZdjCh4kSmv/VAVZHP9ihJOt0VLDN6DHrM6+QhxzhOA7GO/jJVp3ZAX3GWQ==}
+  '@haverstack/conformance-fixtures@0.31.0':
+    resolution: {integrity: sha512-2+0QR6L95iDl0BhGbs7q/BVz4CJ1zw0fbvUD0Fl6xAL90r5/M0ffRwY+rokTjgtxPK/ZsgVcr0nbDhlsD1Xokg==}
 
   '@haverstack/core@0.37.0':
     resolution: {integrity: sha512-tEFL/mVpVeOsQt0BDdtEJu8PQgy5DVoScCqEKID+DrAkvcspjcXrhUsGsCe87tWHbrYUWAMH8zW0UCSNw/ET0Q==}
@@ -1275,7 +1275,7 @@ snapshots:
     dependencies:
       '@haverstack/core': 0.37.0
 
-  '@haverstack/conformance-fixtures@0.30.0':
+  '@haverstack/conformance-fixtures@0.31.0':
     dependencies:
       '@haverstack/wire-types': 0.36.0
 
