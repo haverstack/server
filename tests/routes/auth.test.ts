@@ -398,7 +398,7 @@ describe('invalid bearer credentials', () => {
     await t.ctx.stack.create(
       NOTE_TYPE_ID,
       { body: 'public content' },
-      { permissions: [{ access: 'public' }] },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
   });
   afterEach(async () => {

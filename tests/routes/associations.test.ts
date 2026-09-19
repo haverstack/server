@@ -115,56 +115,80 @@ describe('Associations', () => {
     expect(after?.associations?.some((a) => a.label === 'author')).toBeFalsy();
   });
 
-  describe('If-Match / optimistic concurrency', () => {
-    it('POST /associations succeeds when If-Match names the current version', async () => {
+  describe('no-bump semantics', () => {
+    it('leaves version and updatedAt where they stand on both endpoints', async () => {
+      const record = await seedRecord();
+      const before = await t.ctx.adapter.getRecord(record.id);
+
+      const added = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+        token: TEST_TOKEN,
+        body: { kind: 'tag', label: 'starred' },
+      });
+      expect(added.status).toBe(200);
+      expect((added.data as { version: number }).version).toBe(before!.version);
+
+      const removed = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+        token: TEST_TOKEN,
+        body: { kind: 'tag', label: 'starred' },
+      });
+      expect(removed.status).toBe(200);
+
+      const after = await t.ctx.adapter.getRecord(record.id);
+      expect(after!.version).toBe(before!.version);
+      expect(after!.updatedAt.toISOString()).toBe(before!.updatedAt.toISOString());
+    });
+
+    it('writes no version snapshot', async () => {
+      const record = await seedRecord();
+      await req(t.app, 'POST', `/records/${record.id}/associations`, {
+        token: TEST_TOKEN,
+        body: { kind: 'tag', label: 'starred' },
+      });
+      const { data } = await req(t.app, 'GET', `/records/${record.id}/versions`, {
+        token: TEST_TOKEN,
+      });
+      expect(data).toEqual([]);
+    });
+
+    it('ignores an If-Match that names a stale version rather than refusing it', async () => {
       const record = await seedRecord();
       const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
         body: { kind: 'tag', label: 'starred' },
-        headers: { 'If-Match': `"${record.version}"` },
+        headers: { 'If-Match': `"${record.version + 99}"` },
       });
       expect(status).toBe(200);
     });
+  });
 
-    it('POST /associations returns 412 version_conflict on an If-Match mismatch', async () => {
+  describe('authority kinds are refused', () => {
+    it('refuses a permission element sent to POST /associations', async () => {
       const record = await seedRecord();
       const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: { kind: 'tag', label: 'starred' },
-        headers: { 'If-Match': `"${record.version + 1}"` },
+        body: {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'entity', entityId: 'entity-other' },
+        },
       });
-      expect(status).toBe(412);
-      expect((data as { error: { code: string } }).error.code).toBe('version_conflict');
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
 
-    it('POST /associations/delete succeeds when If-Match names the current version', async () => {
+    it('refuses an anyone element sent to POST /associations/delete', async () => {
       const record = await seedRecord();
-      await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-      const current = await t.ctx.adapter.getRecord(record.id);
-      const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
-        token: TEST_TOKEN,
-        body: { kind: 'tag', label: 'starred' },
-        headers: { 'If-Match': `"${current!.version}"` },
-      });
-      expect(status).toBe(200);
-    });
-
-    it('POST /associations/delete returns 412 version_conflict on an If-Match mismatch', async () => {
-      const record = await seedRecord();
-      await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-      const current = await t.ctx.adapter.getRecord(record.id);
       const { status, data } = await req(
         t.app,
         'POST',
         `/records/${record.id}/associations/delete`,
         {
           token: TEST_TOKEN,
-          body: { kind: 'tag', label: 'starred' },
-          headers: { 'If-Match': `"${current!.version + 1}"` },
+          body: { kind: 'anyone', label: 'read' },
         },
       );
-      expect(status).toBe(412);
-      expect((data as { error: { code: string } }).error.code).toBe('version_conflict');
+      expect(status).toBe(400);
+      expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
   });
 });

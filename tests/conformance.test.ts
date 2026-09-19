@@ -39,6 +39,9 @@ import {
   associateFixtures,
   dissociateFixtures,
   permissionsChangeFixtures,
+  grantAccessFixtures,
+  revokeAccessFixtures,
+  getJournalFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsAfterMutateFixtures,
@@ -57,9 +60,9 @@ import {
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
 } from '@haverstack/conformance-fixtures';
-import type { WireRecord } from '@haverstack/wire-types';
+import type { WireRecord, WireJournalResponse } from '@haverstack/wire-types';
 import { generateId, hashSchema } from '@haverstack/core';
-import type { Association } from '@haverstack/core';
+import type { DataAssociation } from '@haverstack/core';
 import {
   buildTestApp,
   req,
@@ -103,6 +106,7 @@ const NOTE_TYPE = 'com.example/note@1';
 const NOTE_TYPE_V2 = 'com.example/note@2';
 const COMMENT_TYPE = 'com.example/comment@1';
 const ATTACHMENT_TYPE = '_attachment@1';
+const GROUP_TYPE = '_group@1';
 
 // Reusing the fixtures' own placeholder identities as real test principals
 // where possible — nothing requires DID-shaped entityIds for a record-level
@@ -259,7 +263,9 @@ describe('createRecord fixtures', () => {
     )!;
     handled.add(fixture.name);
     const body = withFreshId(fixture.requestBody as WireRecord & { appId?: string });
-    await t.ctx.stack.grant(CONTRIBUTOR_ID, [{ actions: ['create'], typeId: body.typeId }]);
+    await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
+      { actions: ['create'], typeId: body.typeId },
+    ]);
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const { status, data } = await req(t.app, 'POST', fixture.path, { token, body });
     expect(status).toBe(fixture.responseStatus);
@@ -278,8 +284,12 @@ describe('createRecord fixtures', () => {
     )!;
     handled.add(fixture.name);
     const body = withFreshId(fixture.requestBody as WireRecord & { appId?: string });
-    await t.ctx.stack.grant(BLOG_SUBJECT_ID, [{ actions: ['create'], typeId: body.typeId }]);
-    await t.ctx.stack.grant(BLOG_APP_ID, [{ actions: ['create'], typeId: body.typeId }]);
+    await t.ctx.stack.grant({ kind: 'entity', entityId: BLOG_SUBJECT_ID }, [
+      { actions: ['create'], typeId: body.typeId },
+    ]);
+    await t.ctx.stack.grant({ kind: 'entity', entityId: BLOG_APP_ID }, [
+      { actions: ['create'], typeId: body.typeId },
+    ]);
     const { token } = await t.ctx.adapter.createToken(BLOG_APP_ID, { onBehalfOf: BLOG_SUBJECT_ID });
     const { status, data } = await req(t.app, 'POST', fixture.path, { token, body });
     expect(status).toBe(fixture.responseStatus);
@@ -330,7 +340,7 @@ describe('createRecord fixtures', () => {
     const fileId = (uploaded.content as { fileId: string }).fileId;
     const note = await t.ctx.stack.create(NOTE_TYPE, { title: 'has a cover' });
     await t.ctx.stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
-    await t.ctx.stack.grant(CONTRIBUTOR_ID, [
+    await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
       { actions: ['read-any'], typeId: NOTE_TYPE },
       { actions: ['create'], typeId: ATTACHMENT_TYPE },
     ]);
@@ -362,6 +372,30 @@ describe('createRecord fixtures', () => {
     // backdated value from the body it's echoed alongside — presence is
     // what this fixture pins, not the literal value.
     expect(typeof d.unlistedAt).toBe('string');
+  });
+
+  test('create-grant-record-group-grantee — a grant names its grantee affirmatively', async () => {
+    const fixture = createRecordFixtures.find(
+      (f) => f.name === 'create-grant-record-group-grantee',
+    )!;
+    handled.add(fixture.name);
+    const group = await t.ctx.stack.create(GROUP_TYPE, { name: 'Reviewers' });
+    const body = withFreshId(fixture.requestBody as WireRecord);
+    const content = body.content as { grantee: { groupId: string } };
+    const { status, data } = await req(t.app, 'POST', fixture.path, {
+      token: TEST_TOKEN,
+      body: {
+        ...body,
+        content: { ...content, grantee: { ...content.grantee, groupId: group.id } },
+      },
+    });
+    expect(status).toBe(fixture.responseStatus);
+    // No tier is reachable by omission, so the grantee travels whole —
+    // role included, since admin is the narrower set.
+    expect((data as { content: unknown }).content).toEqual({
+      ...content,
+      grantee: { ...content.grantee, groupId: group.id },
+    });
   });
 
   test('coverage', () => {
@@ -580,7 +614,18 @@ describe('patchContent fixtures', () => {
       { title: 'original' },
       {
         entityId: TEST_ENTITY_ID,
-        permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: true }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+        ],
       },
     );
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
@@ -722,7 +767,7 @@ describe('associate fixtures', () => {
   test('associate-attachment-record-id', async () => {
     const fixture = associateFixtures.find((f) => f.name === 'associate-attachment-record-id')!;
     handled.add(fixture.name);
-    const body = fixture.requestBody as Association & {
+    const body = fixture.requestBody as DataAssociation & {
       kind: 'attachment';
       fileId: string;
       attachmentRecordId: string;
@@ -767,7 +812,7 @@ describe('dissociate fixtures', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'x' },
-      { associations: [fixture.requestBody as Association] },
+      { associations: [fixture.requestBody as DataAssociation] },
     );
     const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
       token: TEST_TOKEN,
@@ -783,7 +828,7 @@ describe('dissociate fixtures', () => {
   test('dissociate-attachment-by-identity', async () => {
     const fixture = dissociateFixtures.find((f) => f.name === 'dissociate-attachment-by-identity')!;
     handled.add(fixture.name);
-    const body = fixture.requestBody as Association & { kind: 'attachment'; fileId: string };
+    const body = fixture.requestBody as DataAssociation & { kind: 'attachment'; fileId: string };
     const uploaded = await t.ctx.stack.putAttachment(
       new Uint8Array([1, 2, 3]),
       'image/png',
@@ -825,15 +870,26 @@ describe('dissociate fixtures', () => {
 describe('permissions change fixtures', () => {
   const handled = new Set<string>();
 
-  test('set-permissions-public', async () => {
-    const fixture = permissionsChangeFixtures.find((f) => f.name === 'set-permissions-public')!;
+  test('set-permissions-anyone', async () => {
+    const fixture = permissionsChangeFixtures.find((f) => f.name === 'set-permissions-anyone')!;
     handled.add(fixture.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'x' },
+      { associations: [{ kind: 'tag', label: 'draft' }] },
+    );
+    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
       body: fixture.requestBody,
     });
     expect(status).toBe(fixture.responseStatus);
+    const body = data as { permissions?: unknown[]; associations?: unknown[]; version: number };
+    expect(body.permissions).toEqual(fixture.responseBody!.permissions);
+    // A separate domain: the key replaces the ACL and leaves the tags where
+    // they are, and the write bumps nothing.
+    expect(body.associations).toEqual(fixture.responseBody!.associations);
+    expect(body.version).toBe(record.version);
+
     const anon = await req(t.app, 'GET', `/records/${record.id}`);
     expect(anon.status).toBe(200);
   });
@@ -846,7 +902,7 @@ describe('permissions change fixtures', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'x' },
-      { permissions: [{ access: 'public' }] },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
     const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
@@ -870,6 +926,362 @@ describe('permissions change fixtures', () => {
 });
 
 // -------------------------------------------------------
+// Record-level grant/revoke — the amending spelling of the permissions
+// key, carrying the reshare gate rather than the write bit.
+// -------------------------------------------------------
+
+describe('grantAccess / revokeAccess fixtures', () => {
+  const handled = new Set<string>();
+
+  test('grant-access-entity', async () => {
+    const fixture = grantAccessFixtures.find((f) => f.name === 'grant-access-entity')!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const element = {
+      ...fixture.requestBody,
+      grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+    };
+
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+      token: TEST_TOKEN,
+      body: element,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const body = data as { permissions?: unknown[]; version: number };
+    expect(body.permissions).toEqual([element]);
+    // A permission element is an association: no bump, no snapshot.
+    expect(body.version).toBe(record.version);
+
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const read = await req(t.app, 'GET', `/records/${record.id}`, { token });
+    expect(read.status).toBe(200);
+  });
+
+  test('grant-access-group-role', async () => {
+    const fixture = grantAccessFixtures.find((f) => f.name === 'grant-access-group-role')!;
+    handled.add(fixture.name);
+    const group = await t.ctx.stack.create(GROUP_TYPE, { name: 'Editors' });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const element = {
+      ...fixture.requestBody,
+      grantee: { scope: 'group', groupId: group.id, role: 'admin' },
+    };
+
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+      token: TEST_TOKEN,
+      body: element,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    // The role travels verbatim — there is no absent-role spelling for a
+    // group grantee to fall back on.
+    expect((data as { permissions?: unknown[] }).permissions).toEqual([element]);
+  });
+
+  test('the endpoints amend the set where the change-set key replaces it', async () => {
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+      token: TEST_TOKEN,
+      body: {
+        kind: 'permission',
+        label: 'read',
+        grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+      },
+    });
+    const { data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+      token: TEST_TOKEN,
+      body: { kind: 'anyone', label: 'read' },
+    });
+    expect((data as { permissions?: unknown[] }).permissions).toHaveLength(2);
+  });
+
+  test('revoke-access-anyone', async () => {
+    const fixture = revokeAccessFixtures.find((f) => f.name === 'revoke-access-anyone')!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello' },
+      { permissions: [{ kind: 'anyone', label: 'read' }] },
+    );
+
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions/delete`, {
+      token: TEST_TOKEN,
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const body = data as { permissions?: unknown[]; version: number };
+    // Reach to the world is its own kind, so withdrawing it names that kind
+    // and leaves the set empty rather than clearing a field.
+    expect(body.permissions ?? []).toEqual([]);
+    expect(body.version).toBe(record.version);
+  });
+
+  test('carries the reshare gate, not the write bit', async () => {
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello' },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: WRITER_ID },
+          },
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: WRITER_ID },
+          },
+        ],
+      },
+    );
+    const { token } = await t.ctx.adapter.createToken(WRITER_ID);
+    const { status } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+      token,
+      body: { kind: 'anyone', label: 'read' },
+    });
+    expect(status).toBe(403);
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      [...grantAccessFixtures.map((f) => f.name), ...revokeAccessFixtures.map((f) => f.name)],
+      handled,
+      new Set(),
+    );
+  });
+});
+
+// -------------------------------------------------------
+// Journal — the second durable tier, and the only place an association's
+// prior state survives.
+// -------------------------------------------------------
+
+describe('journal fixtures', () => {
+  const handled = new Set<string>();
+
+  test('get-journal-reads-the-whole-log-oldest-first', async () => {
+    const fixture = getJournalFixtures.find(
+      (f) => f.name === 'get-journal-reads-the-whole-log-oldest-first',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { kind: 'tag', label: 'starred' },
+    });
+
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal`, {
+      token: TEST_TOKEN,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const body = data as WireJournalResponse;
+    expect(body.entries.map((e) => e.seq)).toEqual([1, 2]);
+    expect(body.entries.map((e) => e.ops)).toEqual([['create'], ['associate']]);
+    // version stands still across the associate, which is why seq is the
+    // only ordering the log carries.
+    expect(body.entries.every((e) => e.version === 1)).toBe(true);
+    expect(body.entries[1]!.associations).toEqual([
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    expect(body.cursor).toBeNull();
+  });
+
+  test('get-journal-page-reports-a-cursor-to-resume-from', async () => {
+    const fixture = getJournalFixtures.find(
+      (f) => f.name === 'get-journal-page-reports-a-cursor-to-resume-from',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { kind: 'tag', label: 'starred' },
+    });
+
+    const page = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=0&limit=1`, {
+      token: TEST_TOKEN,
+    });
+    expect(page.status).toBe(fixture.responseStatus);
+    const first = page.data as WireJournalResponse;
+    expect(first.entries.map((e) => e.seq)).toEqual([1]);
+    // cursor is the only end-of-log signal, and carries the seq to send
+    // back as sinceSeq.
+    expect(first.cursor).toBe(1);
+
+    const resumed = await req(
+      t.app,
+      'GET',
+      `/records/${record.id}/journal?sinceSeq=${first.cursor}`,
+      { token: TEST_TOKEN },
+    );
+    expect((resumed.data as WireJournalResponse).entries.map((e) => e.seq)).toEqual([2]);
+  });
+
+  test('get-journal-entry-keeps-what-an-associate-overwrote', async () => {
+    const fixture = getJournalFixtures.find(
+      (f) => f.name === 'get-journal-entry-keeps-what-an-associate-overwrote',
+    )!;
+    handled.add(fixture.name);
+    const first = await t.ctx.stack.putAttachment(
+      new Uint8Array([1, 2, 3]),
+      'image/png',
+      'embed.png',
+    );
+    const fileId = first.content.fileId;
+    // A second _attachment record naming the same bytes, which is what a
+    // re-point moves the reference to.
+    const second = await t.ctx.stack.create(ATTACHMENT_TYPE, {
+      fileId,
+      mimeType: 'image/png',
+      size: 3,
+      filename: 'embed.png',
+    });
+
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const association = { kind: 'attachment', label: 'embed', fileId };
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { ...association, attachmentRecordId: first.id },
+    });
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { ...association, attachmentRecordId: second.id },
+    });
+
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=2`, {
+      token: TEST_TOKEN,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const entry = (data as WireJournalResponse).entries[0]!;
+    expect(entry.ops).toEqual(['associate']);
+    // Both halves ride one element: what stands now, and what it displaced.
+    // Nothing else retains the overwritten attachmentRecordId.
+    expect(entry.associations).toEqual([
+      {
+        op: 'repoint',
+        association: { ...association, attachmentRecordId: second.id },
+        previous: { ...association, attachmentRecordId: first.id },
+      },
+    ]);
+  });
+
+  test('get-journal-entry-keeps-what-a-dissociate-removed', async () => {
+    const fixture = getJournalFixtures.find(
+      (f) => f.name === 'get-journal-entry-keeps-what-a-dissociate-removed',
+    )!;
+    handled.add(fixture.name);
+    const uploaded = await t.ctx.stack.putAttachment(
+      new Uint8Array([1, 2, 3]),
+      'image/png',
+      'embed.png',
+    );
+    const association = {
+      kind: 'attachment',
+      label: 'embed',
+      fileId: uploaded.content.fileId,
+    };
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { ...association, attachmentRecordId: uploaded.id },
+    });
+    await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+      token: TEST_TOKEN,
+      body: association,
+    });
+
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=2`, {
+      token: TEST_TOKEN,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const entry = (data as WireJournalResponse).entries[0]!;
+    expect(entry.ops).toEqual(['dissociate']);
+    // `previous` is the association in full, annotation included — where
+    // the change frame for the same write names identity only.
+    expect(entry.associations).toEqual([
+      { op: 'remove', previous: { ...association, attachmentRecordId: uploaded.id } },
+    ]);
+  });
+
+  test('get-journal-reparent-entry-spells-the-root-as-null', async () => {
+    const fixture = getJournalFixtures.find(
+      (f) => f.name === 'get-journal-reparent-entry-spells-the-root-as-null',
+    )!;
+    handled.add(fixture.name);
+    const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'Container' });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: { parentId: container.id },
+    });
+
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=1`, {
+      token: TEST_TOKEN,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    const entry = (data as WireJournalResponse).entries[0]!;
+    expect(entry.ops).toEqual(['reparent']);
+    expect(entry.parentId).toBe(container.id);
+    // Present and null: the record moved out of the root. Absent would say
+    // the entry is not a reparent at all, so the two cannot collapse.
+    expect(entry.previousParentId).toBeNull();
+    expect('previousParentId' in entry).toBe(true);
+    expect(entry.version).toBe(1);
+  });
+
+  test('omits authority elements for a requester who may not reshare', async () => {
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello' },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: WRITER_ID },
+          },
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: WRITER_ID },
+          },
+        ],
+      },
+    );
+    await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+      token: TEST_TOKEN,
+      body: { kind: 'anyone', label: 'read' },
+    });
+
+    const { token } = await t.ctx.adapter.createToken(WRITER_ID);
+    const { data } = await req(t.app, 'GET', `/records/${record.id}/journal`, { token });
+    const entries = (data as WireJournalResponse).entries;
+    const moved = entries.find((e) => e.ops.includes('permissions'))!;
+    // The entry still names that the ACL moved; the elements beneath it are
+    // the resharer's, and go with the field when nothing else is in it.
+    expect(moved).toBeDefined();
+    expect(moved.associations).toBeUndefined();
+    // Entries are never dropped, so seq stays dense.
+    expect(entries.map((e) => e.seq)).toEqual(entries.map((_, i) => i + 1));
+
+    const owner = await req(t.app, 'GET', `/records/${record.id}/journal`, { token: TEST_TOKEN });
+    const ownerEntry = (owner.data as WireJournalResponse).entries.find((e) =>
+      e.ops.includes('permissions'),
+    )!;
+    expect(ownerEntry.associations).toEqual([
+      { op: 'add', association: { kind: 'anyone', label: 'read' } },
+    ]);
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      getJournalFixtures.map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+});
+
+// -------------------------------------------------------
 // Versions: a coordinated lifecycle matching the fixtures' own designed
 // story — get-versions-after-restore/migrate explicitly assume the paired
 // mutating fixture (restore-version / commit-migration) already ran, so
@@ -880,29 +1292,23 @@ describe('permissions change fixtures', () => {
 describe('version lifecycle fixtures', () => {
   const handled = new Set<string>();
 
-  test('owner sees permissions; non-owner write-holder has them stripped', async () => {
-    const ownerFixture = getVersionsFixtures.find(
-      (f) => f.name === 'get-versions-owner-includes-permissions',
-    )!;
+  test('every requester past the mutate gate sees the same snapshot rows', async () => {
+    const ownerFixture = getVersionsFixtures.find((f) => f.name === 'get-versions-owner')!;
     const writerFixture = getVersionsFixtures.find(
-      (f) => f.name === 'get-versions-non-owner-write-holder-strips-permissions',
+      (f) => f.name === 'get-versions-non-owner-write-holder-sees-the-same-rows',
     )!;
-    const singleFixture = getVersionFixtures.find(
-      (f) => f.name === 'get-version-single-strips-permissions-for-non-owner',
-    )!;
+    const singleFixture = getVersionFixtures.find((f) => f.name === 'get-version-single')!;
     handled.add(ownerFixture.name);
     handled.add(writerFixture.name);
     handled.add(singleFixture.name);
 
-    const memberPermission = (ownerFixture.responseBody![0] as { permissions: unknown[] })
-      .permissions[0];
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'original title' },
       {
         permissions: [
-          memberPermission as never,
-          { access: 'entity', entityId: WRITER_ID, read: true, write: true },
+          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: WRITER_ID } },
+          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: WRITER_ID } },
         ],
       },
     );
@@ -913,25 +1319,20 @@ describe('version lifecycle fixtures', () => {
 
     const owner = await req(t.app, 'GET', `/records/${record.id}/versions`, { token: TEST_TOKEN });
     expect(owner.status).toBe(ownerFixture.responseStatus);
-    const ownerVersions = owner.data as Array<{ permissions?: unknown[] }>;
-    expect(ownerVersions[0]!.permissions).toEqual([
-      memberPermission,
-      { access: 'entity', entityId: WRITER_ID, read: true, write: true },
-    ]);
+    expect((owner.data as unknown[]).length).toBe(1);
 
     const { token: writerToken } = await t.ctx.adapter.createToken(WRITER_ID);
     const writer = await req(t.app, 'GET', `/records/${record.id}/versions`, {
       token: writerToken,
     });
     expect(writer.status).toBe(writerFixture.responseStatus);
-    const writerVersions = writer.data as Array<{ permissions?: unknown[] }>;
-    expect(writerVersions[0]!.permissions).toBeUndefined();
+    expect(writer.data).toEqual(owner.data);
 
     const single = await req(t.app, 'GET', `/records/${record.id}/versions/1`, {
       token: writerToken,
     });
     expect(single.status).toBe(singleFixture.responseStatus);
-    expect((single.data as { permissions?: unknown[] }).permissions).toBeUndefined();
+    expect(single.data).toEqual((owner.data as unknown[])[0]);
   });
 
   test('restore auto-snapshots the pre-restore state; migrate auto-snapshots the pre-migration state', async () => {
@@ -1001,51 +1402,93 @@ describe('version lifecycle fixtures', () => {
     expect(v4Snapshot.typeId).toBe(NOTE_TYPE);
   });
 
-  test('a snapshot carries its container, and a restore puts the record back in it', async () => {
+  test('get-versions-after-associate-is-unchanged', async () => {
+    const fixture = getVersionsAfterMutateFixtures.find(
+      (f) => f.name === 'get-versions-after-associate-is-unchanged',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original title' });
+    await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: { contentPatch: { title: 'updated title' } },
+    });
+    const before = await req(t.app, 'GET', `/records/${record.id}/versions`, {
+      token: TEST_TOKEN,
+    });
+    expect(before.status).toBe(fixture.responseStatus);
+
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { kind: 'tag', label: 'starred' },
+    });
+
+    const after = await req(t.app, 'GET', `/records/${record.id}/versions`, { token: TEST_TOKEN });
+    // Exactly the list it answered with before: no new entry, and no entry
+    // gains an associations key — a server that snapshots here hands every
+    // later restore a stale association set to put back.
+    expect(after.data).toEqual(before.data);
+    expect(
+      (after.data as Array<Record<string, unknown>>).every((v) => v.associations === undefined),
+    ).toBe(true);
+  });
+
+  test('a snapshot names no container, and a restore leaves the record where it sits', async () => {
     const snapshotFixture = getVersionFixtures.find(
-      (f) => f.name === 'get-version-carries-the-container-the-snapshot-was-taken-in',
+      (f) => f.name === 'get-version-carries-no-containment-listing-or-authority-state',
     )!;
     const restoreFixture = restoreVersionFixtures.find(
-      (f) => f.name === 'restore-version-puts-the-record-back-in-its-old-container',
+      (f) => f.name === 'restore-version-leaves-the-record-where-it-sits',
     )!;
     handled.add(snapshotFixture.name);
     handled.add(restoreFixture.name);
 
     const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'Container' });
-    // v1, in the container
-    const record = await t.ctx.stack.create(
-      NOTE_TYPE,
-      { title: 'original title' },
-      { parentId: container.id },
-    );
-    // v2 — the state the restore below will return to, still in the container
+    // v1, at the root
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original title' });
+    // v2 — the state the restore below returns to, still at the root
     await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
       body: { contentPatch: { title: 'title before restore' } },
     });
-    // v3 — moved to the root, which is what gives v2 a container to have been in
+    // Aspects that take no snapshot of their own, set before the bump that
+    // snapshots v2 — so a snapshot capturing any of them would show them.
+    await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+      token: TEST_TOKEN,
+      body: { kind: 'anyone', label: 'read' },
+    });
+    // v3 — the content bump that writes v2's snapshot
     await req(t.app, 'PATCH', `/records/${record.id}`, {
       token: TEST_TOKEN,
-      body: { parentId: null },
+      body: { contentPatch: { title: 'current title' }, unlisted: true },
+    });
+    // A move bumps nothing, and is what leaves the record somewhere other
+    // than where v2 was taken.
+    await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token: TEST_TOKEN,
+      body: { parentId: container.id },
     });
 
     const snapshot = await req(t.app, 'GET', `/records/${record.id}/versions/2`, {
       token: TEST_TOKEN,
     });
     expect(snapshot.status).toBe(snapshotFixture.responseStatus);
-    const v2 = snapshot.data as { parentId?: string; content: unknown };
-    expect(v2.parentId).toBe(container.id);
+    const v2 = snapshot.data as Record<string, unknown>;
     expect(v2.content).toEqual(snapshotFixture.responseBody!.content);
+    // None of the four aspects that bump no version is ever snapshotted.
+    expect(v2.parentId).toBeUndefined();
+    expect(v2.unlistedAt).toBeUndefined();
+    expect(v2.permissions).toBeUndefined();
+    expect(v2.associations).toBeUndefined();
 
     const restore = await req(t.app, 'POST', `/records/${record.id}/restore/2`, {
       token: TEST_TOKEN,
     });
     expect(restore.status).toBe(restoreFixture.responseStatus);
     const restored = restore.data as { parentId?: string; content: unknown; version: number };
-    // A restore settles containment rather than leaving the record where it
-    // sits: the snapshot names the container, so the record goes back to it.
-    expect(restored.parentId).toBe(container.id);
     expect(restored.content).toEqual(restoreFixture.responseBody!.content);
+    // A restore settles content and typeId alone: the record comes back in
+    // whatever container it is in now, not the one the snapshot was taken in.
+    expect(restored.parentId).toBe(container.id);
     expect(restored.version).toBe(4);
   });
 
@@ -1112,7 +1555,15 @@ describe('error response fixtures', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'x' },
-      { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+        ],
+      },
     );
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
@@ -1160,7 +1611,15 @@ describe('error response fixtures', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'x' },
-      { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+        ],
+      },
     );
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}/versions`);
@@ -1176,7 +1635,9 @@ describe('error response fixtures', () => {
 
   test('create-attachment-record-non-owner-without-carve-out-refused', async () => {
     const fixture = find('create-attachment-record-non-owner-without-carve-out-refused');
-    await t.ctx.stack.grant(CONTRIBUTOR_ID, [{ actions: ['create'], typeId: ATTACHMENT_TYPE }]);
+    await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
+      { actions: ['create'], typeId: ATTACHMENT_TYPE },
+    ]);
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     // The contributor uploads the bytes themselves, so they end up holding
     // an _attachment@1 record for this fileId — the "uploaded it themselves"
@@ -1200,31 +1661,49 @@ describe('error response fixtures', () => {
 
   test('error-permission-denied-restore-reference-reconveyance', async () => {
     const fixture = find('error-permission-denied-restore-reference-reconveyance');
-    // v1 carries an attachment association; v2 drops it. Nothing else
-    // references the file afterward — an _attachment@1 record holds its
-    // fileId in a plain string field, not a file-ref one, so the owner's
-    // own upload record is not a reference the attachmentFileId filter
-    // sees. The writer therefore cannot attach the file fresh today, and
-    // restoring v1 would hand it back to them.
+    // A file-ref content field is the only reference a snapshot can put
+    // back: no snapshot has ever carried an association, so a restore can
+    // never introduce one to gate. v1 names the file, v2 drops it, and
+    // nothing readable by the writer names it afterwards — an _attachment@1
+    // record holds its fileId in a plain string field, not a file-ref one,
+    // so the owner's own upload record is not a reference the check sees.
+    const PHOTO_NOTE = 'com.example/photo-note@1';
+    await t.ctx.stack.defineType(PHOTO_NOTE, 'Photo note', {
+      title: { kind: 'string' },
+      coverFileId: { kind: 'file-ref' },
+    });
     const uploaded = await t.ctx.stack.putAttachment(
       new Uint8Array([4, 5, 6]),
       'image/png',
       'cover.png',
     );
-    const fileId = (uploaded.content as { fileId: string }).fileId;
+    const fileId = uploaded.content.fileId;
     const record = await t.ctx.stack.create(
-      NOTE_TYPE,
-      { title: 'has a cover' },
+      PHOTO_NOTE,
+      { title: 'has a cover', coverFileId: fileId },
       {
-        permissions: [{ access: 'entity', entityId: WRITER_ID, read: true, write: true }],
-        associations: [{ kind: 'attachment', label: 'cover', fileId }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: WRITER_ID },
+          },
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: WRITER_ID },
+          },
+        ],
       },
     );
-    await t.ctx.stack.dissociate(record.id, { kind: 'attachment', label: 'cover', fileId });
+    // v2 drops the reference, which is what leaves it reachable only from
+    // the v1 snapshot a restore would put back.
+    await t.ctx.stack.patchContent(record.id, { coverFileId: null });
 
     const { token } = await t.ctx.adapter.createToken(WRITER_ID);
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}/restore/1`);
     expectError(status, data, fixture);
+
     // The refusal is about the reference, not about write access: give the
     // writer a readable record that carries the same file today and the
     // identical restore goes through.
@@ -1232,7 +1711,13 @@ describe('error response fixtures', () => {
       NOTE_TYPE,
       { title: 'still has the cover' },
       {
-        permissions: [{ access: 'entity', entityId: WRITER_ID, read: true, write: true }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: WRITER_ID },
+          },
+        ],
         associations: [{ kind: 'attachment', label: 'cover', fileId }],
       },
     );
@@ -1297,6 +1782,67 @@ describe('error response fixtures', () => {
   test('error-not-found — write against a nonexistent id', async () => {
     const fixture = find('error-not-found');
     const { status, data } = await dispatch(fixture, TEST_TOKEN);
+    expectError(status, data, fixture);
+  });
+
+  test('error-permission-denied-journal-read-only', async () => {
+    const fixture = find('error-permission-denied-journal-read-only');
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'readable, not writable' },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+        ],
+      },
+    );
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { status, data } = await dispatch(fixture, token, `/records/${record.id}/journal`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-not-found-journal-of-a-record-that-is-gone', async () => {
+    const fixture = find('error-not-found-journal-of-a-record-that-is-gone');
+    // Never created and hard-deleted are the same answer — never an empty
+    // log, which would read as "nothing changed".
+    const missing = await dispatch(fixture, TEST_TOKEN);
+    expectError(missing.status, missing.data, fixture);
+
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'about to be purged' });
+    await t.ctx.stack.delete(record.id, { hard: true });
+    const purged = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}/journal`);
+    expectError(purged.status, purged.data, fixture);
+  });
+
+  test('error-validation-grant-without-grantee', async () => {
+    const fixture = find('error-validation-grant-without-grantee');
+    const body = withFreshId(fixture.requestBody as WireRecord);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, undefined, body);
+    expectError(status, data, fixture);
+  });
+
+  test('error-validation-grant-group-grantee-without-role', async () => {
+    const fixture = find('error-validation-grant-group-grantee-without-role');
+    const body = withFreshId(fixture.requestBody as WireRecord);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, undefined, body);
+    expectError(status, data, fixture);
+  });
+
+  test('error-query-permission-kind-in-associations-key', async () => {
+    const fixture = find('error-query-permission-kind-in-associations-key');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    expectError(status, data, fixture);
+  });
+
+  test('error-query-association-kind-in-permissions-key', async () => {
+    const fixture = find('error-query-association-kind-in-permissions-key');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
     expectError(status, data, fixture);
   });
 
@@ -1520,7 +2066,20 @@ describe('changeFeed fixtures', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'original' },
-      { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: true }] },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+        ],
+      },
     );
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
@@ -1536,6 +2095,70 @@ describe('changeFeed fixtures', () => {
       expect(data.ops).toEqual(['patch']);
       expect(data.recordId).toBe(record.id);
       expect((data.actor as { entityId: string }).entityId).toBe(CONTRIBUTOR_ID);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-associate-frame-carries-associationsAdded', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-associate-frame-carries-associationsAdded',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'POST', `/records/${record.id}/associations`, {
+        token: TEST_TOKEN,
+        body: { kind: 'tag', label: 'starred' },
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.ops).toEqual(['associate']);
+      // The frame reports the verb without a bump: version and updatedAt
+      // are exactly what the record already held.
+      expect(data.version).toBe(record.version);
+      expect(data.updatedAt).toBe(record.updatedAt.toISOString());
+      // The only record of what the call moved — an association is never
+      // snapshotted, so a subscriber has no other way to learn it.
+      expect(data.associationsAdded).toEqual([{ kind: 'tag', label: 'starred' }]);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-dissociate-frame-carries-associationsRemoved', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-dissociate-frame-carries-associationsRemoved',
+    )!;
+    handled.add(fixture.name);
+    const uploaded = await t.ctx.stack.putAttachment(
+      new Uint8Array([1, 2, 3]),
+      'image/png',
+      'embed.png',
+    );
+    const association = { kind: 'attachment', label: 'embed', fileId: uploaded.content.fileId };
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { ...association, attachmentRecordId: uploaded.id },
+    });
+
+    const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+        token: TEST_TOKEN,
+        body: association,
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.ops).toEqual(['dissociate']);
+      expect(data.version).toBe(record.version);
+      // Identity only: the annotation is no longer current, and a frame
+      // reports what is true now. The journal is where it survives.
+      expect(data.associationsRemoved).toEqual([association]);
     } finally {
       await conn.close();
     }
@@ -1625,7 +2248,15 @@ describe('changeFeed fixtures', () => {
     const sharedRecord = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'shared' },
-      { permissions: [{ access: 'entity', entityId: CONTRIBUTOR_ID, read: true, write: false }] },
+      {
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          },
+        ],
+      },
     );
     const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
     const conn = await openChangeFeed(t.app, '/changes', { token });

@@ -68,7 +68,7 @@ describe('GET /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'public note' },
       {
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
@@ -106,7 +106,7 @@ describe('GET /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'public note' },
       {
-        permissions: [{ access: 'public' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
@@ -121,7 +121,13 @@ describe('GET /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'shared note' },
       {
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+          },
+        ],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
@@ -142,7 +148,13 @@ describe('GET /attachments/:fileId', () => {
       { body: 'unlisted but shared' },
       {
         unlisted: true,
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: false }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+          },
+        ],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
@@ -270,7 +282,9 @@ describe('GET /attachments/:fileId', () => {
 
   it("prefers the requester's own record for filename over the first-recorded record", async () => {
     const bytes = new TextEncoder().encode('shared content 2');
-    await t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
+      { actions: ['create'], typeId: '_attachment@1' },
+    ]);
     const first = await t.ctx.stack
       .forSession({ principalId: OTHER_ENTITY_ID, subjectId: OTHER_ENTITY_ID })
       .putAttachment(bytes, 'text/plain', 'first.txt');
@@ -394,7 +408,9 @@ describe('POST /attachments', () => {
   });
 
   it('allows an entity with a create grant on _attachment@1 to upload', async () => {
-    await t.ctx.stack.grant(OTHER_ENTITY_ID, [{ actions: ['create'], typeId: '_attachment@1' }]);
+    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
+      { actions: ['create'], typeId: '_attachment@1' },
+    ]);
     const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
     const res = await t.app.request('/attachments', {
       method: 'POST',
@@ -527,7 +543,18 @@ describe('DELETE /attachments/:fileId', () => {
       NOTE_TYPE_ID,
       { body: 'shared note' },
       {
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+          },
+          {
+            kind: 'permission',
+            label: 'write',
+            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+          },
+        ],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );

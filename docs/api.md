@@ -84,9 +84,12 @@ The retryable column is why these carry a `code` at all rather than being bodyle
 | DELETE | `/records/:id`                     | Required   | Soft-delete (or hard with `?hard=true`) |
 | POST   | `/records/:id/undelete`            | Required   | Reverse a soft delete                   |
 | GET    | `/records/:id/permissions`         | Optional   | Get permissions                         |
+| POST   | `/records/:id/permissions`         | Required   | Grant one permission element            |
+| POST   | `/records/:id/permissions/delete`  | Required   | Revoke one permission element           |
 | GET    | `/records/:id/associations`        | Optional   | List associations                       |
 | POST   | `/records/:id/associations`        | Required   | Add an association                      |
 | POST   | `/records/:id/associations/delete` | Required   | Remove an association                   |
+| GET    | `/records/:id/journal`             | Optional   | Read the change journal                 |
 | GET    | `/records/:id/versions`            | Optional   | List version history                    |
 | GET    | `/records/:id/versions/:version`   | Optional   | Get a specific version                  |
 | POST   | `/records/:id/restore/:version`    | Required   | Restore a previous version              |
@@ -100,7 +103,7 @@ The retryable column is why these carry a `code` at all rather than being bodyle
 {
   "contentPatch": { "title": "Q3 plan" },
   "parentId": "1hk153x0000f",
-  "permissions": [{ "access": "public" }],
+  "permissions": [{ "kind": "anyone", "label": "read" }],
   "associations": [{ "kind": "tag", "label": "planning" }],
   "unlisted": false
 }
@@ -110,6 +113,8 @@ Keys are read for **presence, not truthiness** — `unlisted: false` and `parent
 
 `contentPatch` is the one key that **merges**; every other key replaces the aspect it names. The merge is one level deep — a nested object in a patch replaces rather than merges — and a `null` field value removes the field. Because content is a key rather than the whole body, a `parentId` naming a container is unambiguously distinct from a content field of that name.
 
+**Only `contentPatch` bumps `version`.** `parentId`, `permissions`, `associations` and `unlisted` are no-bump aspects: each one's inverse is the same shape as the forward operation, so none of them needs a snapshot to be recoverable from, and a change set naming only those leaves `version` and `updatedAt` exactly where they stand and writes no version row. The [journal](#journal) carries what each of them moved. An `If-Match` sent beside such a change set is therefore not checked — there is no bump for it to fence — while one sent beside a set that also names `contentPatch` fences the whole call as usual.
+
 Authority resolves **per key, against the record as it stands**: `contentPatch` and `associations` are reachable by a write-holder or an `update-*` grantee; `parentId` needs that same write access _and_ a destination the requester can read; `permissions` and `unlisted` need the owner or the record's own creator. A requester who may perform every key may perform the set; a requester who may not perform one of them may not perform any of it. Every gate reads the record's pre-change state, so a widened `permissions` in a change set never satisfies the read check on a `parentId` named in the same call. A refused key refuses the whole call — nothing is partially applied and no key is silently dropped.
 
 An unrecognized top-level key is `400`; a key whose value is the wrong shape is `422`, as is a key the type does not declare inside `contentPatch`. A `parentId` a caller names must be well-formed (`400` otherwise — the empty string is not a spelling of the root, `null` is) and must name a record that exists (`409` otherwise).
@@ -118,7 +123,9 @@ An unrecognized top-level key is `400`; a key whose value is the wrong shape is 
 
 `associate()` / `dissociate()` keep their own endpoints: they amend the association set where the `associations` key replaces it, so two clients tagging one record both succeed through `POST .../associations` and race through the key.
 
-Version history requires the same access `PATCH`/`DELETE` require — a write-holder, or the owner — not plain read. A read-only requester gets `403`.
+Version history and the [journal](#journal) require the same access `PATCH`/`DELETE` require — a write-holder, or the owner — not plain read. A read-only requester gets `403`.
+
+**A snapshot carries content and the `typeId` it was read under, and nothing else.** No version has ever captured `parentId`, `unlistedAt`, `permissions` or `associations`, since none of those bumps a version, so `POST /records/:id/restore/:version` settles content and `typeId` alone: the record comes back in whatever container it is in now, listed however it is listed now, reachable by whoever reaches it now. Undoing a move is a change set's `parentId` — the journal entry for the move is what names where it came from.
 
 `POST /records/:id/migrate` is the only way a record's `typeId` changes after creation, and is owner-acting-alone only — a non-owner gets `403` regardless of any write grant or record-level permission they hold. Body is `{ toTypeId, content }`: `content` is the full post-migration content, computed client-side by the type's owning app; the server validates it against `toTypeId`'s schema before writing and leaves a pre-migration snapshot in version history. Accepts the same `If-Match` header as `PATCH`.
 
@@ -132,7 +139,9 @@ A `relationship` association's `target` is a discriminated union naming which id
 { "kind": "relationship", "label": "syndicated-to", "target": { "scope": "external", "ns": "atproto", "id": "at://..." } }
 ```
 
-A change set's `permissions` key replaces every permission on the record and answers `200` with the updated record. An empty array makes the record private (owner-only). `GET /records/:id/permissions` reads them back under the `{ "permissions": [...] }` envelope.
+A change set's `permissions` key replaces every permission on the record and answers `200` with the updated record. An empty array makes the record private (owner-only). `GET /records/:id/permissions` reads them back under the `{ "permissions": [...] }` envelope, and `POST /records/:id/permissions[/delete]` amend the set one element at a time — see [Permissions](#permissions).
+
+**`permissions` and `associations` are separate domains over one store.** A permission element named in the `associations` key — or an `association` element in `permissions`, or either through the wrong pair of endpoints — is `400` with code `bad_request`: the refusal says the caller named the wrong surface rather than sent a malformed value. Each key replaces only within its own domain, so an app editing tags is never handed the ACL and cannot drop it.
 
 `POST /records/:id/undelete` reverses a soft delete and returns the record as it now stands (`deletedAt` absent). Idempotent — a second call on an already-active record returns the same result.
 
@@ -140,7 +149,7 @@ A change set's `permissions` key replaces every permission on the record and ans
 
 `createdAt`/`updatedAt` are honored only from the stack owner acting alone (undelegated, authenticated as the owner) — the same tier that gates hard delete, `commitMigration()`, and `includeUnlisted`. From anyone else, both are dropped rather than forwarded: forwarding them would otherwise turn an ordinary grantee's create into a `403`, since a non-owner backdating attempt is refused outright rather than silently ignored. For an owner-acting-alone create: `updatedAt` defaults to `createdAt` (never to now), so a plain import doesn't fabricate an edit; `updatedAt` earlier than `createdAt` is a `422` validation error, including when `createdAt` itself defaulted to now; omitting `id` derives it from `createdAt` instead of the current time; supplying both `id` and `createdAt` checks them against each other under the same clock-skew tolerance. An owner's plain `id`-only create (no `createdAt`) is unaffected — it still gets the ordinary id-vs-now check. A malformed `createdAt`/`updatedAt` value returns `422` with code `validation`.
 
-`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, `POST /records/:id/migrate`, `POST /records/:id/associations`, and `POST /records/:id/associations/delete`. One `If-Match` fences a whole multi-aspect change set. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins. A malformed value (not a bare, optionally quoted version — a weak comparator like `W/"5"` included) is `400`, not read as absent: a header sent to fence a write that silently degrades to unconditional last-writer-wins defeats the only thing it was sent to do.
+`If-Match: "<version>"` is accepted for optimistic concurrency on every endpoint that bumps a record's version — `PATCH /records/:id`, `DELETE /records/:id`, `POST /records/:id/undelete`, `POST /records/:id/restore/:version`, and `POST /records/:id/migrate`. One `If-Match` fences a whole multi-aspect change set. The association and permission endpoints read no `If-Match`, and one sent to any of them is ignored rather than refused: a set add or remove composes whatever the write order, so there is no race for a precondition to guard. A mismatch returns `412` with code `version_conflict` and a `versionConflict: { recordId, expectedVersion, actualVersion }` payload; omitting the header keeps last-writer-wins. A malformed value (not a bare, optionally quoted version — a weak comparator like `W/"5"` included) is `400`, not read as absent: a header sent to fence a write that silently degrades to unconditional last-writer-wins defeats the only thing it was sent to do.
 
 ### Query parameters
 
@@ -173,6 +182,64 @@ A relationship association's target names one of three scopes — a Record, an i
 
 A soft-deleted record refuses further mutation: `PATCH`, `POST .../associations`, `POST .../associations/delete`, `POST .../migrate`, and `POST .../restore/:version` all return `409` with code `conflict` until `POST /records/:id/undelete` reverses the delete. `GET` and version-history reads are unaffected — the refusal applies only to mutation.
 
+**A hard delete answers `200` with the record it destroyed**, as it last stood, and `404` for a record that was not there. It is the one response that is not the record a write produced, because this write produces none: the attachment associations and `file-ref` fields in that body are the files the purge stranded, and the purge has just destroyed every other row naming them, so a client answered an empty body could not name the bytes it may now need to erase. A `purged` change-feed frame still carries nothing — that fans out to every subscriber, while this body goes only to the owner who authorized the purge.
+
+## Journal
+
+Every write that emits a change event also appends one entry to the record's journal — a second durable tier beside version history, holding what the change moved, who moved it, and the association deltas nothing else retains. A snapshot answers _what could be put back_; an entry answers _what happened_.
+
+```
+GET /records/:id/journal             — the log, oldest first
+GET /records/:id/journal?sinceSeq=4  — entries after seq 4, exclusive
+GET /records/:id/journal?limit=50    — at most 50 entries
+```
+
+```json
+{
+  "entries": [
+    {
+      "seq": 2,
+      "at": "2026-08-13T12:00:00.000Z",
+      "kind": "changed",
+      "ops": ["associate"],
+      "version": 1,
+      "typeId": "com.example/note@1",
+      "actor": { "entityId": "did:key:z6Mk..." },
+      "associations": [
+        {
+          "op": "repoint",
+          "association": {
+            "kind": "attachment",
+            "label": "avatar",
+            "fileId": "abc123",
+            "attachmentRecordId": "1hk153x00002"
+          },
+          "previous": {
+            "kind": "attachment",
+            "label": "avatar",
+            "fileId": "abc123",
+            "attachmentRecordId": "1hk153x00001"
+          }
+        }
+      ]
+    }
+  ],
+  "cursor": null
+}
+```
+
+**`associations` is the field a client can get nowhere else.** Each element is a tagged edit — `add`, `repoint` or `remove` — and the two that displace something carry `previous` beside the thing that displaced it, so an inverse is read off one element rather than joined across two lists. It keeps what an add overwrote in place and what a removal took away, annotation included. The [change feed](#change-feed) reports only what is current, across two flat lists, and no snapshot carries associations at all.
+
+**`seq` is the entry's own** — a dense integer from 1 per record, never the feed's opaque whole-stack cursor. No value crosses between them.
+
+**`cursor` is the only end-of-log signal.** This server caps a page at 500 entries and reports the `seq` to send back as `sinceSeq`; it is `null` once nothing follows. A page shorter than the `limit` asked for must not be read as an exhausted log. Omitting `limit` reads the whole log by contract, so no default page size is supplied on the caller's behalf — the cap is announced through `cursor` instead.
+
+**`previousParentId` is the one field on any response where `null` is a value rather than an input spelling.** Absent means the entry is not a reparent; present and `null` means the record moved out of the root. Everywhere else the two collapse to absent, which here would lose which of them happened — and nothing else keeps a move's origin at all. `parentId`, which says where the record landed, follows the ordinary rule and is absent for the root.
+
+**Gated on the mutate surface, exactly as the version endpoints are.** A write-holder, the owner, or the creator passes; a plain reader gets `403`. **Authority elements are omitted for a requester who may not reshare the record**: an entry's `ops` still carries `permissions`, so the response names that the ACL moved, but the `permission` and `anyone` elements are dropped and the `associations` field goes with them when nothing else is in it. Entries are never dropped, so `seq` stays dense.
+
+A record the server does not have — never created, or hard-deleted — is `404`, never an empty log: a hard delete destroys the journal, and an empty log means "nothing changed" unconditionally. The 404-over-403 rule applies as everywhere, so a requester who cannot read the record gets `404` rather than the `403` above.
+
 ## Unlisted
 
 `unlistedAt` is orthogonal to `permissions`: it says nothing about who may read a record, only whether it is enumerable. A record with `unlistedAt` set is still reachable by `GET /records/:id` for anyone who may already read it — unlisted withholds a record from enumeration, never from access.
@@ -181,7 +248,7 @@ A soft-deleted record refuses further mutation: `PATCH`, `POST .../associations`
 PATCH /records/:id     body: { "unlisted": boolean }
 ```
 
-Answers `200` with the updated record — it bumps `version` like any other mutation, and is snapshotted to version history the same way — carrying `unlistedAt` when `true`, absent when `false`. Accepts the same optional `If-Match` precondition as every other mutating endpoint, and returns `409` on a soft-deleted record like the other mutating endpoints above. Gated exactly like the `permissions` key: owner or creator, asked of both identities under delegation. A non-boolean value is `422`, the shape error every change-set key answers with.
+Answers `200` with the updated record, carrying `unlistedAt` when `true` and absent when `false`. A listing transition is its own inverse, so it bumps no `version` and takes no snapshot — the [journal](#journal) is where it is recorded — and an `If-Match` beside a change set naming only this key is not checked. Returns `409` on a soft-deleted record like the other mutating endpoints above. Gated exactly like the `permissions` key: owner or creator, asked of both identities under delegation. A non-boolean value is `422`, the shape error every change-set key answers with.
 
 **`includeUnlisted` is owner-only.** `GET /records`, `POST /records/query`, and `GET /changes` all accept it (excluded by default, like `includeDeleted`), and all three refuse it with `403` for any requester but the owner acting alone — enumeration standing rests on nothing but ownership, so no grant or delegation carries it. On `GET /changes` the refusal happens before the SSE stream opens.
 
@@ -215,7 +282,9 @@ Query parameters, all optional and composable: `typeId` (repeatable, matched by 
 
 A `reparent` is matched against **both** containers the move concerns, so a subscription filtered on the origin learns the record left it — the record's post-change state alone would answer only for the destination. The frame carries the destination in `parentId`, as every frame carries the record's state at the moment of the change, so a subscriber compares it against its own filter to tell a departure from an arrival. Its `kind` is `changed`, not `deleted`: the record is still there and still readable, only its container moved.
 
-Every change (`event: record`) carries `kind`, `ops`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `ops` names every aspect the version actually moved (`create`, `patch`, `associate`, `dissociate`, `permissions`, `reparent`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`, `unlist`, `list`) for a consumer that distinguishes, say, a reshare from an edit. It is derived by diffing the record against its prior state rather than read off the request, so a change set naming an aspect without moving it is never reported as moving it; it is never empty, and is multi-entry only for a change set, since every other op names a whole-record transition and is emitted alone. `kind` resolves to the most conservative entry — a change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it. A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
+Every change (`event: record`) carries `kind`, `ops`, `recordId`, `typeId`, `version`, `updatedAt`, and — when known — `actor` (who made the change; never the record's own author, which is what `entityId` filters on). `kind` is the coarse branch a handler can be complete on; `ops` names every aspect the write actually moved (`create`, `patch`, `associate`, `dissociate`, `permissions`, `reparent`, `migrate`, `restore`, `delete`, `undelete`, `hard-delete`, `unlist`, `list`) for a consumer that distinguishes, say, a reshare from an edit. It is derived by diffing the record against its prior state rather than read off the request, so a change set naming an aspect without moving it is never reported as moving it; it is never empty, and is multi-entry only for a change set, since every other op names a whole-record transition and is emitted alone. Most ops bump no `version` — only `patch` and the whole-record transitions do — so a frame for one of the rest carries whatever `version`/`updatedAt` the record already held. `kind` resolves to the most conservative entry — a change set carrying `unlist` is `deleted` whatever else it carries, because a subscriber holding the record still has to drop it. A frame whose `ops` include `associate` or `dissociate` carries `associationsAdded` / `associationsRemoved`, reporting what the call moved: an added association as it now stands, annotation included, and a removed one by identity only, since its annotation no longer describes anything current. Both report only what is true now — the [journal](#journal) is where an overwritten or removed annotation survives.
+
+A `purged` frame — from a hard delete — carries none of `record`, `parentId`, or the record's own author, whatever the connection asked for: hard delete is the erasure primitive, and a frame naming what was destroyed is deliberately all that survives it.
 
 A record this connection may not read produces no frame at all — not an empty or redacted one — the same reasoning that keeps a count of the whole match off the query envelope: the existence of a change is itself a disclosure.
 
@@ -262,17 +331,29 @@ An `attachment` association (`{ kind: "attachment", label, fileId }`, set via `P
 
 ## Permissions
 
-Records are private by default (readable only by the stack owner). The `permissions` field controls access:
+Records are private by default (readable only by the stack owner). A record's `permissions` field is a list of **authority associations** — the bit is the element's label, so granting and revoking are a plain add and remove:
 
 ```json
-{ "access": "public" }
-{ "access": "entity", "entityId": "...", "read": true, "write": false }
-{ "access": "group",  "groupId":  "...", "read": true, "write": true  }
+{ "kind": "permission", "label": "read",  "grantee": { "scope": "entity", "entityId": "did:key:..." } }
+{ "kind": "permission", "label": "write", "grantee": { "scope": "group",  "groupId": "1hk153x0000g", "role": "member" } }
+{ "kind": "anyone",     "label": "read" }
 ```
+
+A group grantee always names a `role` — `member` is the wider set, `admin` the narrower, matching the roster labels where admin implies member. There is no absent-role spelling to fall back on. `anyone` spells reach to the world affirmatively and carries `read` or nothing, so no dropped field on a `permission` element can produce it.
+
+```
+GET  /records/:id/permissions         — read the set
+POST /records/:id/permissions         — grant one element
+POST /records/:id/permissions/delete  — revoke one element (by body)
+```
+
+The two `POST`s each take one element as their body, **amend** the set, and answer `200` with the updated record — where a change set's `permissions` key replaces the set wholesale. Amending is what survives two admins sharing one record at once. They carry the **reshare gate** rather than the write bit: a write-holder who is neither owner nor creator gets `403`, because a write-holder who could grant would escalate to deciding who else reaches the record. Permission elements are associations, so neither endpoint bumps `version` or reads `If-Match`.
+
+**Write implies read**, as a cross-element invariant over the set a write would produce. A body producing a set where some grantee holds `write` with no `read` beside it is `422` with code `validation` — here and anywhere else a request body carries `permissions` — so revoking a `read` while its `write` stands earns the same refusal. An `anyone` element satisfies it for every grantee: a world-readable record leaves no writer blind. `permissions: []` is an ordinary one-call write, since it names nothing at all.
 
 Non-owner entities authenticate either via the DID challenge-response handshake above or with tokens issued by the owner via `POST /tokens`, and are subject to both record-level permissions and create-grant checks on write.
 
-A type-level grant names a specific entity (`grant(<did>, ...)`) or no entity at all. **A grant with no grantee is a grant to the public.** It resolves for any authenticated entity, and since `POST /auth/challenge` lets anyone authenticate by generating a keypair, "any authenticated entity" means anyone who can reach the server — there is no vouching step in between. Grant a DID by name unless you genuinely mean everyone. (Note the asymmetry with record-level permissions above, which have a `group` tier between `entity` and `public`; type-level grants have no group tier, so a set of entities is expressed as one named grant each.)
+A type-level grant names its grantee affirmatively in `content.grantee`, in one of three tiers: `{ "kind": "entity", "entityId": ... }`, `{ "kind": "group", "groupId": ..., "role": "member" | "admin" }`, or `{ "kind": "authenticated" }`. The field is required, so no tier is reachable by omission — a body that lost it is `422` rather than stored as a grant to everyone. **`{ "kind": "authenticated" }` is a grant to the public**: it resolves for any authenticated entity, and since `POST /auth/challenge` lets anyone authenticate by generating a keypair, that means anyone who can reach the server — there is no vouching step in between. Name a DID unless you genuinely mean everyone. It is distinct from a record permission's `anyone`, which reaches an unauthenticated requester too.
 
 ### Principal and subject
 

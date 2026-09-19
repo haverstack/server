@@ -106,7 +106,26 @@ describe('Versions', () => {
         TYPE_ID,
         { body: 'v1' },
         {
-          permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write }],
+          permissions: write
+            ? [
+                {
+                  kind: 'permission',
+                  label: 'read',
+                  grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+                },
+                {
+                  kind: 'permission',
+                  label: 'write',
+                  grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+                },
+              ]
+            : [
+                {
+                  kind: 'permission',
+                  label: 'read',
+                  grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+                },
+              ],
         },
       );
       await t.ctx.stack.patchContent(record.id, { body: 'v2' });
@@ -136,42 +155,58 @@ describe('Versions', () => {
     });
   });
 
-  it('strips permissions from a version snapshot for a non-owner write-holder, but keeps entityId', async () => {
+  it('carries no containment, listing or authority state on a snapshot', async () => {
+    const container = await t.ctx.stack.create(TYPE_ID, { body: 'container' });
     const record = await t.ctx.stack.create(
       TYPE_ID,
       { body: 'v1' },
       {
-        permissions: [{ access: 'entity', entityId: OTHER_ENTITY_ID, read: true, write: true }],
+        parentId: container.id,
+        unlisted: true,
+        permissions: [
+          {
+            kind: 'permission',
+            label: 'read',
+            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+          },
+        ],
       },
     );
     await t.ctx.stack.patchContent(record.id, { body: 'v2' });
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
 
-    const { data } = await req(t.app, 'GET', `/records/${record.id}/versions`, { token });
-    const versions = data as Array<Record<string, unknown>>;
-    expect(versions[0].permissions).toBeUndefined();
-
-    const { data: ownerData } = await req(t.app, 'GET', `/records/${record.id}/versions`, {
+    const { data } = await req(t.app, 'GET', `/records/${record.id}/versions`, {
       token: TEST_TOKEN,
     });
-    const ownerVersions = ownerData as Array<Record<string, unknown>>;
-    expect(ownerVersions[0].permissions).toBeDefined();
+    const snapshot = (data as Array<Record<string, unknown>>)[0];
+    expect(snapshot.content).toEqual({ body: 'v1' });
+    expect(snapshot.parentId).toBeUndefined();
+    expect(snapshot.unlistedAt).toBeUndefined();
+    expect(snapshot.permissions).toBeUndefined();
   });
 
-  it('bumps version on every mutation kind, not just content updates', async () => {
+  it('bumps version for a content mutation and for nothing else', async () => {
     const record = await t.ctx.stack.create(TYPE_ID, { body: 'v1' });
     expect(record.version).toBe(1);
 
+    // Associations, the ACL and listing state are all no-bump tiers: their
+    // inverse is the same shape as the forward operation, so none of them
+    // needs a snapshot to be recoverable from.
     await t.ctx.stack.associate(record.id, { kind: 'tag', label: 'starred' });
+    expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(1);
+
+    await t.ctx.stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(1);
+
+    await t.ctx.stack.mutate(record.id, { unlisted: true });
+    expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(1);
+
+    await t.ctx.stack.patchContent(record.id, { body: 'v2' });
     expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(2);
 
-    await t.ctx.stack.mutate(record.id, { permissions: [{ access: 'public' }] });
+    await t.ctx.stack.delete(record.id);
     expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(3);
 
-    await t.ctx.stack.delete(record.id);
-    expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(4);
-
     await t.ctx.stack.undelete(record.id);
-    expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(5);
+    expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(4);
   });
 });
