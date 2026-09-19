@@ -122,26 +122,25 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   // DELETE /records/:id  (?hard=true for permanent). Both answer 200 with
   // a record: a soft delete with the tombstone it produced, a hard delete
-  // with the record as it last stood — read ahead of the write, because a
-  // purge leaves nothing to read afterwards. That body is the requester's
-  // only report of the files the purge stranded; every other row naming
-  // them is gone by the time it lands. See docs/spec/wire-format.md
-  // § Records and docs/spec/attachments.md § A purge strands the bytes it
-  // referenced.
+  // with the record as it stood immediately before destruction. That body
+  // is the requester's only report of the files the purge stranded; every
+  // other row naming them is gone by the time it lands. deleteAndReturn()
+  // captures it inside the same write that destroys or tombstones the
+  // record, so there is no read-then-delete window for a concurrent write
+  // to fall into. See docs/spec/wire-format.md § Records and
+  // docs/spec/attachments.md § A purge strands the bytes it referenced.
   app.delete('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
     const session = stack.forSession(auth);
 
-    // Read before the gate runs, so an unreadable record is the 404 the
-    // disclosure rule requires rather than the 403 delete() would raise.
-    const purged = hard ? await session.get(id) : null;
-    if (hard && !purged) throw new StackNotFoundError('Record not found');
-
-    await session.delete(id, { hard, ifVersion: parseIfMatch(c.req.header('If-Match')) });
-    if (hard) return c.json(serializeRecord(purged!));
-    return c.json(serializeRecord((await session.get(id))!));
+    const { record } = await session.deleteAndReturn(id, {
+      hard,
+      ifVersion: parseIfMatch(c.req.header('If-Match')),
+    });
+    if (!record) throw new StackNotFoundError('Record not found');
+    return c.json(serializeRecord(record));
   });
 
   // POST /records/:id/undelete — reverses a soft delete; idempotent
