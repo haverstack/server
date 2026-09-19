@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@haverstack/adapter-local':
-        specifier: ^0.35.0
-        version: 0.35.0
+        specifier: ^0.35.1
+        version: 0.35.1
       '@haverstack/commons':
         specifier: ^0.30.0
         version: 0.30.0
@@ -264,8 +264,8 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@haverstack/adapter-local@0.35.0':
-    resolution: {integrity: sha512-cvzEDHxvHVW3lQj26sb/SvKUIdoexK+fsJTEGHnmEWq3NndcJg+8iyI7y5eF/SZF6WxeOkrMOer8xJy1HK5c/Q==}
+  '@haverstack/adapter-local@0.35.1':
+    resolution: {integrity: sha512-Wpdr3Fwq7LaQu29vFK0odpOysMUCtw6+nma0MZkby5imPOaoJLCzAJffzpbRCIkDPtVxsPJr8d1HuWmJNfd1Aw==}
     engines: {node: '>=22.5.0'}
 
   '@haverstack/blob-adapter-disk@0.34.0':
@@ -1261,7 +1261,7 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@haverstack/adapter-local@0.35.0':
+  '@haverstack/adapter-local@0.35.1':
     dependencies:
       '@haverstack/blob-adapter-disk': 0.34.0
       '@haverstack/core': 0.36.0
