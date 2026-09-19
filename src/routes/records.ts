@@ -256,7 +256,8 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const entries = await scopeFor(auth).getJournal(id, { ...query, limit });
     const body: WireJournalResponse = {
       entries: entries.map(serializeJournalEntry),
-      cursor: entries.length === limit ? entries[entries.length - 1]!.seq : null,
+      cursor:
+        entries.length > 0 && entries.length === limit ? entries[entries.length - 1]!.seq : null,
     };
     return c.json(body);
   });

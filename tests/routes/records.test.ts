@@ -676,6 +676,17 @@ describe('Records', () => {
     });
   });
 
+  describe('GET /records/:id/journal', () => {
+    it('answers an empty page rather than crashing on limit=0', async () => {
+      const record = await seedRecord(t.ctx);
+      const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?limit=0`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(200);
+      expect(data).toEqual({ entries: [], cursor: null });
+    });
+  });
+
   describe('_attachment@1 immutable field protection', () => {
     // Enforced by ScopedStack now (docs/spec/attachments.md § The _attachment
     // record type) — putAttachment() itself returns the created record, so
