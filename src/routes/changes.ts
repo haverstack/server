@@ -80,7 +80,7 @@ export function changeRoutes(
   }
 
   // Single-process only: events exist only in the process owning the
-  // stack's storage (docs/spec/wire-format.md § Feed implementation
+  // stack's storage (docs/spec/change-feed.md § Feed implementation
   // checklist), and query workers only read. A second process subscribing
   // to its own Stack over the same storage would see nothing and look fine
   // in testing — worth knowing before scaling this horizontally.

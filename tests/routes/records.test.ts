@@ -688,7 +688,7 @@ describe('Records', () => {
   });
 
   describe('_attachment@1 immutable field protection', () => {
-    // Enforced by ScopedStack now (docs/spec/attachments.md § The _attachment
+    // Enforced by ScopedStack (docs/spec/attachments.md § The _attachment
     // record type) — putAttachment() itself returns the created record, so
     // no separate query is needed to find it.
     async function seedAttachment(ctx: TestApp['ctx']) {
@@ -812,12 +812,13 @@ describe('Records', () => {
 
     it('returns 403 when non-owner tries to soft-DELETE a grant record, even with direct write permission on it', async () => {
       // stack.grant() doesn't give the grantee read access to the grant
-      // record itself, only to what it grants — which would now 404 under
-      // the anti-oracle rule rather than exercise the write-protection fence
-      // this test targets. Set an explicit read+write permission directly on
-      // the grant record instead (same approach as the PATCH sibling above)
-      // so the requester can read it, and the refusal proven here is really
-      // "_grant records refuse deletion" rather than "can't read it".
+      // record itself, only to what it grants — which 404s under the
+      // disclosure rule (docs/spec/disclosure.md) rather than exercise the
+      // write-protection fence this test targets. Set an explicit read+write
+      // permission directly on the grant record instead (same approach as
+      // the PATCH sibling above) so the requester can read it, and the
+      // refusal proven here is really "_grant records refuse deletion"
+      // rather than "can't read it".
       const grantRecord = await t.ctx.stack.create(
         GRANT_TYPE_ID,
         {
@@ -875,10 +876,10 @@ describe('Records', () => {
     });
 
     it('blocks escalation: a write-holder on a grant record cannot expand its actions', async () => {
-      // stack.grant() itself now refuses to grant update-own on _grant (see
-      // the first test in this block), so the escalation vector this test
-      // guards against is reached the only way still possible: a grant
-      // record with an explicit record-level write permission on itself.
+      // stack.grant() refuses to grant update-own on _grant (see the first
+      // test in this block), so the escalation vector this test guards
+      // against is reached the only way open to it: a grant record with an
+      // explicit record-level write permission on itself.
       const readGrant = await t.ctx.stack.create(
         GRANT_TYPE_ID,
         {

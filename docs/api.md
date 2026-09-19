@@ -355,6 +355,38 @@ Non-owner entities authenticate either via the DID challenge-response handshake 
 
 A type-level grant names its grantee affirmatively in `content.grantee`, in one of three tiers: `{ "kind": "entity", "entityId": ... }`, `{ "kind": "group", "groupId": ..., "role": "member" | "admin" }`, or `{ "kind": "authenticated" }`. The field is required, so no tier is reachable by omission — a body that lost it is `422` rather than stored as a grant to everyone. **`{ "kind": "authenticated" }` is a grant to the public**: it resolves for any authenticated entity, and since `POST /auth/challenge` lets anyone authenticate by generating a keypair, that means anyone who can reach the server — there is no vouching step in between. Name a DID unless you genuinely mean everyone. It is distinct from a record permission's `anyone`, which reaches an unauthenticated requester too.
 
+### The grant surface
+
+There is no `/grants` endpoint: a grant **is** a record of the system type `_grant@1`, so the record routes are its surface.
+
+```
+POST   /records                            — write a grant
+GET    /records?typeId=_grant@1            — list them
+DELETE /records/:id                        — withdraw one (soft delete)
+POST   /records/:id/undelete               — put it back
+```
+
+A write is an ordinary `POST /records` whose `typeId` is `_grant@1` and whose content is `{ typeId, actions, grantee }`:
+
+```json
+{
+  "typeId": "_grant@1",
+  "content": {
+    "typeId": "com.example/comment@1",
+    "actions": ["create", "read-own", "update-own", "delete-own"],
+    "grantee": { "kind": "entity", "entityId": "did:key:..." }
+  }
+}
+```
+
+**Only the stack owner acting alone writes a grant.** No grant can confer it — `_grant` is among the families a grant cannot target — and no record-level `write` element reaches it either, so a delegated token is refused however the owner issued it. Editing an existing grant is refused on the same terms as minting a fresh one, since rewriting a grant's `actions`, `typeId` or `grantee` reaches the same escalation by another route. The fence covers every write verb, not merely the content one: `PATCH /records/:id`, both `/permissions` endpoints, both `/associations` endpoints, `DELETE /records/:id`, `POST /records/:id/undelete` and `POST /records/:id/restore/:version` are all refused. A requester who can read the grant gets `403`; one who cannot gets `404`, per the disclosure rule above.
+
+Reads are not fenced: `GET /records/:id`, `GET /records/:id/versions` and `GET /records/:id/versions/:version` on a grant stay on their ordinary gates, so a write-holder can audit the grant they hold. History is the mutate surface, so a `read` element alone does not reach it.
+
+**Listing is enumeration, so listing state applies.** A grant created with `unlistedAt` still confers — withholding a record from enumeration decides nothing about what it means — but it is excluded from `GET /records?typeId=_grant@1` like any other unlisted record. Pass `includeUnlisted=true` (owner only) to see every grant, which is what a "what have I granted" view needs: a grant that confers and cannot be found is the one state worth avoiding.
+
+Withdrawal is a soft delete, and only deletion withdraws a grant. `DELETE /records/:id` takes effect on the next request — there is no authority cache to outlive it, on a query or a by-id read — and `POST /records/:id/undelete` restores it, the same recovery any other accidental delete has.
+
 ### Principal and subject
 
 A token names two identities: the **principal**, who authenticated (governs authority — grant lookups, a change set's `permissions` key), and the **subject**, who the principal acts for (governs attribution — `record.entityId` on writes, `-own` matching). They're equal unless the token was issued with `onBehalfOf`. A delegated write stamps both: `entityId` is the subject, and `principalId` appears on the record when the two differ. `GET /records` and `POST /records/query` can filter on either via `entityId`/`principalId`. Effective authority under delegation is the intersection of both parties' grants — a delegated app can't act beyond what the subject itself also permits.

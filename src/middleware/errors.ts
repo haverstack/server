@@ -35,11 +35,12 @@ export function errorMiddleware(logger: Logger, stack: Stack): ErrorHandler<AppE
         );
       }
       // On the wire a refused record is indistinguishable from a missing
-      // one (docs/spec/wire-format.md § Server implementation checklist),
-      // but the operator is not the adversary: an unscoped probe, on a path
-      // already failing, recovers the distinction for the log alone. Debug
-      // rather than warn — this is the sharing graph, which the spec asks
-      // stay out of a general-purpose aggregator by default.
+      // one (docs/spec/disclosure.md), but the operator is not the
+      // adversary, and docs/spec/wire-format.md § Server implementation
+      // checklist asks for the distinction: an unscoped probe, on a path
+      // already failing, recovers it for the log alone. Debug rather than
+      // warn — this is the sharing graph, which the spec asks stay out of a
+      // general-purpose aggregator by default.
       if (err instanceof StackNotFoundError && auth) {
         const recordId = c.req.param('id');
         if (recordId) {
