@@ -35,6 +35,7 @@ import {
   queryRecordsFixtures,
   patchContentFixtures,
   deleteRecordFixtures,
+  deleteRecordSequenceFixtures,
   undeleteRecordFixtures,
   associateFixtures,
   dissociateFixtures,
@@ -60,6 +61,7 @@ import {
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
 } from '@haverstack/conformance-fixtures';
+import * as conformanceFixtures from '@haverstack/conformance-fixtures';
 import type { WireRecord, WireJournalResponse } from '@haverstack/wire-types';
 import { generateId, hashSchema } from '@haverstack/core';
 import type { DataAssociation } from '@haverstack/core';
@@ -141,11 +143,20 @@ afterEach(async () => {
   await t.cleanup();
 });
 
+/**
+ * Every fixture name any block claimed, pooled across the file. A block's
+ * own coverage test answers "did this block handle its array"; the pooled
+ * set is what answers "is there an array no block reads at all", which no
+ * per-block check can see. See the whole-package test at the end.
+ */
+const accountedFor = new Set<string>();
+
 function assertCoverage(names: string[], handled: Set<string>, skipped: Set<string>) {
   for (const name of names) {
     expect(handled.has(name) || skipped.has(name)).toBe(true);
   }
   expect(names.length).toBe(handled.size + skipped.size);
+  for (const name of [...handled, ...skipped]) accountedFor.add(name);
 }
 
 // -------------------------------------------------------
@@ -681,9 +692,53 @@ describe('deleteRecord fixtures', () => {
     expect(after.status).toBe(404);
   });
 
-  test('coverage', () => {
+  // A write landing immediately before the purge, which the purge's own
+  // response must still name: what it pins is that the body is read at
+  // destruction time, not from a snapshot taken earlier in the request.
+  // Both fileIds are real uploads rather than the fixture's literal ones —
+  // an attachment association names a stored file, so the shape of the
+  // claim travels and the hashes cannot.
+  test('hard-delete-under-concurrent-write', async () => {
+    const sequence = deleteRecordSequenceFixtures.find(
+      (f) => f.name === 'hard-delete-under-concurrent-write',
+    )!;
+    handled.add(sequence.name);
+    const [cover, late] = await Promise.all([
+      t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png', 'cover.png'),
+      t.ctx.stack.putAttachment(new Uint8Array([4, 5, 6]), 'image/png', 'late.png'),
+    ]);
+    const coverFileId = (cover.content as { fileId: string }).fileId;
+    const lateFileId = (late.content as { fileId: string }).fileId;
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'x' },
+      {
+        associations: [
+          { kind: 'attachment', label: 'cover', fileId: coverFileId, attachmentRecordId: cover.id },
+        ],
+      },
+    );
+
+    const [addStep, purgeStep] = sequence.steps;
+    const added = await req(t.app, addStep!.method, `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { kind: 'attachment', label: 'late-arrival', fileId: lateFileId },
+    });
+    expect(added.status).toBe(addStep!.responseStatus);
+
+    const purged = await req(t.app, purgeStep!.method, `/records/${record.id}?hard=true`, {
+      token: TEST_TOKEN,
+    });
+    expect(purged.status).toBe(purgeStep!.responseStatus);
+    const associations = (purged.data as { associations?: Array<{ label: string }> }).associations;
+    expect(associations?.map((a) => a.label).sort()).toEqual(['cover', 'late-arrival']);
+  });
+
+  // Last in the block: the sequence fixture above is dispatched after the
+  // single-request ones, so `handled` is only complete here.
+  test('coverage: deleteRecordFixtures + deleteRecordSequenceFixtures', () => {
     assertCoverage(
-      deleteRecordFixtures.map((f) => f.name),
+      [...deleteRecordFixtures, ...deleteRecordSequenceFixtures].map((f) => f.name),
       handled,
       new Set(),
     );
@@ -3008,5 +3063,47 @@ describe('attachmentUpload fixtures', () => {
       handled,
       new Set(),
     );
+  });
+});
+
+// -------------------------------------------------------
+// The whole package
+// -------------------------------------------------------
+
+/**
+ * Every fixture the package exports reaches a block above.
+ *
+ * Each block's own coverage test pins its own array, which leaves one gap
+ * open by construction: an array this file never imports is guarded by
+ * nothing, so core can add a whole block and every test here still passes.
+ * This closes it by discovering the arrays rather than listing them —
+ * anything shaped like a fixture set is found whether or not a block reads
+ * it, and an unhandled one names itself in the failure.
+ */
+describe('fixture package coverage', () => {
+  /** An exported array of fixtures, told from the package's other exports by shape. */
+  function isFixtureArray(value: unknown): value is Array<{ name: string }> {
+    return (
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.every(
+        (entry) =>
+          typeof entry === 'object' &&
+          entry !== null &&
+          typeof (entry as { name?: unknown }).name === 'string' &&
+          ('method' in entry || 'steps' in entry),
+      )
+    );
+  }
+
+  test('every exported fixture array is dispatched by a block above', () => {
+    const missing: string[] = [];
+    for (const [exportName, value] of Object.entries(conformanceFixtures)) {
+      if (!isFixtureArray(value)) continue;
+      for (const fixture of value) {
+        if (!accountedFor.has(fixture.name)) missing.push(`${exportName}: ${fixture.name}`);
+      }
+    }
+    expect(missing).toEqual([]);
   });
 });

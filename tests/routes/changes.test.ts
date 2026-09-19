@@ -580,4 +580,152 @@ describe('GET /changes', () => {
       }
     });
   });
+
+  /**
+   * A subscription is the one place authority is cached across operations
+   * — ScopedSubscription holds the grant set and resolved roster roles for
+   * the life of the connection — so it is the one place a withdrawal has to
+   * arrive as an event to be seen at all. The resume test above covers a
+   * change that happened while nobody was listening; these cover the
+   * opposite case, where the connection is open the whole time and the
+   * cache is what could go stale. See docs/spec/events.md § Permission
+   * scoping.
+   */
+  describe('permission scoping on a live connection', () => {
+    it('stops delivering once a type-level grant is withdrawn mid-stream', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'covered by a grant' });
+      const [grantRecord] = await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
+        { typeId: NOTE_TYPE, actions: ['read-any'] },
+      ]);
+      const { token } = await t.ctx.tokens.createToken(CONTRIBUTOR_ID);
+
+      const conn = await openChangeFeed(t.app, '/changes', { token });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.patchContent(record.id, { title: 'still readable' });
+        const [, first] = await conn.waitForFrames(2);
+        expect((first.data as { recordId: string }).recordId).toBe(record.id);
+
+        // The withdrawal itself is a write to a _grant record, which is what
+        // expires the connection's cached grant set.
+        await t.ctx.stack.delete(grantRecord!.id);
+        await t.ctx.stack.patchContent(record.id, { title: 'no longer readable' });
+
+        // Nothing further for this record. A frame the subscriber *can* see
+        // is what proves the feed is still live rather than merely quiet:
+        // without it, a broken connection would pass this test.
+        const proof = await t.ctx.stack.create(
+          NOTE_TYPE,
+          { title: 'visible' },
+          {
+            permissions: [
+              {
+                kind: 'permission',
+                label: 'read',
+                grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+              },
+            ],
+          },
+        );
+        const frames = await conn.waitForFrames(3);
+        expect((frames[2]!.data as { recordId: string }).recordId).toBe(proof.id);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('starts delivering once a record is shared mid-stream', async () => {
+      const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'private' });
+      const { token } = await t.ctx.tokens.createToken(CONTRIBUTOR_ID);
+
+      const conn = await openChangeFeed(t.app, '/changes', { token });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.patchContent(record.id, { title: 'still private' });
+        await expect(conn.waitForFrames(2, 300)).rejects.toThrow();
+
+        await t.ctx.stack.grantAccess(record.id, {
+          kind: 'permission',
+          label: 'read',
+          grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+        });
+        await t.ctx.stack.patchContent(record.id, { title: 'now shared' });
+
+        const frames = await conn.waitForFrames(2);
+        expect((frames[1]!.data as { recordId: string }).recordId).toBe(record.id);
+      } finally {
+        await conn.close();
+      }
+    });
+
+    it('follows a roster change mid-stream, which is a separate cache from the grant set', async () => {
+      const group = await t.ctx.stack.create(
+        '_group@1',
+        { name: 'Editors' },
+        {
+          associations: [
+            {
+              kind: 'relationship',
+              label: 'admin',
+              target: { scope: 'entity', entityId: t.ctx.stack.ownerEntityId },
+            },
+            {
+              kind: 'relationship',
+              label: 'member',
+              target: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            },
+          ],
+        },
+      );
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE,
+        { title: 'group-readable' },
+        {
+          permissions: [
+            {
+              kind: 'permission',
+              label: 'read',
+              grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            },
+          ],
+        },
+      );
+      const { token } = await t.ctx.tokens.createToken(CONTRIBUTOR_ID);
+
+      const conn = await openChangeFeed(t.app, '/changes', { token });
+      try {
+        await conn.waitForFrames(1); // ready
+        await t.ctx.stack.patchContent(record.id, { title: 'read through the roster' });
+        const [, first] = await conn.waitForFrames(2);
+        expect((first.data as { recordId: string }).recordId).toBe(record.id);
+
+        // Removal is a write to the _group record, which expires the
+        // connection's resolved roles rather than its grant set.
+        await t.ctx.stack.dissociate(group.id, {
+          kind: 'relationship',
+          label: 'member',
+          target: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+        });
+        await t.ctx.stack.patchContent(record.id, { title: 'off the roster' });
+
+        const proof = await t.ctx.stack.create(
+          NOTE_TYPE,
+          { title: 'visible' },
+          {
+            permissions: [
+              {
+                kind: 'permission',
+                label: 'read',
+                grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+              },
+            ],
+          },
+        );
+        const frames = await conn.waitForFrames(3);
+        expect((frames[2]!.data as { recordId: string }).recordId).toBe(proof.id);
+      } finally {
+        await conn.close();
+      }
+    });
+  });
 });
