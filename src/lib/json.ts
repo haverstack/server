@@ -6,7 +6,7 @@ import type { AppEnv } from '../types.js';
  * `c.req.json()` throws a bare `SyntaxError` on malformed input, which isn't
  * a `StackError` — left uncaught it falls through errorMiddleware's
  * catch-all as an unlabeled 500 instead of the 400 `bad_request` every other
- * structurally-invalid request gets (docs/spec/wire-format.md § 400 vs 422).
+ * structurally-invalid request gets (docs/spec/wire-format.md § Error responses).
  */
 export async function readJson<T = unknown>(c: Context<AppEnv>): Promise<T> {
   let parsed: unknown;

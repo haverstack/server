@@ -97,7 +97,7 @@ describe('Versions', () => {
     });
   });
 
-  // Version history is now gated at the same level as update() — a
+  // Version history is gated at the same level as update() — a
   // write-holder, or owner/creator — not plain read, per
   // docs/spec/versioning.md § History access.
   describe('history access requires write, not read', () => {

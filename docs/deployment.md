@@ -196,8 +196,8 @@ Because the stack is designed to be accessed by many different kinds of apps, yo
 
 Two consequences worth being deliberate about:
 
-- **A grant with no grantee is a grant to the public.** `grant(null, ...)` resolves for any authenticated entity, and with the handshake open that is anyone at all. See [Access Control](./api.md#access-control). Named grants (`grant(<did>, ...)`) are unaffected — those are the vouching mechanism.
-- **Rate limiting matters more than it used to.** A stranger's handshake writes a token row with a 7-day expiry. Expired rows are reclaimed, but live ones are bounded only by issuance rate × TTL, so the proxy-level rate limit configured above is what actually caps the table. The reverse-proxy examples in this guide already cover `/auth/*`; if you write your own, do not exempt it.
+- **The `authenticated` tier is a grant to the public.** A grant whose grantee is `{ "kind": "authenticated" }` resolves for any authenticated entity, and with the handshake open that is anyone at all. See [Permissions](./api.md#permissions). A grant naming a DID (`{ "kind": "entity", "entityId": "did:key:..." }`) is unaffected — that is the vouching mechanism. No tier is reachable by omission: a grant whose grantee is absent or unrecognized is refused, and confers nothing if it reaches storage some other way, so this is a reach you have to ask for by name.
+- **Rate limiting is what bounds the token table.** A stranger's handshake writes a token row with a 7-day expiry. Expired rows are reclaimed, but live ones are bounded only by issuance rate × TTL, so the proxy-level rate limit configured above is what actually caps the table. The reverse-proxy examples in this guide already cover `/auth/*`; if you write your own, do not exempt it.
 
 Read access is unaffected either way: `GET /records`, `POST /records/query`, `GET /records/:id` and `GET /types` already serve anonymous requests, subject to record-level permissions, and a token changes nothing about what they return.
 
