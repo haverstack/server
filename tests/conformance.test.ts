@@ -109,6 +109,9 @@ const NOTE_TYPE_V2 = 'com.example/note@2';
 const COMMENT_TYPE = 'com.example/comment@1';
 const ATTACHMENT_TYPE = '_attachment@1';
 const GROUP_TYPE = '_group@1';
+const GRANT_TYPE = '_grant@1';
+// Ungrantable, which is what the evaluation-time fixture below is about.
+const APP_TYPE = '_app@1';
 
 // Reusing the fixtures' own placeholder identities as real test principals
 // where possible — nothing requires DID-shaped entityIds for a record-level
@@ -152,11 +155,14 @@ afterEach(async () => {
 const accountedFor = new Set<string>();
 
 function assertCoverage(names: string[], handled: Set<string>, skipped: Set<string>) {
+  // Recorded before the assertions below, not after: a block that fails its
+  // own coverage would otherwise report nothing, and the whole-package test
+  // at the end would blame it for every fixture it does dispatch.
+  for (const name of [...handled, ...skipped]) accountedFor.add(name);
   for (const name of names) {
     expect(handled.has(name) || skipped.has(name)).toBe(true);
   }
   expect(names.length).toBe(handled.size + skipped.size);
-  for (const name of [...handled, ...skipped]) accountedFor.add(name);
 }
 
 // -------------------------------------------------------
@@ -1887,6 +1893,100 @@ describe('error response fixtures', () => {
     expectError(status, data, fixture);
   });
 
+  // The grantee arms, each refused at the write. All seven are plain
+  // POST /records bodies, so they share one shape: mint a fresh id and
+  // dispatch. What differs is which part of the grantee names nobody.
+  for (const name of [
+    'error-validation-grant-entity-grantee-without-entity-id',
+    'error-validation-grant-entity-grantee-with-empty-entity-id',
+    'error-validation-grant-group-grantee-without-group-id',
+    'error-validation-grant-group-grantee-with-listing-only-role',
+    'error-validation-grant-grantee-with-unknown-kind',
+    'error-validation-grant-null-grantee',
+  ]) {
+    test(name, async () => {
+      const fixture = find(name);
+      const body = withFreshId(fixture.requestBody as WireRecord);
+      const { status, data } = await dispatch(fixture, TEST_TOKEN, undefined, body);
+      expectError(status, data, fixture);
+    });
+  }
+
+  test('error-validation-anyone-element-labelled-write', async () => {
+    const fixture = find('error-validation-anyone-element-labelled-write');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(
+      fixture,
+      TEST_TOKEN,
+      `/records/${record.id}/permissions`,
+    );
+    expectError(status, data, fixture);
+  });
+
+  test('error-permission-grant-on-an-ungrantable-family-confers-nothing', async () => {
+    const fixture = find('error-permission-grant-on-an-ungrantable-family-confers-nothing');
+    // Written directly, because stack.grant() refuses the family outright —
+    // which is the point: this pins the second half of the rule, where a
+    // grant that reached storage some other way is read back as conferring
+    // nothing rather than trusted.
+    await t.ctx.stack.create(GRANT_TYPE, {
+      typeId: APP_TYPE,
+      actions: ['create', 'read-any'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const body = withFreshId(fixture.requestBody as WireRecord);
+    const { status, data } = await dispatch(fixture, token, undefined, body);
+    expectError(status, data, fixture);
+
+    // The control, without which this test would pass just as well with no
+    // grant at all: the same grant shape on a grantable family does confer
+    // the create, so the refusal above is the family's and not the absence
+    // of any machinery to read.
+    await t.ctx.stack.create(GRANT_TYPE, {
+      typeId: COMMENT_TYPE,
+      actions: ['create', 'read-any'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
+    const control = await req(t.app, 'POST', '/records', {
+      token,
+      body: { id: generateId(), typeId: COMMENT_TYPE, content: { body: 'allowed' } },
+    });
+    expect(control.status).toBe(200);
+  });
+
+  test('error-not-found-mutate-grant-with-no-read-companion', async () => {
+    const fixture = find('error-not-found-mutate-grant-with-no-read-companion');
+    // update-any with no read-any beside it: the grant conveys neither the
+    // write nor a read, so the refusal is the disclosure rule's 404 rather
+    // than a 403. Written directly for the same reason as above — the
+    // companion rule is enforced where the grant is read, not only where a
+    // helper wrote it.
+    await t.ctx.stack.create(GRANT_TYPE, {
+      typeId: NOTE_TYPE,
+      actions: ['create', 'update-any'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: "someone else's" });
+    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
+    expectError(status, data, fixture);
+
+    // The control: add the read companion the grant was missing and the very
+    // same PATCH succeeds. Without it this test would pass against a server
+    // that had no grant for this requester at all, since both answer 404.
+    await t.ctx.stack.create(GRANT_TYPE, {
+      typeId: NOTE_TYPE,
+      actions: ['update-any', 'read-any'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
+    const control = await req(t.app, 'PATCH', `/records/${record.id}`, {
+      token,
+      body: fixture.requestBody,
+    });
+    expect(control.status).toBe(200);
+  });
+
   test('error-query-permission-kind-in-associations-key', async () => {
     const fixture = find('error-query-permission-kind-in-associations-key');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
@@ -3099,6 +3199,9 @@ describe('fixture package coverage', () => {
   test('every exported fixture array is dispatched by a block above', () => {
     const missing: string[] = [];
     for (const [exportName, value] of Object.entries(conformanceFixtures)) {
+      // A union of the arrays beside it: every name in it is already
+      // reported under the export that owns it.
+      if (exportName === 'allConformanceFixtures') continue;
       if (!isFixtureArray(value)) continue;
       for (const fixture of value) {
         if (!accountedFor.has(fixture.name)) missing.push(`${exportName}: ${fixture.name}`);
