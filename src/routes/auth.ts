@@ -105,10 +105,13 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
     // Undelegated by construction: principalId and subjectId are both the
     // proven DID. Never let a client name its own subject.
     const expiresAt = new Date(Date.now() + AUTH_TOKEN_TTL_MS);
-    const { token } = await ctx.tokens.createToken(body.did, {
-      expiresAt,
-      label: AUTH_TOKEN_LABEL,
-    });
+    const { token } = await ctx.tokens.createToken(
+      { subjectId: body.did, principalId: body.did },
+      {
+        expiresAt,
+        label: AUTH_TOKEN_LABEL,
+      },
+    );
 
     // Reported from the value just written rather than read back through
     // listTokens(), an unpaginated scan of every token ever issued — on an

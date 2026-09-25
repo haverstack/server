@@ -13,7 +13,7 @@ describe('POST /tokens', () => {
   it('owner can create a token and receives the token value', async () => {
     const { status, data } = await req(t.app, 'POST', '/tokens', {
       token: TEST_TOKEN,
-      body: { entityId: OTHER_ENTITY_ID, label: 'test-label' },
+      body: { principalId: OTHER_ENTITY_ID, label: 'test-label' },
     });
     expect(status).toBe(201);
     const d = data as Record<string, unknown>;
@@ -24,11 +24,11 @@ describe('POST /tokens', () => {
     expect(d.label).toBe('test-label');
   });
 
-  it('owner can assert a delegation via onBehalfOf', async () => {
+  it('owner can assert a delegation via subjectId', async () => {
     const subjectId = 'did:key:subject-entity-id-00000003';
     const { status, data } = await req(t.app, 'POST', '/tokens', {
       token: TEST_TOKEN,
-      body: { entityId: OTHER_ENTITY_ID, onBehalfOf: subjectId },
+      body: { principalId: OTHER_ENTITY_ID, subjectId },
     });
     expect(status).toBe(201);
     const d = data as Record<string, unknown>;
@@ -40,7 +40,7 @@ describe('POST /tokens', () => {
   });
 
   it('returns 403 for a non-owner authenticated entity', async () => {
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'POST', '/tokens', {
       token,
       body: {},
@@ -53,32 +53,32 @@ describe('POST /tokens', () => {
     expect(status).toBe(401);
   });
 
-  it('rejects a non-DID entityId with 422', async () => {
+  it('rejects a non-DID principalId with 422', async () => {
     const { status, data } = await req(t.app, 'POST', '/tokens', {
       token: TEST_TOKEN,
-      body: { entityId: 'not-a-did' },
+      body: { principalId: 'not-a-did' },
     });
     expect(status).toBe(422);
     const body = data as { error: { code: string; details: Array<{ path: string }> } };
     expect(body.error.code).toBe('validation');
-    expect(body.error.details.some((d) => d.path === 'entityId')).toBe(true);
+    expect(body.error.details.some((d) => d.path === 'principalId')).toBe(true);
   });
 
-  it('rejects a non-DID onBehalfOf with 422', async () => {
+  it('rejects a non-DID subjectId with 422', async () => {
     const { status, data } = await req(t.app, 'POST', '/tokens', {
       token: TEST_TOKEN,
-      body: { entityId: OTHER_ENTITY_ID, onBehalfOf: 'not-a-did' },
+      body: { principalId: OTHER_ENTITY_ID, subjectId: 'not-a-did' },
     });
     expect(status).toBe(422);
     const body = data as { error: { code: string; details: Array<{ path: string }> } };
     expect(body.error.code).toBe('validation');
-    expect(body.error.details.some((d) => d.path === 'onBehalfOf')).toBe(true);
+    expect(body.error.details.some((d) => d.path === 'subjectId')).toBe(true);
   });
 
   it('reports the stored createdAt, matching what GET /tokens later reports', async () => {
     const { data } = await req(t.app, 'POST', '/tokens', {
       token: TEST_TOKEN,
-      body: { entityId: OTHER_ENTITY_ID },
+      body: { principalId: OTHER_ENTITY_ID },
     });
     const created = data as { id: string; createdAt: string };
 
@@ -100,8 +100,8 @@ describe('GET /tokens', () => {
   });
 
   it('owner can list tokens without token values exposed', async () => {
-    await t.ctx.adapter.createToken(OTHER_ENTITY_ID, { label: 'tok-a' });
-    await t.ctx.adapter.createToken(OTHER_ENTITY_ID, { label: 'tok-b' });
+    await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID }, { label: 'tok-a' });
+    await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID }, { label: 'tok-b' });
 
     const { status, data } = await req(t.app, 'GET', '/tokens', { token: TEST_TOKEN });
     expect(status).toBe(200);
@@ -114,7 +114,7 @@ describe('GET /tokens', () => {
   });
 
   it('returns 403 for a non-owner authenticated entity', async () => {
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'GET', '/tokens', { token });
     expect(status).toBe(403);
   });
@@ -135,7 +135,7 @@ describe('DELETE /tokens/:id', () => {
   });
 
   it('owner can revoke a token', async () => {
-    const { id } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { id } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'DELETE', `/tokens/${id}`, { token: TEST_TOKEN });
     expect(status).toBe(204);
 
@@ -144,13 +144,15 @@ describe('DELETE /tokens/:id', () => {
   });
 
   it('returns 403 for a non-owner authenticated entity', async () => {
-    const { id, token: otherToken } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { id, token: otherToken } = await t.ctx.adapter.createToken({
+      subjectId: OTHER_ENTITY_ID,
+    });
     const { status } = await req(t.app, 'DELETE', `/tokens/${id}`, { token: otherToken });
     expect(status).toBe(403);
   });
 
   it('returns 401 for an unauthenticated request', async () => {
-    const { id } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { id } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'DELETE', `/tokens/${id}`);
     expect(status).toBe(401);
   });

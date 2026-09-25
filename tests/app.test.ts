@@ -8,8 +8,12 @@ describe('request body size limit', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
-      body: { kind: 'text' as const, required: false as const },
+    await t.ctx.stack.defineType({
+      id: NOTE_TYPE_ID,
+      name: 'Note',
+      schema: {
+        body: { kind: 'text' as const, required: false as const },
+      },
     });
   });
   afterEach(async () => {

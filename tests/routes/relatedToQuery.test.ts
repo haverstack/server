@@ -10,8 +10,12 @@ import { buildTestApp, req, TEST_TOKEN, OTHER_ENTITY_ID, type TestApp } from '..
 const NOTE_TYPE_ID = 'com.example.test/note@1';
 
 async function seedType(ctx: TestApp['ctx']) {
-  return ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
-    body: { kind: 'text' as const, required: true as const },
+  return ctx.stack.defineType({
+    id: NOTE_TYPE_ID,
+    name: 'Note',
+    schema: {
+      body: { kind: 'text' as const, required: true as const },
+    },
   });
 }
 
@@ -39,7 +43,7 @@ describe('POST /records/query filter.relatedTo', () => {
           {
             kind: 'relationship',
             label: 'child',
-            target: { scope: 'record', recordId: target.id },
+            target: { kind: 'record', recordId: target.id },
           },
         ],
       },
@@ -47,7 +51,7 @@ describe('POST /records/query filter.relatedTo', () => {
 
     const { status, data } = await req(t.app, 'POST', '/records/query', {
       token: TEST_TOKEN,
-      body: { filter: { relatedTo: { target: { scope: 'record', recordId: target.id } } } },
+      body: { filter: { relatedTo: { target: { kind: 'record', recordId: target.id } } } },
     });
     expect(status).toBe(200);
     expect((data as { records: Array<{ id: string }> }).records.map((r) => r.id)).toEqual([
@@ -64,7 +68,7 @@ describe('POST /records/query filter.relatedTo', () => {
           {
             kind: 'relationship',
             label: 'author',
-            target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
       },
@@ -73,7 +77,7 @@ describe('POST /records/query filter.relatedTo', () => {
     const { status, data } = await req(t.app, 'POST', '/records/query', {
       token: TEST_TOKEN,
       body: {
-        filter: { relatedTo: { target: { scope: 'entity', entityId: OTHER_ENTITY_ID } } },
+        filter: { relatedTo: { target: { kind: 'entity', entityId: OTHER_ENTITY_ID } } },
       },
     });
     expect(status).toBe(200);
@@ -92,7 +96,7 @@ describe('POST /records/query filter.relatedTo', () => {
             kind: 'relationship',
             label: 'syndicated-to',
             target: {
-              scope: 'external',
+              kind: 'external',
               ns: 'atproto',
               id: 'at://did:plc:abc/app.bsky.feed.post/1',
             },
@@ -103,7 +107,7 @@ describe('POST /records/query filter.relatedTo', () => {
 
     const { status, data } = await req(t.app, 'POST', '/records/query', {
       token: TEST_TOKEN,
-      body: { filter: { relatedTo: { target: { scope: 'external', ns: 'atproto' } } } },
+      body: { filter: { relatedTo: { target: { kind: 'external', ns: 'atproto' } } } },
     });
     expect(status).toBe(200);
     expect((data as { records: Array<{ id: string }> }).records.map((r) => r.id)).toEqual([
@@ -121,7 +125,7 @@ describe('POST /records/query filter.relatedTo', () => {
           {
             kind: 'relationship',
             label: 'reply-to',
-            target: { scope: 'record', recordId: target.id },
+            target: { kind: 'record', recordId: target.id },
           },
         ],
       },
@@ -153,7 +157,7 @@ describe('POST /records/query filter.relatedTo', () => {
   it('rejects a record target with an empty recordId with 400', async () => {
     const { status, data } = await req(t.app, 'POST', '/records/query', {
       token: TEST_TOKEN,
-      body: { filter: { relatedTo: { target: { scope: 'record', recordId: '' } } } },
+      body: { filter: { relatedTo: { target: { kind: 'record', recordId: '' } } } },
     });
     expect(status).toBe(400);
     expect((data as { error: { code: string } }).error.code).toBe('bad_request');
@@ -164,7 +168,7 @@ describe('POST /records/query filter.relatedTo', () => {
     const { status, data } = await req(t.app, 'POST', '/records/query', {
       token: TEST_TOKEN,
       body: {
-        filter: { relatedTo: { target: { scope: 'record', recordId: target.id, stackUrl: '' } } },
+        filter: { relatedTo: { target: { kind: 'record', recordId: target.id, stackUrl: '' } } },
       },
     });
     expect(status).toBe(400);
@@ -174,7 +178,7 @@ describe('POST /records/query filter.relatedTo', () => {
   it('rejects an external target with an empty id with 400', async () => {
     const { status, data } = await req(t.app, 'POST', '/records/query', {
       token: TEST_TOKEN,
-      body: { filter: { relatedTo: { target: { scope: 'external', ns: 'atproto', id: '' } } } },
+      body: { filter: { relatedTo: { target: { kind: 'external', ns: 'atproto', id: '' } } } },
     });
     expect(status).toBe(400);
     expect((data as { error: { code: string } }).error.code).toBe('bad_request');

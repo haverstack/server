@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { StackPermissionError } from '@haverstack/core';
-import type { TokenSession } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core/wire';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
@@ -57,7 +57,7 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
  * authenticated as the owner rather than merely delegated for it. Being the
  * owner is never on its own sufficient under delegation — a delegated
  * session with the owner as principal still fails this, matching
- * `ScopedStack`'s own owner-only gates (e.g. hard delete). See
+ * `ScopedStack`'s own owner-only gates (e.g. purge). See
  * docs/spec/access-control.md § Delegation.
  */
 export function isOwnerActingAlone(auth: TokenSession | null, ownerEntityId: string): boolean {

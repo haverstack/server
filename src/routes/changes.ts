@@ -4,10 +4,11 @@ import { streamSSE } from 'hono/streaming';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { Config } from '../config.js';
-import type { ScopedStack, TokenSession, RecordChange } from '@haverstack/core';
-import { StackQueryError, StackPermissionError } from '@haverstack/core';
+import type { ScopedStack, RecordChange } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core/wire';
+import { StackBadRequestError, StackPermissionError } from '@haverstack/core';
 import { parseChangeParams } from '@haverstack/core/wire';
-import { serializeChange, isValidSeq } from '@haverstack/wire-types';
+import { serializeChange, isValidCursor } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
 import { safeCompare, isOwnerActingAlone } from '../middleware/auth.js';
@@ -40,7 +41,7 @@ export type ChangeRouteOptions = {
    * Whether a presented cursor is honored at all. Default true and never
    * false in production, since discovery advertises resume unconditionally.
    * It exists because `resume: false` is real, spec-defined behavior
-   * (`ready` with no `seq`, then `reset` with reason `not_supported`) that
+   * (`ready` with no `cursor`, then `reset` with reason `not_supported`) that
    * a conformance fixture needs a way to reach.
    */
   resume?: boolean;
@@ -52,7 +53,7 @@ export type ChangeRouteOptions = {
  * Raw cursor text presented on this connection, if any — `Last-Event-ID`
  * takes priority over `?since=` (a browser EventSource-style reconnect
  * sends the header; `?since=` exists for a client whose transport can't
- * set one). Not yet validated or decoded — see isValidSeq()/decodeCursor().
+ * set one). Not yet validated or decoded — see isValidCursor()/decodeCursor().
  */
 function presentedCursorRaw(c: Context<AppEnv>, url: URL): string | undefined {
   return c.req.header('Last-Event-ID') ?? url.searchParams.get('since') ?? undefined;
@@ -76,7 +77,7 @@ export function changeRoutes(
 
   /** Scope to a session if authenticated, else the anonymous (public-only) view. */
   function scopeFor(auth: TokenSession | null): ScopedStack {
-    return auth ? ctx.stack.forSession(auth) : ctx.stack.asEntity(null);
+    return auth ? ctx.stack.asActor(auth) : ctx.stack.asEntity(null);
   }
 
   // Single-process only: events exist only in the process owning the
@@ -100,10 +101,10 @@ export function changeRoutes(
 
     // A charset-invalid cursor is refused rather than treated as a cache
     // miss: no conformant server could have minted it, so there is nothing
-    // to reconcile. isValidSeq() is the rule minted cursors meet on the way
+    // to reconcile. isValidCursor() is the rule minted cursors meet on the way
     // out, applied here on the way in.
-    if (resumeEnabled && presentedRaw !== undefined && !isValidSeq(presentedRaw)) {
-      throw new StackQueryError(`Invalid cursor: "${presentedRaw}"`);
+    if (resumeEnabled && presentedRaw !== undefined && !isValidCursor(presentedRaw)) {
+      throw new StackBadRequestError(`Invalid cursor: "${presentedRaw}"`);
     }
 
     // Never accepted: a bearer token is read only from the Authorization
@@ -174,7 +175,7 @@ export function changeRoutes(
           const queued: ResumeEntry[] = [];
           const detachLive = buffer.subscribeLive((entry) => {
             if (replaying) queued.push(entry);
-            else send('record', entry.frame, entry.frame.seq);
+            else send('record', entry.frame, entry.frame.cursor);
           });
           // Registered before the first `await` below, so a subscription
           // opened above is always released — including when that await
@@ -200,7 +201,7 @@ export function changeRoutes(
             }
           }
 
-          send('ready', { seq: buffer.headCursor() });
+          send('ready', { cursor: buffer.headCursor() });
 
           if (resetReason) {
             send('reset', { reason: resetReason });
@@ -216,13 +217,13 @@ export function changeRoutes(
               }
               // Once the gate trips this connection is closing, so the
               // remaining entries are permission checks nobody will read.
-              if (!send('record', entry.frame, entry.frame.seq)) break;
+              if (!send('record', entry.frame, entry.frame.cursor)) break;
             }
           }
 
           replaying = false;
           for (const entry of queued) {
-            if (!send('record', entry.frame, entry.frame.seq)) break;
+            if (!send('record', entry.frame, entry.frame.cursor)) break;
           }
         }
 

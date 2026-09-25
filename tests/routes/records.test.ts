@@ -13,9 +13,13 @@ const NOTE_TYPE_ID = 'com.example.test/note@1';
 const GRANT_TYPE_ID = `${SYSTEM_TYPES.GRANT}@1`;
 
 async function seedType(ctx: TestApp['ctx']) {
-  return ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
-    title: { kind: 'string' as const },
-    body: { kind: 'text' as const, required: true as const },
+  return ctx.stack.defineType({
+    id: NOTE_TYPE_ID,
+    name: 'Note',
+    schema: {
+      title: { kind: 'string' as const },
+      body: { kind: 'text' as const, required: true as const },
+    },
   });
 }
 
@@ -136,19 +140,19 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status } = await req(t.app, 'GET', `/records/${record.id}`, { token });
       expect(status).toBe(200);
     });
 
     it('entity without a grant gets 404, not 403, and no WWW-Authenticate (already authenticated)', async () => {
       const record = await seedRecord(t.ctx);
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const res = await t.app.request(`/records/${record.id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -218,7 +222,7 @@ describe('Records', () => {
             {
               kind: 'relationship',
               label: 'child',
-              target: { scope: 'record', recordId: target.id },
+              target: { kind: 'record', recordId: target.id },
             },
           ],
         },
@@ -231,7 +235,7 @@ describe('Records', () => {
             {
               kind: 'relationship',
               label: 'sibling',
-              target: { scope: 'record', recordId: target.id },
+              target: { kind: 'record', recordId: target.id },
             },
           ],
         },
@@ -265,7 +269,7 @@ describe('Records', () => {
             {
               kind: 'relationship',
               label: 'author',
-              target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
@@ -293,7 +297,7 @@ describe('Records', () => {
               kind: 'relationship',
               label: 'syndicated-to',
               target: {
-                scope: 'external',
+                kind: 'external',
                 ns: 'atproto',
                 id: 'at://did:plc:abc/app.bsky.feed.post/1',
               },
@@ -309,7 +313,7 @@ describe('Records', () => {
             {
               kind: 'relationship',
               label: 'syndicated-to',
-              target: { scope: 'external', ns: 'activitypub', id: 'https://example.social/1' },
+              target: { kind: 'external', ns: 'activitypub', id: 'https://example.social/1' },
             },
           ],
         },
@@ -342,7 +346,7 @@ describe('Records', () => {
             {
               kind: 'relationship',
               label: 'reply-to',
-              target: { scope: 'record', recordId: (await seedRecord(t.ctx)).id },
+              target: { kind: 'record', recordId: (await seedRecord(t.ctx)).id },
             },
           ],
         },
@@ -355,7 +359,7 @@ describe('Records', () => {
             {
               kind: 'relationship',
               label: 'reply-to',
-              target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
@@ -379,7 +383,7 @@ describe('Records', () => {
             {
               kind: 'relationship',
               label: 'ref',
-              target: { scope: 'record', recordId: target.id },
+              target: { kind: 'record', recordId: target.id },
             },
           ],
         },
@@ -393,7 +397,7 @@ describe('Records', () => {
               kind: 'relationship',
               label: 'ref',
               target: {
-                scope: 'record',
+                kind: 'record',
                 recordId: target.id,
                 stackUrl: 'https://other.example/stack',
               },
@@ -537,12 +541,12 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
         body: { contentPatch: { body: 'hacked' } },
@@ -563,9 +567,9 @@ describe('Records', () => {
       expect(after?.deletedAt).toBeDefined();
     });
 
-    it('hard-deletes with ?hard=true (owner), answering with the record it destroyed', async () => {
+    it('purges with ?purge=true (owner), answering with the record it destroyed', async () => {
       const record = await seedRecord(t.ctx);
-      const { status, data } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, {
+      const { status, data } = await req(t.app, 'DELETE', `/records/${record.id}?purge=true`, {
         token: TEST_TOKEN,
       });
       expect(status).toBe(200);
@@ -574,11 +578,10 @@ describe('Records', () => {
     });
 
     it('names the files a purge stranded in the body it answers with', async () => {
-      const uploaded = await t.ctx.stack.putAttachment(
-        new Uint8Array([1, 2, 3]),
-        'image/png',
-        'cover.png',
-      );
+      const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+        mimeType: 'image/png',
+        filename: 'cover.png',
+      });
       const record = await t.ctx.stack.create(NOTE_TYPE_ID, { body: 'with a cover' });
       await t.ctx.stack.associate(record.id, {
         kind: 'attachment',
@@ -589,7 +592,7 @@ describe('Records', () => {
       // Every other row naming the file is gone once this returns, so the
       // body is the requester's one chance to hold the argument
       // deleteAttachment() takes.
-      const { status, data } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, {
+      const { status, data } = await req(t.app, 'DELETE', `/records/${record.id}?purge=true`, {
         token: TEST_TOKEN,
       });
       expect(status).toBe(200);
@@ -597,8 +600,8 @@ describe('Records', () => {
       expect(associations?.map((a) => a.fileId)).toContain(uploaded.content.fileId);
     });
 
-    it('answers 404 for a hard delete of a record that is not there', async () => {
-      const { status } = await req(t.app, 'DELETE', '/records/1hk153x00099?hard=true', {
+    it('answers 404 for a purge of a record that is not there', async () => {
+      const { status } = await req(t.app, 'DELETE', '/records/1hk153x00099?purge=true', {
         token: TEST_TOKEN,
       });
       expect(status).toBe(404);
@@ -613,24 +616,24 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
             {
               kind: 'permission',
               label: 'write',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status } = await req(t.app, 'DELETE', `/records/${record.id}`, { token });
       expect(status).toBe(200);
       const after = await t.ctx.adapter.getRecord(record.id);
       expect(after?.deletedAt).toBeDefined();
     });
 
-    it('non-owner gets 403 on hard delete even with write access', async () => {
+    it('non-owner gets 403 on purge even with write access', async () => {
       const record = await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'shared' },
@@ -639,18 +642,18 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
             {
               kind: 'permission',
               label: 'write',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
-      const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token });
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
+      const { status } = await req(t.app, 'DELETE', `/records/${record.id}?purge=true`, { token });
       expect(status).toBe(403);
       expect(await t.ctx.adapter.getRecord(record.id)).not.toBeNull();
     });
@@ -692,11 +695,10 @@ describe('Records', () => {
     // record type) — putAttachment() itself returns the created record, so
     // no separate query is needed to find it.
     async function seedAttachment(ctx: TestApp['ctx']) {
-      const record = await ctx.stack.putAttachment(
-        new TextEncoder().encode('hello'),
-        'text/plain',
-        'hello.txt',
-      );
+      const record = await ctx.stack.putAttachment(new TextEncoder().encode('hello'), {
+        mimeType: 'text/plain',
+        filename: 'hello.txt',
+      });
       return { fileId: (record.content as { fileId: string }).fileId, record };
     }
 
@@ -764,20 +766,21 @@ describe('Records', () => {
 
   describe('_grant@1 write protection', () => {
     it('refuses to grant privileges on _grant/_config/_app (privilege-escalation guard)', async () => {
-      // stack.grant() forecloses the escalation at the source: a grant
+      // stack.grantType() forecloses the escalation at the source: a grant
       // targeting _grant cannot be handed out at all, so a non-owner has
       // nothing to escalate with.
       await expect(
-        t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-          { actions: ['update-own'], typeId: GRANT_TYPE_ID },
-        ]),
+        t.ctx.stack.grantType(GRANT_TYPE_ID, {
+          actions: ['update-own'],
+          grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+        }),
       ).rejects.toThrow(/privilege escalation/);
     });
 
     it('returns 403 when non-owner tries to PATCH a grant record, even with direct write permission on it', async () => {
       // ScopedStack refuses writes to any _grant record unconditionally,
       // "whatever its own permissions say" — set an explicit write grant on
-      // this one record (bypassing stack.grant()'s own refusal by creating
+      // this one record (bypassing stack.grantType()'s own refusal by creating
       // it directly) to prove the fence holds regardless.
       const grantRecord = await t.ctx.stack.create(
         GRANT_TYPE_ID,
@@ -791,17 +794,17 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
             {
               kind: 'permission',
               label: 'write',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const { status } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
         token,
@@ -811,7 +814,7 @@ describe('Records', () => {
     });
 
     it('returns 403 when non-owner tries to soft-DELETE a grant record, even with direct write permission on it', async () => {
-      // stack.grant() doesn't give the grantee read access to the grant
+      // stack.grantType() doesn't give the grantee read access to the grant
       // record itself, only to what it grants — which 404s under the
       // disclosure rule (docs/spec/disclosure.md) rather than exercise the
       // write-protection fence this test targets. Set an explicit read+write
@@ -831,17 +834,17 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
             {
               kind: 'permission',
               label: 'write',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const { status } = await req(t.app, 'DELETE', `/records/${grantRecord.id}`, { token });
       expect(status).toBe(403);
@@ -849,9 +852,10 @@ describe('Records', () => {
     });
 
     it('allows the owner to PATCH a grant record', async () => {
-      const [grantRecord] = await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
-      ]);
+      const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['read-own'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
 
       const { status, data } = await req(t.app, 'PATCH', `/records/${grantRecord.id}`, {
         token: TEST_TOKEN,
@@ -863,9 +867,10 @@ describe('Records', () => {
     });
 
     it('allows the owner to soft-DELETE a grant record', async () => {
-      const [grantRecord] = await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-        { actions: ['read-own'], typeId: NOTE_TYPE_ID },
-      ]);
+      const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['read-own'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
 
       const { status } = await req(t.app, 'DELETE', `/records/${grantRecord.id}`, {
         token: TEST_TOKEN,
@@ -876,7 +881,7 @@ describe('Records', () => {
     });
 
     it('blocks escalation: a write-holder on a grant record cannot expand its actions', async () => {
-      // stack.grant() refuses to grant update-own on _grant (see the first
+      // stack.grantType() refuses to grant update-own on _grant (see the first
       // test in this block), so the escalation vector this test guards
       // against is reached the only way open to it: a grant record with an
       // explicit record-level write permission on itself.
@@ -892,17 +897,17 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
             {
               kind: 'permission',
               label: 'write',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const { status } = await req(t.app, 'PATCH', `/records/${readGrant.id}`, {
         token,
@@ -920,16 +925,16 @@ describe('Records', () => {
   // All Stack-level invariants (docs/spec.md § The _config record) —
   // inherited for free, so the server's job is only to test them.
   describe('_config protection', () => {
-    it('refuses to delete _config, soft or hard', async () => {
+    it('refuses to delete _config, soft or purge', async () => {
       const { status: soft } = await req(t.app, 'DELETE', '/records/_config', {
         token: TEST_TOKEN,
       });
       expect(soft).toBe(409);
 
-      const { status: hard } = await req(t.app, 'DELETE', '/records/_config?hard=true', {
+      const { status: purged } = await req(t.app, 'DELETE', '/records/_config?purge=true', {
         token: TEST_TOKEN,
       });
-      expect(hard).toBe(409);
+      expect(purged).toBe(409);
     });
 
     it('refuses to change _config.entityId', async () => {
@@ -962,7 +967,7 @@ describe('Records', () => {
     const APP_TYPE_ID = `${SYSTEM_TYPES.APP}@1`;
 
     it('refuses a non-owner create attempt (owner-only to set)', async () => {
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status } = await req(t.app, 'POST', '/records', {
         token,
         body: {
@@ -975,9 +980,10 @@ describe('Records', () => {
 
     it('refuses to grant create on _app (privilege-escalation guard, same as _grant/_config)', async () => {
       await expect(
-        t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-          { actions: ['create'], typeId: APP_TYPE_ID },
-        ]),
+        t.ctx.stack.grantType(APP_TYPE_ID, {
+          actions: ['create'],
+          grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+        }),
       ).rejects.toThrow(/privilege escalation/);
     });
 
@@ -1052,12 +1058,13 @@ describe('Records', () => {
 
     it('refuses a create-grant holder with no readable reference to the fileId', async () => {
       const bytes = new TextEncoder().encode('unreferenced');
-      const record = await t.ctx.stack.putAttachment(bytes, 'text/plain');
+      const record = await t.ctx.stack.putAttachment(bytes, { mimeType: 'text/plain' });
       const fileId = (record.content as { fileId: string }).fileId;
-      await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-        { actions: ['create'], typeId: ATTACHMENT_TYPE_ID },
-      ]);
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      await t.ctx.stack.grantType(ATTACHMENT_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const { status } = await req(t.app, 'POST', '/records', {
         token,
@@ -1071,7 +1078,7 @@ describe('Records', () => {
 
     it('allows a create-grant holder who can already read a record referencing the fileId', async () => {
       const bytes = new TextEncoder().encode('referenced');
-      const record = await t.ctx.stack.putAttachment(bytes, 'text/plain');
+      const record = await t.ctx.stack.putAttachment(bytes, { mimeType: 'text/plain' });
       const fileId = (record.content as { fileId: string }).fileId;
       await t.ctx.stack.create(
         NOTE_TYPE_ID,
@@ -1081,16 +1088,17 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
           associations: [{ kind: 'attachment', label: 'file', fileId }],
         },
       );
-      await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-        { actions: ['create'], typeId: ATTACHMENT_TYPE_ID },
-      ]);
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      await t.ctx.stack.grantType(ATTACHMENT_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const { status } = await req(t.app, 'POST', '/records', {
         token,
@@ -1107,32 +1115,40 @@ describe('Records', () => {
     const APP_ID = 'app-entity-id-00000004';
     const SUBJECT_ID = 'subject-entity-id-00000005';
 
-    it('a delegated session stamps principalId and attributes entityId to the subject', async () => {
+    it('a delegated session stamps createdBy with the subject and the principal', async () => {
       // Delegated authority is the intersection of both parties' grants.
-      await t.ctx.stack.grant({ kind: 'entity', entityId: SUBJECT_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      await t.ctx.stack.grant({ kind: 'entity', entityId: APP_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      const { token } = await t.ctx.adapter.createToken(APP_ID, { onBehalfOf: SUBJECT_ID });
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: SUBJECT_ID },
+      });
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: APP_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({
+        subjectId: SUBJECT_ID,
+        principalId: APP_ID,
+      });
 
       const { status, data } = await req(t.app, 'POST', '/records', {
         token,
         body: { typeId: NOTE_TYPE_ID, content: { body: 'delegated note' } },
       });
       expect(status).toBe(200);
-      const d = data as Record<string, unknown>;
-      expect(d.entityId).toBe(SUBJECT_ID);
-      expect(d.principalId).toBe(APP_ID);
+      const d = data as { createdBy: { subjectId: string; principalId?: string } };
+      expect(d.createdBy).toEqual({ subjectId: SUBJECT_ID, principalId: APP_ID });
     });
 
     it('a delegated create is refused when only one party holds the create grant', async () => {
-      await t.ctx.stack.grant({ kind: 'entity', entityId: SUBJECT_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: SUBJECT_ID },
+      });
       // APP_ID (the principal) has no grant of its own.
-      const { token } = await t.ctx.adapter.createToken(APP_ID, { onBehalfOf: SUBJECT_ID });
+      const { token } = await t.ctx.adapter.createToken({
+        subjectId: SUBJECT_ID,
+        principalId: APP_ID,
+      });
 
       const { status } = await req(t.app, 'POST', '/records', {
         token,
@@ -1141,14 +1157,19 @@ describe('Records', () => {
       expect(status).toBe(403);
     });
 
-    it('filters by ?principalId=', async () => {
-      await t.ctx.stack.grant({ kind: 'entity', entityId: SUBJECT_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      await t.ctx.stack.grant({ kind: 'entity', entityId: APP_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      const { token } = await t.ctx.adapter.createToken(APP_ID, { onBehalfOf: SUBJECT_ID });
+    it('filters by ?createdByPrincipal=', async () => {
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: SUBJECT_ID },
+      });
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: APP_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({
+        subjectId: SUBJECT_ID,
+        principalId: APP_ID,
+      });
       await req(t.app, 'POST', '/records', {
         token,
         body: { typeId: NOTE_TYPE_ID, content: { body: 'delegated note' } },
@@ -1158,12 +1179,12 @@ describe('Records', () => {
       const { data } = await req(
         t.app,
         'GET',
-        `/records?principalId=${encodeURIComponent(APP_ID)}`,
+        `/records?createdByPrincipal=${encodeURIComponent(APP_ID)}`,
         { token: TEST_TOKEN },
       );
-      const records = (data as { records: Array<{ principalId?: string }> }).records;
+      const records = (data as { records: Array<{ createdBy: { principalId?: string } }> }).records;
       expect(records).toHaveLength(1);
-      expect(records[0].principalId).toBe(APP_ID);
+      expect(records[0].createdBy.principalId).toBe(APP_ID);
     });
   });
 
@@ -1301,10 +1322,11 @@ describe('Records', () => {
     });
 
     it('drops createdAt/updatedAt from a grantee create instead of forwarding them into a 403', async () => {
-      await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const createdAt = new Date('2020-01-01T00:00:00.000Z');
       const before = Date.now();
 
@@ -1319,15 +1341,18 @@ describe('Records', () => {
     });
 
     it('drops createdAt/updatedAt from a delegated session with the owner as principal', async () => {
-      const { token } = await t.ctx.adapter.createToken(TEST_ENTITY_ID, {
-        onBehalfOf: OTHER_ENTITY_ID,
+      const { token } = await t.ctx.adapter.createToken({
+        subjectId: OTHER_ENTITY_ID,
+        principalId: TEST_ENTITY_ID,
       });
-      await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      await t.ctx.stack.grant({ kind: 'entity', entityId: TEST_ENTITY_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: TEST_ENTITY_ID },
+      });
       const createdAt = new Date('2020-01-01T00:00:00.000Z');
       const before = Date.now();
 
@@ -1379,10 +1404,11 @@ describe('Records', () => {
     });
 
     it('a non-owner grantee with a plain create grant may create unlisted — not owner-only', async () => {
-      await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status, data } = await req(t.app, 'POST', '/records', {
         token,
         body: {
@@ -1402,13 +1428,18 @@ describe('Records', () => {
       // record is the subject's own to begin with.
       const appId = 'com.example.thirdparty';
       const subjectId = 'entity-third-party-subject';
-      await t.ctx.stack.grant({ kind: 'entity', entityId: subjectId }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      await t.ctx.stack.grant({ kind: 'entity', entityId: appId }, [
-        { actions: ['create'], typeId: NOTE_TYPE_ID },
-      ]);
-      const { token } = await t.ctx.adapter.createToken(appId, { onBehalfOf: subjectId });
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: subjectId },
+      });
+      await t.ctx.stack.grantType(NOTE_TYPE_ID, {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: appId },
+      });
+      const { token } = await t.ctx.adapter.createToken({
+        subjectId: subjectId,
+        principalId: appId,
+      });
 
       const { status, data } = await req(t.app, 'POST', '/records', {
         token,
@@ -1494,13 +1525,13 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
       await t.ctx.stack.delete(record.id);
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const { status } = await req(t.app, 'POST', `/records/${record.id}/undelete`, { token });
       expect(status).toBe(403);
@@ -1526,7 +1557,7 @@ describe('Records', () => {
       const body = (await res.json()) as { permissions: unknown[] };
       expect(body.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
 
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status: anonStatus } = await req(t.app, 'GET', `/records/${record.id}`);
       expect(anonStatus).toBe(200);
       const { status: otherStatus } = await req(t.app, 'GET', `/records/${record.id}`, { token });
@@ -1575,12 +1606,12 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
         body: { permissions: [{ kind: 'anyone', label: 'read' }] },
@@ -1595,9 +1626,9 @@ describe('Records', () => {
       const record = await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'x' },
-        { entityId: OTHER_ENTITY_ID },
+        { createdBy: { subjectId: OTHER_ENTITY_ID } },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
         body: { permissions: [] },
@@ -1742,12 +1773,12 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
         token,
         body: { unlisted: true },
@@ -1827,7 +1858,7 @@ describe('Records', () => {
     });
 
     it('is refused with 403 for a non-owner, on both query endpoints', async () => {
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const getRes = await req(t.app, 'GET', '/records?includeUnlisted=true', { token });
       expect(getRes.status).toBe(403);
@@ -2046,15 +2077,15 @@ describe('Records', () => {
     const NOTE_V2_TYPE_ID = 'com.example.test/note@2';
 
     async function seedV2Type(ctx: TestApp['ctx']) {
-      return ctx.stack.defineType(
-        NOTE_V2_TYPE_ID,
-        'Note',
-        {
+      return ctx.stack.defineType({
+        id: NOTE_V2_TYPE_ID,
+        name: 'Note',
+        schema: {
           title: { kind: 'string' as const },
           body: { kind: 'text' as const, required: true as const },
         },
-        { migratesFrom: NOTE_TYPE_ID },
-      );
+        migratesFrom: NOTE_TYPE_ID,
+      });
     }
 
     it('changes typeId, bumps version, and writes the given content (owner)', async () => {
@@ -2082,17 +2113,17 @@ describe('Records', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
             {
               kind: 'permission',
               label: 'write',
-              grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
       const { status } = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
         token,

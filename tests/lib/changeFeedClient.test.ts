@@ -15,10 +15,10 @@ describe('SSEDecoder', () => {
   test('decodes multiple frames from one chunk', () => {
     const decoder = new SSEDecoder();
     const frames = decoder.push(
-      'event: ready\ndata: {"seq":"AA3f1Q"}\n\nid: AA3f1R\nevent: record\ndata: {"kind":"created"}\n\n',
+      'event: ready\ndata: {"cursor":"AA3f1Q"}\n\nid: AA3f1R\nevent: record\ndata: {"kind":"created"}\n\n',
     );
     expect(frames).toEqual([
-      { event: 'ready', data: { seq: 'AA3f1Q' } },
+      { event: 'ready', data: { cursor: 'AA3f1Q' } },
       { id: 'AA3f1R', event: 'record', data: { kind: 'created' } },
     ]);
   });
@@ -26,9 +26,9 @@ describe('SSEDecoder', () => {
   test('decodes a frame split across chunks, mid-line', () => {
     const decoder = new SSEDecoder();
     expect(decoder.push('event: rea')).toEqual([]);
-    expect(decoder.push('dy\ndata: {"se')).toEqual([]);
-    const frames = decoder.push('q":"AA3f1Q"}\n\n');
-    expect(frames).toEqual([{ event: 'ready', data: { seq: 'AA3f1Q' } }]);
+    expect(decoder.push('dy\ndata: {"cur')).toEqual([]);
+    const frames = decoder.push('sor":"AA3f1Q"}\n\n');
+    expect(frames).toEqual([{ event: 'ready', data: { cursor: 'AA3f1Q' } }]);
   });
 
   test('ignores comment lines (keepalives)', () => {

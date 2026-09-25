@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { StackQueryError } from '@haverstack/core';
+import { StackBadRequestError } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 
 /**
@@ -13,7 +13,7 @@ export async function readJson<T = unknown>(c: Context<AppEnv>): Promise<T> {
   try {
     parsed = await c.req.json<T>();
   } catch (err) {
-    if (err instanceof SyntaxError) throw new StackQueryError('Invalid JSON in request body');
+    if (err instanceof SyntaxError) throw new StackBadRequestError('Invalid JSON in request body');
     throw err;
   }
   // `null`, a bare string or a number parses fine, but every call site
@@ -21,7 +21,7 @@ export async function readJson<T = unknown>(c: Context<AppEnv>): Promise<T> {
   // throws a bare TypeError — another unlabeled 500, unauthenticated on the
   // /auth routes. Structurally invalid like malformed JSON, so a 400 too.
   if (parsed === null || typeof parsed !== 'object') {
-    throw new StackQueryError('Request body must be a JSON object');
+    throw new StackBadRequestError('Request body must be a JSON object');
   }
   return parsed as T;
 }

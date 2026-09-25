@@ -23,7 +23,7 @@ export type ResumeEntry = {
   n: number;
   recordId: string;
   isPurge: boolean;
-  /** Wire-ready, seq already attached. */
+  /** Wire-ready, cursor already attached. */
   frame: WireRecordChange;
 };
 
@@ -61,8 +61,8 @@ export class ResumeBuffer {
    */
   append(change: RecordChange): ResumeEntry {
     this.currentN += 1;
-    const seq = encodeCursor(this.id, this.currentN);
-    const frame = serializeChange({ ...change, seq });
+    const cursor = encodeCursor(this.id, this.currentN);
+    const frame = serializeChange({ ...change, cursor });
     const entry: ResumeEntry = {
       n: this.currentN,
       recordId: change.recordId,
@@ -110,8 +110,9 @@ export type ResumeBufferKeyParts = {
 /**
  * Reproducible across a reconnect that re-sends the same query params —
  * order-independent on the parts of `filter` that don't carry order of
- * their own (`typeId`/`kinds` are matched as sets, not sequences, so
- * re-sending them in a different order must key the same buffer).
+ * their own (`typeId`, `baseId`, `createdBy`'s halves and `kinds` are
+ * matched as sets, not sequences, so re-sending them in a different order
+ * must key the same buffer).
  *
  * Two filters that mean different things must never key the same buffer.
  * A buffer opens exactly one `ScopedStack.subscribe()`, carrying the
@@ -130,20 +131,30 @@ export type ResumeBufferKeyParts = {
  */
 export function resumeBufferKey(parts: ResumeBufferKeyParts): string {
   const { filter } = parts;
-  const typeId = filter.typeId
-    ? [...(Array.isArray(filter.typeId) ? filter.typeId : [filter.typeId])].sort()
-    : undefined;
-  const kinds = filter.kinds ? [...filter.kinds].sort() : undefined;
+  const typeId = asSortedSet(filter.typeId);
+  const baseId = asSortedSet(filter.baseId);
+  const createdBy = filter.createdBy && {
+    subjectId: asSortedSet(filter.createdBy.subjectId),
+    principalId: asSortedSet(filter.createdBy.principalId),
+  };
+  const kinds = asSortedSet(filter.kinds);
   return JSON.stringify({
     principalId: parts.principalId,
     subjectId: parts.subjectId,
     includeRecords: parts.includeRecords,
     includeUnlisted: parts.includeUnlisted,
     ...(typeId !== undefined && { typeId }),
+    ...(baseId !== undefined && { baseId }),
     ...(filter.parentId !== undefined && { parentId: filter.parentId }),
-    ...(filter.entityId !== undefined && { entityId: filter.entityId }),
+    ...(createdBy !== undefined && { createdBy }),
     ...(kinds !== undefined && { kinds }),
   });
+}
+
+/** A one-or-many filter value, matched as a set: normalized to a sorted array. */
+function asSortedSet<T extends string>(value: T | T[] | undefined): T[] | undefined {
+  if (value === undefined) return undefined;
+  return [...(Array.isArray(value) ? value : [value])].sort();
 }
 
 export type ResumeBufferRegistryOptions = {

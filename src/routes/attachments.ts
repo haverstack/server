@@ -42,7 +42,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const appId = c.req.query('appId') || undefined;
 
     const data = new Uint8Array(await c.req.arrayBuffer());
-    const record = await stack.forSession(auth).putAttachment(data, mimeType, filename, appId);
+    const record = await stack.asActor(auth).putAttachment(data, { mimeType, filename, appId });
     return c.json(serializeRecord(record), 200);
   });
 
@@ -53,7 +53,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     let data: Uint8Array;
     try {
-      data = await (auth ? stack.forSession(auth) : stack.asEntity(null)).getAttachment(fileId);
+      data = await (auth ? stack.asActor(auth) : stack.asEntity(null)).getAttachment(fileId);
     } catch (e) {
       // Anonymous and denied is a transport-auth failure, distinct from an
       // authenticated requester lacking access; everything else belongs to
@@ -119,7 +119,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const auth = c.get('auth')!;
     const raw = await c.req.text();
     const body = raw ? (JSON.parse(raw) as { graceMs?: number; dryRun?: boolean }) : {};
-    const result = await stack.forSession(auth).collectAttachmentGarbage({
+    const result = await stack.asActor(auth).collectAttachmentGarbage({
       ...(typeof body.graceMs === 'number' && { graceMs: body.graceMs }),
       ...(body.dryRun === true && { dryRun: true }),
     });

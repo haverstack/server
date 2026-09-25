@@ -7,8 +7,12 @@ describe('Associations', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(TYPE_ID, 'Post', {
-      text: { kind: 'text' as const, required: true as const },
+    await t.ctx.stack.defineType({
+      id: TYPE_ID,
+      name: 'Post',
+      schema: {
+        text: { kind: 'text' as const, required: true as const },
+      },
     });
   });
   afterEach(async () => {
@@ -31,10 +35,10 @@ describe('Associations', () => {
     ]);
   });
 
-  it('POST adds a relationship association with a record-scope target and answers with the updated record', async () => {
+  it('POST adds a relationship association with a record target and answers with the updated record', async () => {
     const record = await seedRecord();
     const other = await seedRecord();
-    const target = { scope: 'record' as const, recordId: other.id };
+    const target = { kind: 'record' as const, recordId: other.id };
     const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
       body: { kind: 'relationship', label: 'reply-to', target },
@@ -46,10 +50,10 @@ describe('Associations', () => {
   });
 
   it.each([
-    ['entity', { scope: 'entity', entityId: 'did:key:z6MkAlice' }],
-    ['external', { scope: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/1' }],
+    ['entity', { kind: 'entity', entityId: 'did:key:z6MkAlice' }],
+    ['external', { kind: 'external', ns: 'atproto', id: 'at://did:plc:abc/app.bsky.feed.post/1' }],
   ] as const)(
-    'POST adds a relationship association with a %s-scope target and answers with the updated record',
+    'POST adds a relationship association with a %s target and answers with the updated record',
     async (_scope, target) => {
       const record = await seedRecord();
       const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
@@ -101,9 +105,9 @@ describe('Associations', () => {
     expect(after?.associations?.some((a) => a.label === 'starred')).toBeFalsy();
   });
 
-  it('POST .../associations/delete removes a relationship association regardless of target scope', async () => {
+  it('POST .../associations/delete removes a relationship association regardless of target kind', async () => {
     const record = await seedRecord();
-    const target = { scope: 'entity' as const, entityId: 'did:key:z6MkAlice' };
+    const target = { kind: 'entity' as const, entityId: 'did:key:z6MkAlice' };
     await t.ctx.adapter.associate(record.id, { kind: 'relationship', label: 'author', target });
     const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
       token: TEST_TOKEN,
@@ -169,7 +173,7 @@ describe('Associations', () => {
         body: {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'entity', entityId: 'entity-other' },
+          grantee: { kind: 'entity', entityId: 'entity-other' },
         },
       });
       expect(status).toBe(400);

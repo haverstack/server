@@ -13,32 +13,36 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   const { tokens, stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
 
-  // POST /tokens — issue a new token (owner only). `onBehalfOf` asserts a
-  // delegation out of band: the owner names the subject the issued
-  // principal acts for, per docs/spec/wire-format.md § The session a
-  // token names.
+  // POST /tokens — issue a new token (owner only). The body names an Actor:
+  // `principalId` is the identity the token authenticates as (default: the
+  // owner), and `subjectId` asserts a delegation out of band — the subject
+  // that principal acts for (default: the principal itself), per
+  // docs/spec/wire-format.md § The session a token names.
   app.post('/', requireOwner(ownerEntityId), async (c) => {
     const body = await readJson<{
-      entityId?: string;
-      onBehalfOf?: string;
+      principalId?: string;
+      subjectId?: string;
       label?: string;
       expiresAt?: string;
     }>(c);
-    if (body.entityId !== undefined && !isValidDid(body.entityId))
-      throw new StackValidationError([{ path: 'entityId', message: 'Must be a DID' }]);
-    if (body.onBehalfOf !== undefined && !isValidDid(body.onBehalfOf))
-      throw new StackValidationError([{ path: 'onBehalfOf', message: 'Must be a DID' }]);
+    if (body.principalId !== undefined && !isValidDid(body.principalId))
+      throw new StackValidationError([{ path: 'principalId', message: 'Must be a DID' }]);
+    if (body.subjectId !== undefined && !isValidDid(body.subjectId))
+      throw new StackValidationError([{ path: 'subjectId', message: 'Must be a DID' }]);
 
-    const principalId = body.entityId ?? ownerEntityId;
+    const principalId = body.principalId ?? ownerEntityId;
+    const subjectId = body.subjectId ?? principalId;
     const expiresAt = body.expiresAt ? parseDate(body.expiresAt) : undefined;
     if (body.expiresAt && !expiresAt)
       throw new StackValidationError([{ path: 'expiresAt', message: 'Invalid date' }]);
 
-    const { id, token } = await tokens.createToken(principalId, {
-      onBehalfOf: body.onBehalfOf,
-      label: body.label,
-      expiresAt,
-    });
+    const { id, token } = await tokens.createToken(
+      { subjectId, principalId },
+      {
+        label: body.label,
+        expiresAt,
+      },
+    );
 
     // Read the row back rather than fabricating createdAt here — the store
     // is the source of truth, and GET /tokens must report the same value.
@@ -49,7 +53,7 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
         id,
         token,
         principalId,
-        subjectId: body.onBehalfOf ?? principalId,
+        subjectId,
         label: stored.label ?? null,
         createdAt: stored.createdAt.toISOString(),
         expiresAt: stored.expiresAt?.toISOString() ?? null,

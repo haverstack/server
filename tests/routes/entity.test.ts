@@ -17,12 +17,12 @@ async function seedEntityRecord(ctx: TestApp['ctx']): Promise<StackRecord> {
     createdAt: new Date(),
     updatedAt: new Date(),
     version: 1,
-    entityId: TEST_ENTITY_ID,
+    createdBy: { subjectId: TEST_ENTITY_ID },
   });
 }
 
 // _entity@1 records get an auto-generated id — even the owner's own card
-// (see Stack.create()'s ownerProfile bootstrap) — with the binding held in
+// (see Stack.open()'s ownerProfile bootstrap) — with the binding held in
 // content.did rather than the record id. This is the realistic shape.
 async function seedEntityRecordWithGeneratedId(ctx: TestApp['ctx']): Promise<StackRecord> {
   return ctx.stack.create('_entity@1', { did: TEST_ENTITY_ID, name: 'Test Entity' });
@@ -63,7 +63,7 @@ describe('GET /entity', () => {
 
   it('returns 404, not 403, for a non-owner authenticated entity (anti-oracle rule)', async () => {
     await seedEntityRecord(t.ctx);
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'GET', '/entity', { token });
     expect(status).toBe(404);
   });
@@ -79,7 +79,7 @@ describe('GET /entity', () => {
     const populate = await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
     expect(populate.status).toBe(200);
 
-    await t.ctx.adapter.deleteRecord(first.id, { hard: true });
+    await t.ctx.adapter.deleteRecord(first.id, { purge: true });
     const afterDelete = await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
     expect(afterDelete.status).toBe(404);
 
@@ -134,7 +134,7 @@ describe('PATCH /entity', () => {
 
   it('returns 403 for a non-owner authenticated entity', async () => {
     await seedEntityRecord(t.ctx);
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'PATCH', '/entity', {
       token,
       body: { content: { name: 'Hacked' } },
@@ -153,7 +153,7 @@ describe('PATCH /entity', () => {
     const record = await seedEntityRecordWithGeneratedId(t.ctx);
     await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
 
-    await t.ctx.adapter.deleteRecord(record.id, { hard: true });
+    await t.ctx.adapter.deleteRecord(record.id, { purge: true });
     const stale = await req(t.app, 'PATCH', '/entity', {
       token: TEST_TOKEN,
       body: { content: { name: 'X' } },

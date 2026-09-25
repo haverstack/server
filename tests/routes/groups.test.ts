@@ -14,7 +14,11 @@ describe('_group ACL', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(NOTE_TYPE, 'Note', { title: { kind: 'string' } });
+    await t.ctx.stack.defineType({
+      id: NOTE_TYPE,
+      name: 'Note',
+      schema: { title: { kind: 'string' } },
+    });
   });
   afterEach(async () => {
     await t.cleanup();
@@ -25,7 +29,7 @@ describe('_group ACL', () => {
     await t.ctx.stack.associate(group.id, {
       kind: 'relationship',
       label: 'member',
-      target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+      target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
@@ -35,12 +39,12 @@ describe('_group ACL', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: group.id, role: 'member' },
+            grantee: { kind: 'group', groupId: group.id, role: 'member' },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'GET', `/records/${record.id}`, { token });
     expect(status).toBe(200);
   });
@@ -58,7 +62,7 @@ describe('_group ACL', () => {
           {
             kind: 'relationship',
             label: 'member',
-            target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
       },
@@ -71,12 +75,12 @@ describe('_group ACL', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'group', groupId: notAGroup.id, role: 'member' },
+            grantee: { kind: 'group', groupId: notAGroup.id, role: 'member' },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'GET', `/records/${record.id}`, { token });
     // Anti-oracle: unreadable is 404, same as any other record this entity
     // can't reach — never a 403 that would confirm the record exists.

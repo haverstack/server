@@ -1,6 +1,6 @@
 /**
  * Resume cursor codec. A cursor is opaque and base64url by wire contract
- * (`isValidSeq()` in @haverstack/wire-types), but this server's own are
+ * (`isValidCursor()` in @haverstack/wire-types), but this server's own are
  * self-describing: `base64url(bufferId + ":" + n)`. That makes a presented
  * cursor's origin checkable — a reconnect naming a buffer this server
  * doesn't hold (a different filter, a restart, a buffer past its retention
@@ -30,10 +30,10 @@ export function encodeCursor(bufferId: string, n: number): string {
  * (A charset-*invalid* cursor is refused before this is ever called — see
  * `src/routes/changes.ts`.)
  */
-export function decodeCursor(seq: string): DecodedCursor | null {
+export function decodeCursor(cursor: string): DecodedCursor | null {
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(base64urlDecode(seq));
+    text = new TextDecoder('utf-8', { fatal: true }).decode(base64urlDecode(cursor));
   } catch {
     return null;
   }

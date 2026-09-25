@@ -66,10 +66,10 @@ export async function createTestContext(
 ): Promise<StackContext> {
   const adapter = await LocalAdapter.initialize({
     path: dbPath,
-    entityId: TEST_ENTITY_ID,
+    ownerEntityId: TEST_ENTITY_ID,
     ...(opts.timezone !== undefined && { timezone: opts.timezone }),
   });
-  const stack = await Stack.create(adapter);
+  const stack = await Stack.open(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(dbPath));
   const queryWorker = new QueryWorkerPool({

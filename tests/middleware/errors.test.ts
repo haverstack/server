@@ -42,7 +42,7 @@ describe('errorMiddleware — denied-but-verified logging', () => {
   });
 
   it('logs the requester DID when a verified token is denied by permission', async () => {
-    const { token } = await ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const warn = spyLogger();
     const app = createApp(ctx, testConfig(dbPath), warn);
 
@@ -82,8 +82,12 @@ describe('errorMiddleware — refusal logging (StackNotFoundError)', () => {
   beforeEach(async () => {
     dbPath = tempDbPath();
     ctx = await createTestContext(dbPath);
-    await ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
-      body: { kind: 'text' as const, required: true as const },
+    await ctx.stack.defineType({
+      id: NOTE_TYPE_ID,
+      name: 'Note',
+      schema: {
+        body: { kind: 'text' as const, required: true as const },
+      },
     });
   });
 
@@ -96,7 +100,7 @@ describe('errorMiddleware — refusal logging (StackNotFoundError)', () => {
 
   it('logs existed: true for a verified requester denied read on an existing record', async () => {
     const record = await ctx.stack.create(NOTE_TYPE_ID, { body: 'private' });
-    const { token } = await ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const debug = spyLogger();
     const app = createApp(ctx, testConfig(dbPath), debug);
 
@@ -115,7 +119,7 @@ describe('errorMiddleware — refusal logging (StackNotFoundError)', () => {
   });
 
   it('logs existed: false for a verified requester on a genuinely missing record', async () => {
-    const { token } = await ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const debug = spyLogger();
     const app = createApp(ctx, testConfig(dbPath), debug);
 

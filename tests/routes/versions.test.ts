@@ -7,8 +7,12 @@ describe('Versions', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(TYPE_ID, 'Doc', {
-      body: { kind: 'text' as const, required: true as const },
+    await t.ctx.stack.defineType({
+      id: TYPE_ID,
+      name: 'Doc',
+      schema: {
+        body: { kind: 'text' as const, required: true as const },
+      },
     });
   });
   afterEach(async () => {
@@ -111,25 +115,25 @@ describe('Versions', () => {
                 {
                   kind: 'permission',
                   label: 'read',
-                  grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+                  grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
                 },
                 {
                   kind: 'permission',
                   label: 'write',
-                  grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+                  grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
                 },
               ]
             : [
                 {
                   kind: 'permission',
                   label: 'read',
-                  grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+                  grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
                 },
               ],
         },
       );
       await t.ctx.stack.patchContent(record.id, { body: 'v2' });
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       return { record, token };
     }
 
@@ -167,7 +171,7 @@ describe('Versions', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
       },

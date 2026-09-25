@@ -13,8 +13,12 @@ describe('nested content query', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(CONTACT_TYPE, 'Contact', {
-      profile: { kind: 'object', properties: { email: { kind: 'string' } } },
+    await t.ctx.stack.defineType({
+      id: CONTACT_TYPE,
+      name: 'Contact',
+      schema: {
+        profile: { kind: 'object', properties: { email: { kind: 'string' } } },
+      },
     });
   });
   afterEach(async () => {
@@ -42,9 +46,13 @@ describe('full-text search', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(NOTE_TYPE, 'Note', {
-      title: { kind: 'string' },
-      body: { kind: 'text' },
+    await t.ctx.stack.defineType({
+      id: NOTE_TYPE,
+      name: 'Note',
+      schema: {
+        title: { kind: 'string' },
+        body: { kind: 'text' },
+      },
     });
   });
   afterEach(async () => {

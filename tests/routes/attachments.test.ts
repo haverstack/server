@@ -15,14 +15,20 @@ import { createApp } from '../../src/app.js';
 const NOTE_TYPE_ID = 'com.example.test/note@1';
 
 async function seedType(ctx: TestApp['ctx']) {
-  return ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
-    body: { kind: 'text' as const, required: true as const },
+  return ctx.stack.defineType({
+    id: NOTE_TYPE_ID,
+    name: 'Note',
+    schema: {
+      body: { kind: 'text' as const, required: true as const },
+    },
   });
 }
 
 /** Seeds bytes via the unscoped Stack (bypasses the wire route entirely). */
 async function putFile(ctx: TestApp['ctx'], content = 'hello') {
-  const record = await ctx.stack.putAttachment(new TextEncoder().encode(content), 'text/plain');
+  const record = await ctx.stack.putAttachment(new TextEncoder().encode(content), {
+    mimeType: 'text/plain',
+  });
   return (record.content as { fileId: string }).fileId;
 }
 
@@ -57,7 +63,7 @@ describe('GET /attachments/:fileId', () => {
 
   it('rejects a non-owner authenticated request for an unattached file', async () => {
     const fileId = await putFile(t.ctx);
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     expect(status).toBe(403);
   });
@@ -125,13 +131,13 @@ describe('GET /attachments/:fileId', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
     const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     expect(status).toBe(200);
@@ -152,13 +158,13 @@ describe('GET /attachments/:fileId', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
     const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     expect(status).toBe(200);
@@ -173,7 +179,7 @@ describe('GET /attachments/:fileId', () => {
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
     const { status } = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     expect(status).toBe(403);
@@ -188,7 +194,7 @@ describe('GET /attachments/:fileId', () => {
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
     const inaccessible = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
     const missing = await req(
@@ -269,8 +275,11 @@ describe('GET /attachments/:fileId', () => {
 
   it('falls back to the first-recorded filename when the requester has no own record', async () => {
     const bytes = new TextEncoder().encode('shared content');
-    await t.ctx.stack.putAttachment(bytes, 'text/plain', 'first.txt');
-    const second = await t.ctx.stack.putAttachment(bytes, 'text/plain', 'second.txt');
+    await t.ctx.stack.putAttachment(bytes, { mimeType: 'text/plain', filename: 'first.txt' });
+    const second = await t.ctx.stack.putAttachment(bytes, {
+      mimeType: 'text/plain',
+      filename: 'second.txt',
+    });
     const fileId = (second.content as { fileId: string }).fileId;
 
     const res = await t.app.request(`/attachments/${fileId}`, {
@@ -282,16 +291,17 @@ describe('GET /attachments/:fileId', () => {
 
   it("prefers the requester's own record for filename over the first-recorded record", async () => {
     const bytes = new TextEncoder().encode('shared content 2');
-    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { actions: ['create'], typeId: '_attachment@1' },
-    ]);
+    await t.ctx.stack.grantType('_attachment@1', {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
     const first = await t.ctx.stack
-      .forSession({ principalId: OTHER_ENTITY_ID, subjectId: OTHER_ENTITY_ID })
-      .putAttachment(bytes, 'text/plain', 'first.txt');
+      .asActor({ principalId: OTHER_ENTITY_ID, subjectId: OTHER_ENTITY_ID })
+      .putAttachment(bytes, { mimeType: 'text/plain', filename: 'first.txt' });
     const fileId = (first.content as { fileId: string }).fileId;
     await t.ctx.stack
-      .forSession({ principalId: TEST_ENTITY_ID, subjectId: TEST_ENTITY_ID })
-      .putAttachment(bytes, 'text/plain', 'mine.txt');
+      .asActor({ principalId: TEST_ENTITY_ID, subjectId: TEST_ENTITY_ID })
+      .putAttachment(bytes, { mimeType: 'text/plain', filename: 'mine.txt' });
 
     const res = await t.app.request(`/attachments/${fileId}`, {
       headers: { Authorization: `Bearer ${TEST_TOKEN}` },
@@ -304,8 +314,7 @@ describe('GET /attachments/:fileId', () => {
   it('forces a dangerous stored mimeType to application/octet-stream', async () => {
     const record = await t.ctx.stack.putAttachment(
       new TextEncoder().encode('<script>alert(1)</script>'),
-      'text/html',
-      'evil.html',
+      { mimeType: 'text/html', filename: 'evil.html' },
     );
     const fileId = (record.content as { fileId: string }).fileId;
 
@@ -398,7 +407,7 @@ describe('POST /attachments', () => {
   });
 
   it('rejects a token holder with no create grant on _attachment@1 with 403', async () => {
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const res = await t.app.request('/attachments', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
@@ -408,10 +417,11 @@ describe('POST /attachments', () => {
   });
 
   it('allows an entity with a create grant on _attachment@1 to upload', async () => {
-    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { actions: ['create'], typeId: '_attachment@1' },
-    ]);
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    await t.ctx.stack.grantType('_attachment@1', {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const res = await t.app.request('/attachments', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
@@ -419,7 +429,7 @@ describe('POST /attachments', () => {
     });
     expect(res.status).toBe(200);
     const record = (await res.json()) as Record<string, unknown>;
-    expect(record.entityId).toBe(OTHER_ENTITY_ID);
+    expect((record.createdBy as { subjectId: string }).subjectId).toBe(OTHER_ENTITY_ID);
   });
 
   it('identical bytes uploaded twice produce the same fileId but two distinct records', async () => {
@@ -547,18 +557,18 @@ describe('DELETE /attachments/:fileId', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
         associations: [{ kind: 'attachment', label: 'file', fileId }],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
     const { status } = await req(t.app, 'DELETE', `/attachments/${fileId}`, { token });
     expect(status).toBe(403);
@@ -581,7 +591,7 @@ describe('POST /attachments/gc', () => {
   });
 
   it('rejects a non-owner request with 403', async () => {
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'POST', '/attachments/gc', { token });
     expect(status).toBe(403);
   });
@@ -598,8 +608,8 @@ describe('POST /attachments/gc', () => {
       body: { graceMs: 0, dryRun: true },
     });
     expect(status).toBe(200);
-    const result = data as { deleted: string[]; reclaimedBytes: number };
-    expect(result.deleted).toContain(fileId);
+    const result = data as { deletedFileIds: string[]; reclaimedBytes: number };
+    expect(result.deletedFileIds).toContain(fileId);
 
     const after = await req(t.app, 'GET', `/attachments/${fileId}`, { token: TEST_TOKEN });
     expect(after.status).toBe(200);
@@ -609,8 +619,8 @@ describe('POST /attachments/gc', () => {
     const fileId = await putFile(t.ctx);
     const { status, data } = await req(t.app, 'POST', '/attachments/gc', { token: TEST_TOKEN });
     expect(status).toBe(200);
-    const result = data as { deleted: string[] };
-    expect(result.deleted).not.toContain(fileId);
+    const result = data as { deletedFileIds: string[] };
+    expect(result.deletedFileIds).not.toContain(fileId);
   });
 
   it('deletes unreferenced files past the grace period and reclaims their bytes', async () => {
@@ -620,8 +630,8 @@ describe('POST /attachments/gc', () => {
       body: { graceMs: 0 },
     });
     expect(status).toBe(200);
-    const result = data as { deleted: string[]; reclaimedBytes: number };
-    expect(result.deleted).toContain(fileId);
+    const result = data as { deletedFileIds: string[]; reclaimedBytes: number };
+    expect(result.deletedFileIds).toContain(fileId);
     expect(result.reclaimedBytes).toBeGreaterThan(0);
 
     const after = await req(t.app, 'GET', `/attachments/${fileId}`, { token: TEST_TOKEN });
@@ -642,7 +652,7 @@ describe('POST /attachments/gc', () => {
       body: { graceMs: 0 },
     });
     expect(status).toBe(200);
-    const result = data as { deleted: string[] };
-    expect(result.deleted).not.toContain(fileId);
+    const result = data as { deletedFileIds: string[] };
+    expect(result.deletedFileIds).not.toContain(fileId);
   });
 });

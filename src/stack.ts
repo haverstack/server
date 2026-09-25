@@ -39,13 +39,13 @@ export type StackContext = {
 
 export async function initStack(config: Config, logger: Logger): Promise<StackContext> {
   // openOrInitialize() decides between open and create without a TOCTOU
-  // gap. entityId goes in as a lazy provider so openOrInitialize()'s own
+  // gap. ownerEntityId goes in as a lazy provider so openOrInitialize()'s own
   // owner-mismatch check, which throws, never runs on the open path —
   // ENTITY_ID divergence is a warning below, not a failure — and so a
   // missing ENTITY_ID is an error only when creating a database.
   const adapter = await LocalAdapter.openOrInitialize({
     path: config.dbPath,
-    entityId: () => {
+    ownerEntityId: () => {
       if (!config.entityId) {
         throw new Error(
           'ENTITY_ID is required when initializing a new database (DB_PATH does not exist yet)',
@@ -63,7 +63,7 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
     );
   }
 
-  const stack = await Stack.create(
+  const stack = await Stack.open(
     adapter,
     config.ownerName
       ? { ownerProfile: { name: config.ownerName, handle: config.ownerHandle ?? undefined } }

@@ -6,7 +6,7 @@ import { readJson } from '../lib/json.js';
 import { serializeType } from '@haverstack/wire-types';
 import {
   hashSchema,
-  StackQueryError,
+  StackBadRequestError,
   StackNotFoundError,
   StackValidationError,
 } from '@haverstack/core';
@@ -30,12 +30,13 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
 
   app.post('/', requireOwner(stack.ownerEntityId), async (c) => {
     const body = await readJson<Record<string, unknown>>(c);
-    if (!body.id || typeof body.id !== 'string') throw new StackQueryError('id is required');
-    if (!body.name || typeof body.name !== 'string') throw new StackQueryError('name is required');
+    if (!body.id || typeof body.id !== 'string') throw new StackBadRequestError('id is required');
+    if (!body.name || typeof body.name !== 'string')
+      throw new StackBadRequestError('name is required');
     if (!body.schema || typeof body.schema !== 'object')
-      throw new StackQueryError('schema is required');
+      throw new StackBadRequestError('schema is required');
     if (!body.schemaHash || typeof body.schemaHash !== 'string')
-      throw new StackQueryError('schemaHash is required');
+      throw new StackBadRequestError('schemaHash is required');
 
     const computedHash = await hashSchema(body.schema as TypeSchema);
     if (body.schemaHash !== computedHash)
@@ -47,7 +48,10 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
     // schema-drift check: redefining an existing typeId with anything
     // beyond additive evolution throws StackSchemaDriftError, which
     // adapter.saveType() alone has no way to enforce — it's a raw write.
-    const type = await stack.defineType(body.id, body.name, body.schema as TypeSchema, {
+    const type = await stack.defineType({
+      id: body.id,
+      name: body.name,
+      schema: body.schema as TypeSchema,
       ...(body.migratesFrom ? { migratesFrom: body.migratesFrom as string } : {}),
     });
     return c.json(serializeType(type), 201);

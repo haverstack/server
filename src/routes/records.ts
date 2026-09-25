@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
-import type { ScopedStack, TokenSession } from '@haverstack/core';
+import type { ScopedStack } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core/wire';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import {
@@ -16,7 +17,7 @@ import {
 import { clampLimit, clampJournalLimit } from '../lib/queryLimit.js';
 import { serializeRecord, serializeVersion, serializeJournalEntry } from '@haverstack/wire-types';
 import type { WireQueryResponse, WireJournalResponse } from '@haverstack/wire-types';
-import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
+import { StackValidationError, StackBadRequestError, StackNotFoundError } from '@haverstack/core';
 import type { AuthorityAssociation, DataAssociation, TypeId } from '@haverstack/core';
 
 // ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   /** Scope to a session if authenticated, else the anonymous view. */
   function scopeFor(auth: TokenSession | null): ScopedStack {
-    return auth ? stack.forSession(auth) : stack.asEntity(null);
+    return auth ? stack.asActor(auth) : stack.asEntity(null);
   }
 
   // POST /records/query — full query with content-field filters. Optional
@@ -67,8 +68,8 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json(body);
   });
 
-  // POST /records — a full record body, but version, entityId and
-  // principalId are stamped here and never trusted from it. Everything else
+  // POST /records — a full record body, but version, createdBy and
+  // updatedBy are stamped here and never trusted from it. Everything else
   // a wire record body can carry — which fields are forwarded as-is, which
   // are owner-acting-alone-only, and which reduce to a boolean rather than
   // their literal value — is `createOptionsFromWireRecord()`'s disposition
@@ -78,7 +79,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth')!;
     const body = await readJson(c);
     const { typeId, content, options } = createOptionsFromWireRecord(body, auth, ownerEntityId);
-    const created = await stack.forSession(auth).create(typeId, content, options);
+    const created = await stack.asActor(auth).create(typeId, content, options);
     return c.json(serializeRecord(created), 200);
   });
 
@@ -115,13 +116,13 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const changes = changesFromWireBody(await readJson(c));
 
     const updated = await stack
-      .forSession(auth)
+      .asActor(auth)
       .mutate(id, changes, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(updated));
   });
 
-  // DELETE /records/:id  (?hard=true for permanent). Both answer 200 with
-  // a record: a soft delete with the tombstone it produced, a hard delete
+  // DELETE /records/:id  (?purge=true for permanent). Both answer 200 with
+  // a record: a soft delete with the tombstone it produced, a purge
   // with the record as it stood immediately before destruction. That body
   // is the requester's only report of the files the purge stranded; every
   // other row naming them is gone by the time it lands. deleteAndReturn()
@@ -132,11 +133,11 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.delete('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
-    const session = stack.forSession(auth);
+    const purge = new URL(c.req.url).searchParams.get('purge') === 'true';
+    const session = stack.asActor(auth);
 
     const { record } = await session.deleteAndReturn(id, {
-      hard,
+      purge,
       ifVersion: parseIfMatch(c.req.header('If-Match')),
     });
     if (!record) throw new StackNotFoundError('Record not found');
@@ -148,7 +149,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const restored = await stack
-      .forSession(auth)
+      .asActor(auth)
       .undelete(id, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(restored));
   });
@@ -176,7 +177,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<AuthorityAssociation>(c);
-    const updated = await stack.forSession(auth).grantAccess(id, body);
+    const updated = await stack.asActor(auth).grantAccess(id, body);
     return c.json(serializeRecord(updated));
   });
 
@@ -186,7 +187,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<AuthorityAssociation>(c);
-    const updated = await stack.forSession(auth).revokeAccess(id, body);
+    const updated = await stack.asActor(auth).revokeAccess(id, body);
     return c.json(serializeRecord(updated));
   });
 
@@ -216,8 +217,8 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<DataAssociation>(c);
-    if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
-    const updated = await stack.forSession(auth).associate(id, body);
+    if (!body.kind || !body.label) throw new StackBadRequestError('kind and label are required');
+    const updated = await stack.asActor(auth).associate(id, body);
     return c.json(serializeRecord(updated));
   });
 
@@ -228,7 +229,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<DataAssociation>(c);
-    const updated = await stack.forSession(auth).dissociate(id, body);
+    const updated = await stack.asActor(auth).dissociate(id, body);
     return c.json(serializeRecord(updated));
   });
 
@@ -288,7 +289,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth')!;
     const restored = await stack
-      .forSession(auth)
+      .asActor(auth)
       .restoreVersion(id, vNum, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(restored));
   });
@@ -304,16 +305,16 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const auth = c.get('auth')!;
     const body = await readJson<Record<string, unknown>>(c);
     if (!body.toTypeId || typeof body.toTypeId !== 'string')
-      throw new StackQueryError('toTypeId is required');
+      throw new StackBadRequestError('toTypeId is required');
     if (!body.content || typeof body.content !== 'object')
-      throw new StackQueryError('content is required');
+      throw new StackBadRequestError('content is required');
     if (!(await stack.getType(body.toTypeId as TypeId)))
       throw new StackValidationError([
         { path: 'toTypeId', message: `Unknown type: "${body.toTypeId}"` },
       ]);
 
     const migrated = await stack
-      .forSession(auth)
+      .asActor(auth)
       .commitMigration(id, body.toTypeId as TypeId, body.content as Record<string, unknown>, {
         ifVersion: parseIfMatch(c.req.header('If-Match')),
       });

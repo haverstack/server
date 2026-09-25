@@ -82,7 +82,7 @@ import type { AppEnv } from '../src/types.js';
 
 /**
  * Fixture ids embed a fixed, long-past timestamp (they were authored once
- * and never touched again); this server's ScopedStack.create() rejects any
+ * and never touched again); this server's ScopedStack.open() rejects any
  * client-supplied id whose embedded timestamp is outside a clock-skew
  * tolerance of "now" (default 24h — see validateIdTimestampSkew() in
  * @haverstack/core). A literal fixture id would fail that freshness check
@@ -123,17 +123,29 @@ const BLOG_APP_ID = 'com.example.blog';
 const BLOG_SUBJECT_ID = 'entity-blog-subject-131415';
 
 async function seedTypes(ctx: TestApp['ctx']) {
-  await ctx.stack.defineType(NOTE_TYPE, 'Note', {
-    title: { kind: 'string' },
-    body: { kind: 'text' },
-    pinned: { kind: 'boolean' },
+  await ctx.stack.defineType({
+    id: NOTE_TYPE,
+    name: 'Note',
+    schema: {
+      title: { kind: 'string' },
+      body: { kind: 'text' },
+      pinned: { kind: 'boolean' },
+    },
   });
-  await ctx.stack.defineType(NOTE_TYPE_V2, 'Note', {
-    title: { kind: 'string' },
-    pinned: { kind: 'boolean' },
+  await ctx.stack.defineType({
+    id: NOTE_TYPE_V2,
+    name: 'Note',
+    schema: {
+      title: { kind: 'string' },
+      pinned: { kind: 'boolean' },
+    },
   });
-  await ctx.stack.defineType(COMMENT_TYPE, 'Comment', {
-    body: { kind: 'text', required: true },
+  await ctx.stack.defineType({
+    id: COMMENT_TYPE,
+    name: 'Comment',
+    schema: {
+      body: { kind: 'text', required: true },
+    },
   });
 }
 
@@ -268,10 +280,9 @@ describe('createRecord fixtures', () => {
     expect(d.typeId).toBe(body.typeId);
     expect(d.content).toEqual(body.content);
     expect(d.version).toBe(1);
-    // The owner token acts as the owner entity itself, so entityId is
-    // stamped to it — undelegated, so principalId stays absent.
-    expect(d.entityId).toBe(TEST_ENTITY_ID);
-    expect(d.principalId).toBeUndefined();
+    // The owner token acts as the owner entity itself, so createdBy names
+    // it — undelegated, so principalId stays absent.
+    expect(d.createdBy).toEqual({ subjectId: TEST_ENTITY_ID });
   });
 
   test('create-record-ignores-client-supplied-entity-and-principal', async () => {
@@ -280,17 +291,17 @@ describe('createRecord fixtures', () => {
     )!;
     handled.add(fixture.name);
     const body = withFreshId(fixture.requestBody as WireRecord & { appId?: string });
-    await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
-      { actions: ['create'], typeId: body.typeId },
-    ]);
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    await t.ctx.stack.grantType(body.typeId, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await req(t.app, 'POST', fixture.path, { token, body });
     expect(status).toBe(fixture.responseStatus);
     const d = data as Record<string, unknown>;
     expect(d.content).toEqual(body.content);
     // entityId/principalId are stamped from the session, never the body.
-    expect(d.entityId).toBe(CONTRIBUTOR_ID);
-    expect(d.principalId).toBeUndefined();
+    expect(d.createdBy).toEqual({ subjectId: CONTRIBUTOR_ID });
     // appId is the deliberate exception: self-reported, honored verbatim.
     expect(d.appId).toBe(body.appId);
   });
@@ -301,19 +312,23 @@ describe('createRecord fixtures', () => {
     )!;
     handled.add(fixture.name);
     const body = withFreshId(fixture.requestBody as WireRecord & { appId?: string });
-    await t.ctx.stack.grant({ kind: 'entity', entityId: BLOG_SUBJECT_ID }, [
-      { actions: ['create'], typeId: body.typeId },
-    ]);
-    await t.ctx.stack.grant({ kind: 'entity', entityId: BLOG_APP_ID }, [
-      { actions: ['create'], typeId: body.typeId },
-    ]);
-    const { token } = await t.ctx.adapter.createToken(BLOG_APP_ID, { onBehalfOf: BLOG_SUBJECT_ID });
+    await t.ctx.stack.grantType(body.typeId, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: BLOG_SUBJECT_ID },
+    });
+    await t.ctx.stack.grantType(body.typeId, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: BLOG_APP_ID },
+    });
+    const { token } = await t.ctx.adapter.createToken({
+      subjectId: BLOG_SUBJECT_ID,
+      principalId: BLOG_APP_ID,
+    });
     const { status, data } = await req(t.app, 'POST', fixture.path, { token, body });
     expect(status).toBe(fixture.responseStatus);
     const d = data as Record<string, unknown>;
     expect(d.content).toEqual(body.content);
-    expect(d.entityId).toBe(BLOG_SUBJECT_ID);
-    expect(d.principalId).toBe(BLOG_APP_ID);
+    expect(d.createdBy).toEqual({ subjectId: BLOG_SUBJECT_ID, principalId: BLOG_APP_ID });
     expect(d.appId).toBe(body.appId);
   });
 
@@ -349,20 +364,23 @@ describe('createRecord fixtures', () => {
     // the contributor may read, carrying an attachment association for the
     // same file. The bytes stay the owner's — the contributor never uploads
     // and never proves possession, which is the whole point of the carve-out.
-    const uploaded = await t.ctx.stack.putAttachment(
-      new Uint8Array([1, 2, 3]),
-      body.content.mimeType,
-      'owner.png',
-    );
+    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: body.content.mimeType,
+      filename: 'owner.png',
+    });
     const fileId = (uploaded.content as { fileId: string }).fileId;
     const note = await t.ctx.stack.create(NOTE_TYPE, { title: 'has a cover' });
     await t.ctx.stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
-    await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
-      { actions: ['read-any'], typeId: NOTE_TYPE },
-      { actions: ['create'], typeId: ATTACHMENT_TYPE },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
+    await t.ctx.stack.grantType(ATTACHMENT_TYPE, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
     const content = { ...body.content, fileId };
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await req(t.app, 'POST', fixture.path, {
       token,
       body: { ...body, content },
@@ -372,7 +390,7 @@ describe('createRecord fixtures', () => {
     // Their own record — own id, own filename — not a dedup of the owner's.
     expect(d.id).toBe(body.id);
     expect(d.content).toEqual(content);
-    expect(d.entityId).toBe(CONTRIBUTOR_ID);
+    expect((d.createdBy as { subjectId: string }).subjectId).toBe(CONTRIBUTOR_ID);
   });
 
   test('create-record-unlisted — unlistedAt in the create body suppresses enumeration from create time', async () => {
@@ -553,6 +571,59 @@ describe('queryRecords fixtures', () => {
     expect(page.cursor).toBeNull();
   });
 
+  // Real uploads rather than the fixture's literal hash, so the filter has
+  // something to match — and something it must not.
+  async function seedCoverAndThumbnail() {
+    const [a, b] = await Promise.all([
+      t.ctx.stack.putAttachment(new Uint8Array([1]), { mimeType: 'image/png' }),
+      t.ctx.stack.putAttachment(new Uint8Array([2]), { mimeType: 'image/png' }),
+    ]);
+    const coverFileId = (a.content as { fileId: string }).fileId;
+    const thumbFileId = (b.content as { fileId: string }).fileId;
+    const note = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'has a cover' },
+      {
+        associations: [
+          { kind: 'attachment', label: 'cover', fileId: coverFileId, attachmentRecordId: a.id },
+          { kind: 'attachment', label: 'thumbnail', fileId: thumbFileId, attachmentRecordId: b.id },
+        ],
+      },
+    );
+    return { note, coverFileId, thumbFileId };
+  }
+
+  test('query-attachment-label-and-file — both halves match one association', async () => {
+    const fixture = queryRecordsFixtures.find((f) => f.name === 'query-attachment-label-and-file')!;
+    const empty = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
+    expect(empty.status).toBe(fixture.responseStatus);
+    expect(empty.data).toEqual(fixture.responseBody);
+
+    const { note, coverFileId, thumbFileId } = await seedCoverAndThumbnail();
+    const ids = async (qs: string) => {
+      const { data } = await req(t.app, 'GET', `/records?${qs}`, { token: TEST_TOKEN });
+      return (data as { records: Array<{ id: string }> }).records.map((r) => r.id);
+    };
+    expect(await ids(`attachmentLabel=cover&attachmentFileId=${coverFileId}`)).toEqual([note.id]);
+    expect(await ids(`attachmentLabel=cover&attachmentFileId=${thumbFileId}`)).toEqual([]);
+    expect(await ids(`attachmentLabel=thumbnail`)).toEqual([note.id]);
+  });
+
+  test('query-references-file — any attachment label matches', async () => {
+    const fixture = queryRecordsFixtures.find((f) => f.name === 'query-references-file')!;
+    const empty = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
+    expect(empty.status).toBe(fixture.responseStatus);
+    expect(empty.data).toEqual(fixture.responseBody);
+
+    const { note, thumbFileId } = await seedCoverAndThumbnail();
+    const { data } = await req(t.app, 'GET', `/records?referencesFileId=${thumbFileId}`, {
+      token: TEST_TOKEN,
+    });
+    expect((data as { records: Array<{ id: string }> }).records.map((r) => r.id)).toEqual([
+      note.id,
+    ]);
+  });
+
   test('coverage', () => {
     // query-empty-page-with-live-cursor and query-get-records-uses-the-same-
     // envelope pin narrower edge cases of the same two invariants (a
@@ -572,6 +643,8 @@ describe('queryRecords fixtures', () => {
         'query-sorts-by-a-content-field',
         'query-content-sort-folds-case-and-accents',
         'query-get-sorts-by-a-content-field',
+        'query-attachment-label-and-file',
+        'query-references-file',
       ]),
       new Set(),
     );
@@ -630,22 +703,22 @@ describe('patchContent fixtures', () => {
       NOTE_TYPE,
       { title: 'original' },
       {
-        entityId: TEST_ENTITY_ID,
+        createdBy: { subjectId: TEST_ENTITY_ID },
         permissions: [
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
       token,
       body: fixture.requestBody,
@@ -655,8 +728,8 @@ describe('patchContent fixtures', () => {
     expect(d.content).toEqual(fixture.responseBody!.content);
     // Authorship (entityId) is untouched by a non-author write; updatedBy
     // moves to the requester who made this edit.
-    expect(d.entityId).toBe(TEST_ENTITY_ID);
-    expect(d.updatedBy).toBe(CONTRIBUTOR_ID);
+    expect((d.createdBy as { subjectId: string }).subjectId).toBe(TEST_ENTITY_ID);
+    expect((d.updatedBy as { subjectId: string }).subjectId).toBe(CONTRIBUTOR_ID);
   });
 
   test('coverage', () => {
@@ -686,11 +759,11 @@ describe('deleteRecord fixtures', () => {
     expect(after.status).toBe(200);
   });
 
-  test('delete-record-hard', async () => {
-    const fixture = deleteRecordFixtures.find((f) => f.name === 'delete-record-hard')!;
+  test('delete-record-purge', async () => {
+    const fixture = deleteRecordFixtures.find((f) => f.name === 'delete-record-purge')!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, {
+    const { status } = await req(t.app, 'DELETE', `/records/${record.id}?purge=true`, {
       token: TEST_TOKEN,
     });
     expect(status).toBe(fixture.responseStatus);
@@ -704,14 +777,20 @@ describe('deleteRecord fixtures', () => {
   // Both fileIds are real uploads rather than the fixture's literal ones —
   // an attachment association names a stored file, so the shape of the
   // claim travels and the hashes cannot.
-  test('hard-delete-under-concurrent-write', async () => {
+  test('purge-under-concurrent-write', async () => {
     const sequence = deleteRecordSequenceFixtures.find(
-      (f) => f.name === 'hard-delete-under-concurrent-write',
+      (f) => f.name === 'purge-under-concurrent-write',
     )!;
     handled.add(sequence.name);
     const [cover, late] = await Promise.all([
-      t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), 'image/png', 'cover.png'),
-      t.ctx.stack.putAttachment(new Uint8Array([4, 5, 6]), 'image/png', 'late.png'),
+      t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+        mimeType: 'image/png',
+        filename: 'cover.png',
+      }),
+      t.ctx.stack.putAttachment(new Uint8Array([4, 5, 6]), {
+        mimeType: 'image/png',
+        filename: 'late.png',
+      }),
     ]);
     const coverFileId = (cover.content as { fileId: string }).fileId;
     const lateFileId = (late.content as { fileId: string }).fileId;
@@ -732,7 +811,7 @@ describe('deleteRecord fixtures', () => {
     });
     expect(added.status).toBe(addStep!.responseStatus);
 
-    const purged = await req(t.app, purgeStep!.method, `/records/${record.id}?hard=true`, {
+    const purged = await req(t.app, purgeStep!.method, `/records/${record.id}?purge=true`, {
       token: TEST_TOKEN,
     });
     expect(purged.status).toBe(purgeStep!.responseStatus);
@@ -833,11 +912,10 @@ describe('associate fixtures', () => {
       fileId: string;
       attachmentRecordId: string;
     };
-    const uploaded = await t.ctx.stack.putAttachment(
-      new Uint8Array([1, 2, 3]),
-      'image/png',
-      'embed.png',
-    );
+    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: 'image/png',
+      filename: 'embed.png',
+    });
     const fileId = (uploaded.content as { fileId: string }).fileId;
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
     const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
@@ -890,11 +968,10 @@ describe('dissociate fixtures', () => {
     const fixture = dissociateFixtures.find((f) => f.name === 'dissociate-attachment-by-identity')!;
     handled.add(fixture.name);
     const body = fixture.requestBody as DataAssociation & { kind: 'attachment'; fileId: string };
-    const uploaded = await t.ctx.stack.putAttachment(
-      new Uint8Array([1, 2, 3]),
-      'image/png',
-      'embed.png',
-    );
+    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: 'image/png',
+      filename: 'embed.png',
+    });
     const fileId = (uploaded.content as { fileId: string }).fileId;
     // The stored association carries an attachmentRecordId, but identity
     // stays (kind, label, fileId) — dissociating without the pointer still
@@ -1000,7 +1077,7 @@ describe('grantAccess / revokeAccess fixtures', () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     const element = {
       ...fixture.requestBody,
-      grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     };
 
     const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
@@ -1013,7 +1090,7 @@ describe('grantAccess / revokeAccess fixtures', () => {
     // A permission element is an association: no bump, no snapshot.
     expect(body.version).toBe(record.version);
 
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const read = await req(t.app, 'GET', `/records/${record.id}`, { token });
     expect(read.status).toBe(200);
   });
@@ -1025,7 +1102,7 @@ describe('grantAccess / revokeAccess fixtures', () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     const element = {
       ...fixture.requestBody,
-      grantee: { scope: 'group', groupId: group.id, role: 'admin' },
+      grantee: { kind: 'group', groupId: group.id, role: 'admin' },
     };
 
     const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
@@ -1045,7 +1122,7 @@ describe('grantAccess / revokeAccess fixtures', () => {
       body: {
         kind: 'permission',
         label: 'read',
-        grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+        grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
       },
     });
     const { data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
@@ -1085,17 +1162,17 @@ describe('grantAccess / revokeAccess fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: WRITER_ID },
+            grantee: { kind: 'entity', entityId: WRITER_ID },
           },
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: WRITER_ID },
+            grantee: { kind: 'entity', entityId: WRITER_ID },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(WRITER_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
     const { status } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
       token,
       body: { kind: 'anyone', label: 'read' },
@@ -1158,20 +1235,20 @@ describe('journal fixtures', () => {
       body: { kind: 'tag', label: 'starred' },
     });
 
-    const page = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=0&limit=1`, {
+    const page = await req(t.app, 'GET', `/records/${record.id}/journal?afterSeq=0&limit=1`, {
       token: TEST_TOKEN,
     });
     expect(page.status).toBe(fixture.responseStatus);
     const first = page.data as WireJournalResponse;
     expect(first.entries.map((e) => e.seq)).toEqual([1]);
     // cursor is the only end-of-log signal, and carries the seq to send
-    // back as sinceSeq.
+    // back as afterSeq.
     expect(first.cursor).toBe(1);
 
     const resumed = await req(
       t.app,
       'GET',
-      `/records/${record.id}/journal?sinceSeq=${first.cursor}`,
+      `/records/${record.id}/journal?afterSeq=${first.cursor}`,
       { token: TEST_TOKEN },
     );
     expect((resumed.data as WireJournalResponse).entries.map((e) => e.seq)).toEqual([2]);
@@ -1182,11 +1259,10 @@ describe('journal fixtures', () => {
       (f) => f.name === 'get-journal-entry-keeps-what-an-associate-overwrote',
     )!;
     handled.add(fixture.name);
-    const first = await t.ctx.stack.putAttachment(
-      new Uint8Array([1, 2, 3]),
-      'image/png',
-      'embed.png',
-    );
+    const first = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: 'image/png',
+      filename: 'embed.png',
+    });
     const fileId = first.content.fileId;
     // A second _attachment record naming the same bytes, which is what a
     // re-point moves the reference to.
@@ -1208,7 +1284,7 @@ describe('journal fixtures', () => {
       body: { ...association, attachmentRecordId: second.id },
     });
 
-    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=2`, {
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?afterSeq=2`, {
       token: TEST_TOKEN,
     });
     expect(status).toBe(fixture.responseStatus);
@@ -1230,11 +1306,10 @@ describe('journal fixtures', () => {
       (f) => f.name === 'get-journal-entry-keeps-what-a-dissociate-removed',
     )!;
     handled.add(fixture.name);
-    const uploaded = await t.ctx.stack.putAttachment(
-      new Uint8Array([1, 2, 3]),
-      'image/png',
-      'embed.png',
-    );
+    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: 'image/png',
+      filename: 'embed.png',
+    });
     const association = {
       kind: 'attachment',
       label: 'embed',
@@ -1250,7 +1325,7 @@ describe('journal fixtures', () => {
       body: association,
     });
 
-    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=2`, {
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?afterSeq=2`, {
       token: TEST_TOKEN,
     });
     expect(status).toBe(fixture.responseStatus);
@@ -1275,7 +1350,7 @@ describe('journal fixtures', () => {
       body: { parentId: container.id },
     });
 
-    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?sinceSeq=1`, {
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?afterSeq=1`, {
       token: TEST_TOKEN,
     });
     expect(status).toBe(fixture.responseStatus);
@@ -1298,12 +1373,12 @@ describe('journal fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: WRITER_ID },
+            grantee: { kind: 'entity', entityId: WRITER_ID },
           },
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: WRITER_ID },
+            grantee: { kind: 'entity', entityId: WRITER_ID },
           },
         ],
       },
@@ -1313,10 +1388,10 @@ describe('journal fixtures', () => {
       body: { kind: 'anyone', label: 'read' },
     });
 
-    const { token } = await t.ctx.adapter.createToken(WRITER_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
     const { data } = await req(t.app, 'GET', `/records/${record.id}/journal`, { token });
     const entries = (data as WireJournalResponse).entries;
-    const moved = entries.find((e) => e.ops.includes('permissions'))!;
+    const moved = entries.find((e) => e.ops.includes('reshare'))!;
     // The entry still names that the ACL moved; the elements beneath it are
     // the resharer's, and go with the field when nothing else is in it.
     expect(moved).toBeDefined();
@@ -1326,7 +1401,7 @@ describe('journal fixtures', () => {
 
     const owner = await req(t.app, 'GET', `/records/${record.id}/journal`, { token: TEST_TOKEN });
     const ownerEntry = (owner.data as WireJournalResponse).entries.find((e) =>
-      e.ops.includes('permissions'),
+      e.ops.includes('reshare'),
     )!;
     expect(ownerEntry.associations).toEqual([
       { op: 'add', association: { kind: 'anyone', label: 'read' } },
@@ -1368,8 +1443,8 @@ describe('version lifecycle fixtures', () => {
       { title: 'original title' },
       {
         permissions: [
-          { kind: 'permission', label: 'read', grantee: { scope: 'entity', entityId: WRITER_ID } },
-          { kind: 'permission', label: 'write', grantee: { scope: 'entity', entityId: WRITER_ID } },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: WRITER_ID } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: WRITER_ID } },
         ],
       },
     );
@@ -1382,7 +1457,7 @@ describe('version lifecycle fixtures', () => {
     expect(owner.status).toBe(ownerFixture.responseStatus);
     expect((owner.data as unknown[]).length).toBe(1);
 
-    const { token: writerToken } = await t.ctx.adapter.createToken(WRITER_ID);
+    const { token: writerToken } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
     const writer = await req(t.app, 'GET', `/records/${record.id}/versions`, {
       token: writerToken,
     });
@@ -1621,12 +1696,12 @@ describe('error response fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
     expectError(status, data, fixture);
   });
@@ -1634,7 +1709,7 @@ describe('error response fixtures', () => {
   test('error-not-found-record-the-requester-cannot-read — the anti-oracle rule', async () => {
     const fixture = find('error-not-found-record-the-requester-cannot-read');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
     expectError(status, data, fixture);
   });
@@ -1677,29 +1752,30 @@ describe('error response fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}/versions`);
     expectError(status, data, fixture);
   });
 
   test('error-permission-denied-attachment-non-owner-create', async () => {
     const fixture = find('error-permission-denied-attachment-non-owner-create');
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, token);
     expectError(status, data, fixture);
   });
 
   test('create-attachment-record-non-owner-without-carve-out-refused', async () => {
     const fixture = find('create-attachment-record-non-owner-without-carve-out-refused');
-    await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
-      { actions: ['create'], typeId: ATTACHMENT_TYPE },
-    ]);
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    await t.ctx.stack.grantType(ATTACHMENT_TYPE, {
+      actions: ['create'],
+      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+    });
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     // The contributor uploads the bytes themselves, so they end up holding
     // an _attachment@1 record for this fileId — the "uploaded it themselves"
     // clause of the getAttachment() access rule. That clause is exactly what
@@ -1729,15 +1805,18 @@ describe('error response fixtures', () => {
     // record holds its fileId in a plain string field, not a file-ref one,
     // so the owner's own upload record is not a reference the check sees.
     const PHOTO_NOTE = 'com.example/photo-note@1';
-    await t.ctx.stack.defineType(PHOTO_NOTE, 'Photo note', {
-      title: { kind: 'string' },
-      coverFileId: { kind: 'file-ref' },
+    await t.ctx.stack.defineType({
+      id: PHOTO_NOTE,
+      name: 'Photo note',
+      schema: {
+        title: { kind: 'string' },
+        coverFileId: { kind: 'file-ref' },
+      },
     });
-    const uploaded = await t.ctx.stack.putAttachment(
-      new Uint8Array([4, 5, 6]),
-      'image/png',
-      'cover.png',
-    );
+    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([4, 5, 6]), {
+      mimeType: 'image/png',
+      filename: 'cover.png',
+    });
     const fileId = uploaded.content.fileId;
     const record = await t.ctx.stack.create(
       PHOTO_NOTE,
@@ -1747,12 +1826,12 @@ describe('error response fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: WRITER_ID },
+            grantee: { kind: 'entity', entityId: WRITER_ID },
           },
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: WRITER_ID },
+            grantee: { kind: 'entity', entityId: WRITER_ID },
           },
         ],
       },
@@ -1761,7 +1840,7 @@ describe('error response fixtures', () => {
     // the v1 snapshot a restore would put back.
     await t.ctx.stack.patchContent(record.id, { coverFileId: null });
 
-    const { token } = await t.ctx.adapter.createToken(WRITER_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}/restore/1`);
     expectError(status, data, fixture);
 
@@ -1776,7 +1855,7 @@ describe('error response fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: WRITER_ID },
+            grantee: { kind: 'entity', entityId: WRITER_ID },
           },
         ],
         associations: [{ kind: 'attachment', label: 'cover', fileId }],
@@ -1831,7 +1910,7 @@ describe('error response fixtures', () => {
 
   test('error-permission-denied-includeUnlisted-non-owner', async () => {
     const fixture = find('error-permission-denied-includeUnlisted-non-owner');
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, token);
     expectError(status, data, fixture);
     // Same refusal on GET /records — includeUnlisted is owner-only on every
@@ -1856,25 +1935,25 @@ describe('error response fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}/journal`);
     expectError(status, data, fixture);
   });
 
   test('error-not-found-journal-of-a-record-that-is-gone', async () => {
     const fixture = find('error-not-found-journal-of-a-record-that-is-gone');
-    // Never created and hard-deleted are the same answer — never an empty
+    // Never created and purged are the same answer — never an empty
     // log, which would read as "nothing changed".
     const missing = await dispatch(fixture, TEST_TOKEN);
     expectError(missing.status, missing.data, fixture);
 
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'about to be purged' });
-    await t.ctx.stack.delete(record.id, { hard: true });
+    await t.ctx.stack.delete(record.id, { purge: true });
     const purged = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}/journal`);
     expectError(purged.status, purged.data, fixture);
   });
@@ -1925,7 +2004,7 @@ describe('error response fixtures', () => {
 
   test('error-permission-grant-on-an-ungrantable-family-confers-nothing', async () => {
     const fixture = find('error-permission-grant-on-an-ungrantable-family-confers-nothing');
-    // Written directly, because stack.grant() refuses the family outright —
+    // Written directly, because stack.grantType() refuses the family outright —
     // which is the point: this pins the second half of the rule, where a
     // grant that reached storage some other way is read back as conferring
     // nothing rather than trusted.
@@ -1934,7 +2013,7 @@ describe('error response fixtures', () => {
       actions: ['create', 'read-any'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const body = withFreshId(fixture.requestBody as WireRecord);
     const { status, data } = await dispatch(fixture, token, undefined, body);
     expectError(status, data, fixture);
@@ -1968,7 +2047,7 @@ describe('error response fixtures', () => {
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: "someone else's" });
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
     expectError(status, data, fixture);
 
@@ -2140,9 +2219,9 @@ describe('error response fixtures', () => {
 // connection sees, optionally across mutations made while it's open.
 // tests/changeFeedClient.ts dispatches those against the real GET /changes.
 //
-// Same targeted-field discipline as every other block: a fixture's `seq`
+// Same targeted-field discipline as every other block: a fixture's `cursor`
 // and record ids/timestamps are illustrative, not literal. This server
-// mints real cursors (`resume: true`), so `ready.data.seq` and
+// mints real cursors (`resume: true`), so `ready.data.cursor` and
 // every `record` frame's SSE `id:` are asserted structurally (base64url
 // shaped) below rather than deep-equated against a fixture's placeholder.
 // -------------------------------------------------------
@@ -2151,8 +2230,8 @@ function frameData(frame: DecodedFrame): Record<string, unknown> {
   return frame.data as Record<string, unknown>;
 }
 
-/** base64url charset — the shape every minted cursor is held to (isValidSeq). */
-const SEQ_PATTERN = /^[A-Za-z0-9_-]+$/;
+/** base64url charset — the shape every minted cursor is held to (isValidCursor). */
+const CURSOR_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 describe('changeFeed fixtures', () => {
   const handled = new Set<string>();
@@ -2177,9 +2256,9 @@ describe('changeFeed fixtures', () => {
       const [ready] = await conn.waitForFrames(1);
       expect(ready.event).toBe('ready');
       // ready never carries an SSE `id:` line — the cursor it reports rides
-      // in the JSON body, as `data.seq`.
+      // in the JSON body, as `data.cursor`.
       expect(ready.id).toBeUndefined();
-      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
+      expect(frameData(ready).cursor).toMatch(CURSOR_PATTERN);
     } finally {
       await conn.close();
     }
@@ -2199,15 +2278,15 @@ describe('changeFeed fixtures', () => {
       const [, frame] = await conn.waitForFrames(2);
       expect(frame.event).toBe('record');
       // A record frame's SSE `id:` is its resume cursor.
-      expect(frame.id).toMatch(SEQ_PATTERN);
-      expect(frame.id).toBe((frameData(frame) as { seq?: string }).seq);
+      expect(frame.id).toMatch(CURSOR_PATTERN);
+      expect(frame.id).toBe((frameData(frame) as { cursor?: string }).cursor);
       const data = frameData(frame);
       expect(data.kind).toBe('created');
       expect(data.ops).toEqual(['create']);
       expect(data.recordId).toBe(recordId);
       expect(data.typeId).toBe(NOTE_TYPE);
       expect(data.version).toBe(1);
-      expect((data.actor as { entityId: string }).entityId).toBe(TEST_ENTITY_ID);
+      expect((data.actor as { subjectId: string }).subjectId).toBe(TEST_ENTITY_ID);
     } finally {
       await conn.close();
     }
@@ -2226,17 +2305,17 @@ describe('changeFeed fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
           {
             kind: 'permission',
             label: 'write',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
@@ -2249,7 +2328,7 @@ describe('changeFeed fixtures', () => {
       expect(data.kind).toBe('changed');
       expect(data.ops).toEqual(['patch']);
       expect(data.recordId).toBe(record.id);
-      expect((data.actor as { entityId: string }).entityId).toBe(CONTRIBUTOR_ID);
+      expect((data.actor as { subjectId: string }).subjectId).toBe(CONTRIBUTOR_ID);
     } finally {
       await conn.close();
     }
@@ -2288,11 +2367,10 @@ describe('changeFeed fixtures', () => {
       (f) => f.name === 'change-feed-dissociate-frame-carries-associationsRemoved',
     )!;
     handled.add(fixture.name);
-    const uploaded = await t.ctx.stack.putAttachment(
-      new Uint8Array([1, 2, 3]),
-      'image/png',
-      'embed.png',
-    );
+    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: 'image/png',
+      filename: 'embed.png',
+    });
     const association = { kind: 'attachment', label: 'embed', fileId: uploaded.content.fileId };
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     await req(t.app, 'POST', `/records/${record.id}/associations`, {
@@ -2348,24 +2426,24 @@ describe('changeFeed fixtures', () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'to be purged' },
-      { parentId: parent.id, entityId: CONTRIBUTOR_ID },
+      { parentId: parent.id, createdBy: { subjectId: CONTRIBUTOR_ID } },
     );
     const conn = await openChangeFeed(t.app, '/changes?include=record', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token: TEST_TOKEN });
+      await req(t.app, 'DELETE', `/records/${record.id}?purge=true`, { token: TEST_TOKEN });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('purged');
-      expect(data.ops).toEqual(['hard-delete']);
+      expect(data.ops).toEqual(['purge']);
       expect(data.recordId).toBe(record.id);
       expect(data.typeId).toBe(NOTE_TYPE);
       expect('record' in data).toBe(false);
       expect('parentId' in data).toBe(false);
-      // Owner-acting-alone is the only way to reach hard delete, and a
+      // Owner-acting-alone is the only way to reach purge, and a
       // purge stamps nothing on a record that no longer exists — the actor
       // is the requester, never the record's own author (CONTRIBUTOR_ID).
-      expect((data.actor as { entityId: string }).entityId).toBe(TEST_ENTITY_ID);
+      expect((data.actor as { subjectId: string }).subjectId).toBe(TEST_ENTITY_ID);
     } finally {
       await conn.close();
     }
@@ -2408,12 +2486,12 @@ describe('changeFeed fixtures', () => {
           {
             kind: 'permission',
             label: 'read',
-            grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+            grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
           },
         ],
       },
     );
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const conn = await openChangeFeed(t.app, '/changes', { token });
     try {
       await conn.waitForFrames(1); // ready
@@ -2435,12 +2513,16 @@ describe('changeFeed fixtures', () => {
     }
   });
 
-  test('change-feed-typeid-filter-matches-by-baseid', async () => {
+  // typeId is an exact match: a record already at note@2 is invisible to a
+  // note@1 filter, but a migration *out of* note@1 is delivered — matched
+  // against the type it left — carrying the new typeId.
+  test('change-feed-typeid-filter-matches-exactly', async () => {
     const fixture = changeFeedFixtures.find(
-      (f) => f.name === 'change-feed-typeid-filter-matches-by-baseid',
+      (f) => f.name === 'change-feed-typeid-filter-matches-exactly',
     )!;
     handled.add(fixture.name);
     const note = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const later = await t.ctx.stack.create(NOTE_TYPE_V2, { title: 'Already v2' });
     const comment = await t.ctx.stack.create(COMMENT_TYPE, { body: 'unrelated' });
     const conn = await openChangeFeed(t.app, `/changes?typeId=${encodeURIComponent(NOTE_TYPE)}`, {
       token: TEST_TOKEN,
@@ -2451,17 +2533,53 @@ describe('changeFeed fixtures', () => {
         token: TEST_TOKEN,
         body: { contentPatch: { body: 'still unrelated' } },
       });
+      await req(t.app, 'PATCH', `/records/${later.id}`, {
+        token: TEST_TOKEN,
+        body: { contentPatch: { title: 'Later' } },
+      });
       await req(t.app, 'POST', `/records/${note.id}/migrate`, {
         token: TEST_TOKEN,
         body: { toTypeId: NOTE_TYPE_V2, content: { title: 'Hello', pinned: false } },
       });
-      // Exactly one more frame — the migration — proves the unrelated
-      // type's edit was filtered out rather than merely arriving later.
+      // Exactly one more frame — the migration — proves the other type's
+      // edit and the note@2 edit were filtered out rather than merely
+      // arriving later.
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.recordId).toBe(note.id);
       expect(data.typeId).toBe(NOTE_TYPE_V2);
       expect(data.ops).toEqual(['migrate']);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('change-feed-baseid-filter-matches-every-version', async () => {
+    const fixture = changeFeedFixtures.find(
+      (f) => f.name === 'change-feed-baseid-filter-matches-every-version',
+    )!;
+    handled.add(fixture.name);
+    const baseId = NOTE_TYPE.slice(0, NOTE_TYPE.lastIndexOf('@'));
+    const comment = await t.ctx.stack.create(COMMENT_TYPE, { body: 'unrelated' });
+    const later = await t.ctx.stack.create(NOTE_TYPE_V2, { title: 'Already v2' });
+    const conn = await openChangeFeed(t.app, `/changes?baseId=${encodeURIComponent(baseId)}`, {
+      token: TEST_TOKEN,
+    });
+    try {
+      await conn.waitForFrames(1); // ready
+      await req(t.app, 'PATCH', `/records/${comment.id}`, {
+        token: TEST_TOKEN,
+        body: { contentPatch: { body: 'still unrelated' } },
+      });
+      await req(t.app, 'PATCH', `/records/${later.id}`, {
+        token: TEST_TOKEN,
+        body: { contentPatch: { title: 'Later' } },
+      });
+      const [, frame] = await conn.waitForFrames(2);
+      const data = frameData(frame);
+      expect(data.recordId).toBe(later.id);
+      expect(data.typeId).toBe(NOTE_TYPE_V2);
+      expect(data.ops).toEqual(['patch']);
     } finally {
       await conn.close();
     }
@@ -2636,14 +2754,14 @@ describe('changeFeed sequence fixtures', () => {
       expect(first.status).toBe(fixture.steps[0]!.responseStatus);
       const [ready] = await first.waitForFrames(1);
       expect(ready.event).toBe('ready');
-      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
+      expect(frameData(ready).cursor).toMatch(CURSOR_PATTERN);
       await req(t.app, 'PATCH', `/records/${record.id}`, {
         token: TEST_TOKEN,
         body: { contentPatch: { title: 'first' } },
       });
       const [, changeFrame] = await first.waitForFrames(2);
       expect(changeFrame.event).toBe('record');
-      expect(changeFrame.id).toMatch(SEQ_PATTERN);
+      expect(changeFrame.id).toMatch(CURSOR_PATTERN);
       lastEventId = changeFrame.id!;
     } finally {
       await first.close();
@@ -2667,9 +2785,9 @@ describe('changeFeed sequence fixtures', () => {
       expect(second.status).toBe(fixture.steps[1]!.responseStatus);
       const [ready, replayed] = await second.waitForFrames(2);
       expect(ready.event).toBe('ready');
-      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
+      expect(frameData(ready).cursor).toMatch(CURSOR_PATTERN);
       expect(replayed.event).toBe('record');
-      expect(replayed.id).toMatch(SEQ_PATTERN);
+      expect(replayed.id).toMatch(CURSOR_PATTERN);
       expect(replayed.id).not.toBe(lastEventId);
       const data = frameData(replayed);
       expect(data.recordId).toBe(record.id);
@@ -2705,8 +2823,8 @@ describe('changeFeed sequence fixtures', () => {
       expect(first.status).toBe(fixture.steps[0]!.responseStatus);
       const [ready] = await first.waitForFrames(1);
       expect(ready.event).toBe('ready');
-      headCursor = frameData(ready).seq as string;
-      expect(headCursor).toMatch(SEQ_PATTERN);
+      headCursor = frameData(ready).cursor as string;
+      expect(headCursor).toMatch(CURSOR_PATTERN);
     } finally {
       await first.close();
     }
@@ -2724,8 +2842,8 @@ describe('changeFeed sequence fixtures', () => {
       const [ready, reset] = await second.waitForFrames(2);
       expect(ready.event).toBe('ready');
       // A fresh buffer, so a fresh (different) head cursor.
-      expect(frameData(ready).seq).toMatch(SEQ_PATTERN);
-      expect(frameData(ready).seq).not.toBe(headCursor);
+      expect(frameData(ready).cursor).toMatch(CURSOR_PATTERN);
+      expect(frameData(ready).cursor).not.toBe(headCursor);
       expect(reset.event).toBe('reset');
       expect(frameData(reset).reason).toBe('cursor_expired');
     } finally {
@@ -3003,7 +3121,7 @@ describe('attachmentDownload fixtures', () => {
   async function uploadFile(mimeType: string): Promise<string> {
     const record = await t.ctx.stack.putAttachment(
       new TextEncoder().encode(`conformance-fixture-bytes:${mimeType}`),
-      mimeType,
+      { mimeType: mimeType },
     );
     return (record.content as { fileId: string }).fileId;
   }
@@ -3061,7 +3179,7 @@ describe('attachmentDownload fixtures', () => {
     // Raw bytes with no _attachment@1 record at all — bypasses
     // Stack.putAttachment (which creates the record atomically) by writing
     // straight through the adapter.
-    const fileId = await t.ctx.adapter.putAttachment(new TextEncoder().encode('orphan-bytes'));
+    const fileId = await t.ctx.adapter.putBlob(new TextEncoder().encode('orphan-bytes'));
     await dispatch(fixture, fileId);
   });
 
@@ -3136,7 +3254,7 @@ describe('attachmentUpload fixtures', () => {
 
   test('attachment-upload-non-owner-without-create-grant-forbidden', async () => {
     const fixture = find('attachment-upload-non-owner-without-create-grant-forbidden');
-    const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const { status, data } = await dispatch(fixture, { token });
     expect(status).toBe(fixture.responseStatus);
     const expected = fixture.responseBody as { error: { code: string } };

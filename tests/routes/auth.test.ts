@@ -343,7 +343,10 @@ describe('handshake token bookkeeping', () => {
   // nothing else does either — so an unauthenticated route that mints one
   // per call grows the table without bound.
   it('reclaims expired token rows rather than letting them accumulate', async () => {
-    await t.ctx.tokens.createToken(OTHER_ENTITY_ID, { expiresAt: new Date(Date.now() - 1000) });
+    await t.ctx.tokens.createToken(
+      { subjectId: OTHER_ENTITY_ID },
+      { expiresAt: new Date(Date.now() - 1000) },
+    );
     expect((await t.ctx.tokens.listTokens()).length).toBe(1);
 
     const keypair = await generateDidKeypair();
@@ -392,8 +395,12 @@ describe('invalid bearer credentials', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(NOTE_TYPE_ID, 'Note', {
-      body: { kind: 'text' as const, required: true as const },
+    await t.ctx.stack.defineType({
+      id: NOTE_TYPE_ID,
+      name: 'Note',
+      schema: {
+        body: { kind: 'text' as const, required: true as const },
+      },
     });
     await t.ctx.stack.create(
       NOTE_TYPE_ID,
@@ -412,15 +419,18 @@ describe('invalid bearer credentials', () => {
   });
 
   it('rejects an expired token on an optional-auth route with 401', async () => {
-    const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID, {
-      expiresAt: new Date(Date.now() - 1000),
-    });
+    const { token } = await t.ctx.adapter.createToken(
+      { subjectId: OTHER_ENTITY_ID },
+      {
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    );
     const { status } = await req(t.app, 'GET', '/records', { token });
     expect(status).toBe(401);
   });
 
   it('rejects a revoked token on an optional-auth route with 401', async () => {
-    const { id, token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+    const { id, token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     await t.ctx.tokens.revokeToken(id);
     const { status } = await req(t.app, 'GET', '/records', { token });
     expect(status).toBe(401);
