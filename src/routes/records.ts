@@ -1,16 +1,11 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
+import { knownParams, booleanParam } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import type { ScopedStack } from '@haverstack/core';
 import type { TokenSession } from '@haverstack/core/wire';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
-import {
-  rejectRenamedParams,
-  RENAMED_RECORD_QUERY_PARAMS,
-  RENAMED_JOURNAL_PARAMS,
-  RENAMED_DELETE_PARAMS,
-} from '../lib/renamed.js';
 import {
   parseQueryBody,
   parseQueryParams,
@@ -51,7 +46,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // anonymous caller gets the same public-record subset either way.
   // Registered ahead of the /:id patterns, which would otherwise capture
   // the literal "query" segment.
-  app.post('/query', async (c) => {
+  app.post('/query', knownParams(), async (c) => {
     const auth = c.get('auth');
     const query = clampLimit(parseQueryBody(await readJson(c)));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
@@ -65,9 +60,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // GET /records — query by native fields via URL params
   app.get('/', async (c) => {
     const auth = c.get('auth');
-    const url = new URL(c.req.url);
-    rejectRenamedParams(url, RENAMED_RECORD_QUERY_PARAMS);
-    const query = clampLimit(parseQueryParams(url));
+    const query = clampLimit(parseQueryParams(new URL(c.req.url)));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
     const body: WireQueryResponse = {
       records: result.records.map(serializeRecord),
@@ -83,7 +76,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // their literal value — is `createOptionsFromWireRecord()`'s disposition
   // to make, not this route's: see `@haverstack/core/wire` and
   // docs/spec/wire-format.md § Records.
-  app.post('/', requireAuth(), async (c) => {
+  app.post('/', knownParams(), requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await readJson(c);
     const { typeId, content, options } = createOptionsFromWireRecord(body, auth, ownerEntityId);
@@ -92,7 +85,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // GET /records/:id
-  app.get('/:id', async (c) => {
+  app.get('/:id', knownParams(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const record = await scopeFor(auth).get(id);
@@ -118,7 +111,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // docs/spec/access-control.md) and resolves each change-set key against its
   // own gate, so a denial round-trips as the core error it is rather than a
   // guess made before the permission check ran.
-  app.patch('/:id', requireAuth(), async (c) => {
+  app.patch('/:id', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const changes = changesFromWireBody(await readJson(c));
@@ -138,12 +131,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // record, so there is no read-then-delete window for a concurrent write
   // to fall into. See docs/spec/wire-format.md § Records and
   // docs/spec/attachments.md § A purge strands the bytes it referenced.
-  app.delete('/:id', requireAuth(), async (c) => {
+  app.delete('/:id', knownParams('purge'), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const url = new URL(c.req.url);
-    rejectRenamedParams(url, RENAMED_DELETE_PARAMS);
-    const purge = url.searchParams.get('purge') === 'true';
+    const purge = booleanParam(new URL(c.req.url), 'purge');
     const session = stack.asActor(auth);
 
     const { record } = await session.deleteAndReturn(id, {
@@ -155,7 +146,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // POST /records/:id/undelete — reverses a soft delete; idempotent
-  app.post('/:id/undelete', requireAuth(), async (c) => {
+  app.post('/:id/undelete', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const restored = await stack
@@ -168,7 +159,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // Permissions
   // ------------------------------------------------------------------
 
-  app.get('/:id/permissions', async (c) => {
+  app.get('/:id/permissions', knownParams(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const record = await scopeFor(auth).get(id);
@@ -183,7 +174,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // this surface and holds the set to `write` implying `read`, so nothing
   // here inspects the body. See docs/spec/access-control.md
   // § Record-level permissions.
-  app.post('/:id/permissions', requireAuth(), async (c) => {
+  app.post('/:id/permissions', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<AuthorityAssociation>(c);
@@ -193,7 +184,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   // POST to a /delete sub-path for the reason the association endpoints
   // use one, below.
-  app.post('/:id/permissions/delete', requireAuth(), async (c) => {
+  app.post('/:id/permissions/delete', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<AuthorityAssociation>(c);
@@ -205,7 +196,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // Associations
   // ------------------------------------------------------------------
 
-  app.get('/:id/associations', async (c) => {
+  app.get('/:id/associations', knownParams('kind', 'label'), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const record = await scopeFor(auth).get(id);
@@ -223,7 +214,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // write order, so there is no race for a precondition to fence. Both
   // answer with a record carrying whatever version it already had. See
   // docs/spec/wire-format.md § Associations.
-  app.post('/:id/associations', requireAuth(), async (c) => {
+  app.post('/:id/associations', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<DataAssociation>(c);
@@ -235,7 +226,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // POST, not DELETE — a DELETE request body has no defined semantics
   // (RFC 9110 §9.3.5) and is a portability landmine for proxies/gateways
   // that drop or reject it.
-  app.post('/:id/associations/delete', requireAuth(), async (c) => {
+  app.post('/:id/associations/delete', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<DataAssociation>(c);
@@ -261,9 +252,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.get('/:id/journal', async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
-    const url = new URL(c.req.url);
-    rejectRenamedParams(url, RENAMED_JOURNAL_PARAMS);
-    const query = parseJournalParams(url);
+    const query = parseJournalParams(new URL(c.req.url));
     const limit = clampJournalLimit(query.limit);
 
     const entries = await scopeFor(auth).getJournal(id, { ...query, limit });
@@ -279,14 +268,14 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // Versions
   // ------------------------------------------------------------------
 
-  app.get('/:id/versions', async (c) => {
+  app.get('/:id/versions', knownParams(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const versions = await scopeFor(auth).getVersions(id);
     return c.json(versions.map(serializeVersion));
   });
 
-  app.get('/:id/versions/:version', async (c) => {
+  app.get('/:id/versions/:version', knownParams(), async (c) => {
     const id = c.req.param('id');
     const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth');
@@ -296,7 +285,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // POST /records/:id/restore/:version — creates new version, does not rewrite history
-  app.post('/:id/restore/:version', requireAuth(), async (c) => {
+  app.post('/:id/restore/:version', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth')!;
@@ -312,10 +301,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // ScopedStack.commitMigration(). Owner acting alone only: replacing
   // content and typeId wholesale would have to re-derive every gate
   // create() and update() apply at both ends.
-  app.post('/:id/migrate', requireOwner(ownerEntityId), async (c) => {
+  app.post('/:id/migrate', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await readJson<Record<string, unknown>>(c);
+    const body = await readJson<Record<string, unknown>>(c, ['toTypeId', 'content']);
     if (!body.toTypeId || typeof body.toTypeId !== 'string')
       throw new StackBadRequestError('toTypeId is required');
     if (!body.content || typeof body.content !== 'object')

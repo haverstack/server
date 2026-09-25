@@ -1,9 +1,9 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
+import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
-import { rejectRenamedFields, RENAMED_TOKEN_FIELDS } from '../lib/renamed.js';
 import { parseDate } from '@haverstack/wire-types';
 import { StackValidationError } from '@haverstack/core';
 import { isValidDid } from '@haverstack/core/did';
@@ -19,16 +19,13 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   // owner), and `subjectId` asserts a delegation out of band — the subject
   // that principal acts for (default: the principal itself), per
   // docs/spec/wire-format.md § The session a token names.
-  app.post('/', requireOwner(ownerEntityId), async (c) => {
+  app.post('/', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const body = await readJson<{
       principalId?: string;
       subjectId?: string;
       label?: string;
       expiresAt?: string;
-    }>(c);
-    // A stale client's `entityId` would otherwise be ignored and the token
-    // minted for the owner — a full owner token handed to whoever it was for.
-    rejectRenamedFields(body, RENAMED_TOKEN_FIELDS);
+    }>(c, ['principalId', 'subjectId', 'label', 'expiresAt']);
     if (body.principalId !== undefined && !isValidDid(body.principalId))
       throw new StackValidationError([{ path: 'principalId', message: 'Must be a DID' }]);
     if (body.subjectId !== undefined && !isValidDid(body.subjectId))
@@ -36,8 +33,15 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
 
     const principalId = body.principalId ?? ownerEntityId;
     const subjectId = body.subjectId ?? principalId;
-    const expiresAt = body.expiresAt ? parseDate(body.expiresAt) : undefined;
-    if (body.expiresAt && !expiresAt)
+    if (body.label !== undefined && typeof body.label !== 'string')
+      throw new StackValidationError([{ path: 'label', message: 'Must be a string' }]);
+    const expiresAt =
+      body.expiresAt !== undefined
+        ? typeof body.expiresAt === 'string'
+          ? parseDate(body.expiresAt)
+          : undefined
+        : undefined;
+    if (body.expiresAt !== undefined && !expiresAt)
       throw new StackValidationError([{ path: 'expiresAt', message: 'Invalid date' }]);
 
     const { id, token } = await tokens.createToken(
@@ -67,13 +71,13 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   });
 
   // GET /tokens — list all DB-managed tokens; never returns token values
-  app.get('/', requireOwner(ownerEntityId), async (c) => {
+  app.get('/', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const list = await tokens.listTokens();
     return c.json({ tokens: list.map(serializeToken) });
   });
 
   // DELETE /tokens/:id — revoke a token by its ID
-  app.delete('/:id', requireOwner(ownerEntityId), async (c) => {
+  app.delete('/:id', knownParams(), requireOwner(ownerEntityId), async (c) => {
     await tokens.revokeToken(c.req.param('id'));
     return c.body(null, 204);
   });

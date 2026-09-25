@@ -13,6 +13,7 @@ import type {
 import type { Context } from 'hono';
 import type { Logger } from 'pino';
 import type { AppEnv } from '../types.js';
+import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { readJson } from '../lib/json.js';
 import { createExpiredTokenSweeper } from '../lib/tokenSweep.js';
@@ -45,8 +46,8 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
 
   // POST /auth/challenge — issues a nonce bound to the requested DID.
   // Unauthenticated: this is how a token is earned in the first place.
-  app.post('/challenge', async (c) => {
-    const body = await readJson<Partial<AuthChallengeRequest>>(c);
+  app.post('/challenge', knownParams(), async (c) => {
+    const body = await readJson<Partial<AuthChallengeRequest>>(c, ['did']);
     if (typeof body.did !== 'string' || !isValidDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
     }
@@ -57,8 +58,8 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
 
   // POST /auth/token — redeems a signed nonce for a bearer token.
   // Unauthenticated for the same reason.
-  app.post('/token', async (c) => {
-    const body = await readJson<Partial<AuthTokenRequest>>(c);
+  app.post('/token', knownParams(), async (c) => {
+    const body = await readJson<Partial<AuthTokenRequest>>(c, ['did', 'nonce', 'signature']);
     if (typeof body.did !== 'string' || !isValidDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
     }

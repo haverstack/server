@@ -2,7 +2,7 @@
 
 All routes are prefixed by the base URL. Requests are authenticated with a `Bearer` token in the `Authorization` header.
 
-Names renamed in 0.11.0 are refused with `400`, naming the replacement, rather than ignored: `?hard=` (now `?purge=`), `?sinceSeq=` (now `?afterSeq=`), `GET /records`' `?entityId=` / `?principalId=` / `?hasAttachment=` (now `?createdBySubject=` / `?createdByPrincipal=` / `?attachmentLabel=`), `GET /changes`' `?entityId=` (now `?createdBySubject=`), and `POST /tokens`' `entityId` / `onBehalfOf` (now `principalId` / `subjectId`).
+A query param or JSON body key an endpoint doesn't define is refused with `400` rather than ignored, and a boolean param takes only `true` or `false`.
 
 ## Discovery
 

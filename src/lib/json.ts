@@ -8,7 +8,10 @@ import type { AppEnv } from '../types.js';
  * catch-all as an unlabeled 500 instead of the 400 `bad_request` every other
  * structurally-invalid request gets (docs/spec/wire-format.md § Error responses).
  */
-export async function readJson<T = unknown>(c: Context<AppEnv>): Promise<T> {
+export async function readJson<T = unknown>(
+  c: Context<AppEnv>,
+  keys?: readonly string[],
+): Promise<T> {
   let parsed: unknown;
   try {
     parsed = await c.req.json<T>();
@@ -23,5 +26,21 @@ export async function readJson<T = unknown>(c: Context<AppEnv>): Promise<T> {
   if (parsed === null || typeof parsed !== 'object') {
     throw new StackBadRequestError('Request body must be a JSON object');
   }
+  if (keys) rejectUnknownKeys(parsed as Record<string, unknown>, keys);
   return parsed as T;
+}
+
+/**
+ * A key the endpoint doesn't define is refused rather than ignored: an
+ * ignored field turns a mistaken request into a different one that
+ * succeeds, and the caller never learns it asked for something else.
+ */
+export function rejectUnknownKeys(body: Record<string, unknown>, keys: readonly string[]): void {
+  const unknown = Object.keys(body).filter((key) => !keys.includes(key));
+  if (unknown.length > 0) {
+    throw new StackBadRequestError(
+      `Unknown body key${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. ` +
+        `This endpoint takes: ${keys.join(', ') || 'no keys'}.`,
+    );
+  }
 }

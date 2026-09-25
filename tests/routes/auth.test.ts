@@ -107,23 +107,14 @@ describe('POST /auth/token', () => {
     expect(session).toEqual({ principalId: keypair.did, subjectId: keypair.did });
   });
 
-  it('never lets the client name its own subject, even if it tries', async () => {
+  it('refuses a client naming its own subject', async () => {
     const keypair = await generateDidKeypair();
     const { nonce, signature } = await challengeAndSign(t, keypair);
 
-    const { status, data } = await req(t.app, 'POST', '/auth/token', {
-      body: {
-        did: keypair.did,
-        nonce,
-        signature,
-        onBehalfOf: 'did:key:someone-else',
-        subjectId: 'did:key:someone-else',
-      },
+    const { status } = await req(t.app, 'POST', '/auth/token', {
+      body: { did: keypair.did, nonce, signature, subjectId: 'did:key:someone-else' },
     });
-    expect(status).toBe(200);
-    const d = data as { principalId: string; subjectId: string };
-    expect(d.principalId).toBe(keypair.did);
-    expect(d.subjectId).toBe(keypair.did);
+    expect(status).toBe(400);
   });
 
   it('is single-use: redeeming the same nonce twice fails the second time', async () => {
