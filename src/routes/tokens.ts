@@ -35,12 +35,7 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
     const subjectId = body.subjectId ?? principalId;
     if (body.label !== undefined && typeof body.label !== 'string')
       throw new StackValidationError([{ path: 'label', message: 'Must be a string' }]);
-    const expiresAt =
-      body.expiresAt !== undefined
-        ? typeof body.expiresAt === 'string'
-          ? parseDate(body.expiresAt)
-          : undefined
-        : undefined;
+    const expiresAt = typeof body.expiresAt === 'string' ? parseDate(body.expiresAt) : undefined;
     if (body.expiresAt !== undefined && !expiresAt)
       throw new StackValidationError([{ path: 'expiresAt', message: 'Invalid date' }]);
 

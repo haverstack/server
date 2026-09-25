@@ -51,7 +51,7 @@ export function typeRoutes(ctx: StackContext): Hono<AppEnv> {
     if (!body.schemaHash || typeof body.schemaHash !== 'string')
       throw new StackBadRequestError('schemaHash is required');
     if (body.migratesFrom !== undefined && typeof body.migratesFrom !== 'string')
-      throw new StackBadRequestError('migratesFrom must be a string');
+      throw new StackValidationError([{ path: 'migratesFrom', message: 'Must be a string' }]);
 
     const computedHash = await hashSchema(body.schema as TypeSchema);
     if (body.schemaHash !== computedHash)

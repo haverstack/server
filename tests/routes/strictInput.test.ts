@@ -58,6 +58,22 @@ describe('unrecognized request input', () => {
     expect(status).toBe(422);
   });
 
+  it('POST /types refuses a non-string migratesFrom with 422', async () => {
+    const { status } = await req(t.app, 'POST', '/types', {
+      token: TEST_TOKEN,
+      body: { id: 'x', name: 'x', schema: {}, schemaHash: 'x', migratesFrom: 5 },
+    });
+    expect(status).toBe(422);
+  });
+
+  it('PATCH /entity refuses non-object content with 422', async () => {
+    const { status } = await req(t.app, 'PATCH', '/entity', {
+      token: TEST_TOKEN,
+      body: { content: [] },
+    });
+    expect(status).toBe(422);
+  });
+
   it('PATCH /entity requires content', async () => {
     const { status } = await req(t.app, 'PATCH', '/entity', { token: TEST_TOKEN, body: {} });
     expect(status).toBe(400);
