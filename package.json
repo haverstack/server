@@ -1,6 +1,6 @@
 {
   "name": "@haverstack/server",
-  "version": "0.10.3",
+  "version": "0.11.0",
   "description": "Reference server implementation for Haverstack",
   "type": "module",
   "engines": {
