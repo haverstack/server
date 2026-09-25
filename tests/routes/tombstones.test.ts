@@ -10,9 +10,13 @@ import { openChangeFeed } from '../changeFeedClient.js';
 const NOTE_TYPE = 'com.example.test/note@1';
 
 async function seedNoteType(ctx: TestApp['ctx']) {
-  await ctx.stack.defineType(NOTE_TYPE, 'Note', {
-    title: { kind: 'string' },
-    body: { kind: 'text' },
+  await ctx.stack.defineType({
+    id: NOTE_TYPE,
+    name: 'Note',
+    schema: {
+      title: { kind: 'string' },
+      body: { kind: 'text' },
+    },
   });
 }
 

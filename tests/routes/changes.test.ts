@@ -39,7 +39,11 @@ describe('GET /changes', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
-    await t.ctx.stack.defineType(NOTE_TYPE, 'Note', { title: { kind: 'string' } });
+    await t.ctx.stack.defineType({
+      id: NOTE_TYPE,
+      name: 'Note',
+      schema: { title: { kind: 'string' } },
+    });
   });
   afterEach(async () => {
     await t.cleanup();
@@ -62,7 +66,7 @@ describe('GET /changes', () => {
     });
 
     it('rejects a charset-invalid cursor locally, as a 400, rather than as a reset frame', async () => {
-      // isValidSeq() only ever allows base64url — a space is never in that
+      // isValidCursor() only ever allows base64url — a space is never in that
       // alphabet. Refused before the SSE stream even opens, not treated as
       // a resumable-but-unrecognized cursor.
       const { status, data } = await req(t.app, 'GET', '/changes', {
@@ -107,7 +111,11 @@ describe('GET /changes', () => {
   it('sends periodic keepalive comments on an otherwise-idle connection', async () => {
     const dbPath = tempDbPath();
     const ctx = await createTestContext(dbPath);
-    await ctx.stack.defineType(NOTE_TYPE, 'Note', { title: { kind: 'string' } });
+    await ctx.stack.defineType({
+      id: NOTE_TYPE,
+      name: 'Note',
+      schema: { title: { kind: 'string' } },
+    });
     const config = testConfig(dbPath);
     const app = testChangesApp(ctx, config, { keepaliveMs: 20, sessionCheckMs: 60_000 });
     try {
@@ -137,10 +145,14 @@ describe('GET /changes', () => {
   it('closes the connection once a revoked token is re-checked', async () => {
     const dbPath = tempDbPath();
     const ctx = await createTestContext(dbPath);
-    await ctx.stack.defineType(NOTE_TYPE, 'Note', { title: { kind: 'string' } });
+    await ctx.stack.defineType({
+      id: NOTE_TYPE,
+      name: 'Note',
+      schema: { title: { kind: 'string' } },
+    });
     const config = testConfig(dbPath);
     const app = testChangesApp(ctx, config, { sessionCheckMs: 20, keepaliveMs: 60_000 });
-    const { id, token } = await ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { id, token } = await ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     try {
       const res = await app.request('/', {
         headers: { Accept: 'text/event-stream', Authorization: `Bearer ${token}` },
@@ -193,7 +205,7 @@ describe('GET /changes', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+              grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
             },
           ],
         },
@@ -206,18 +218,18 @@ describe('GET /changes', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+              grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
             },
           ],
         },
       );
-      const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
 
       const conn = await openChangeFeed(t.app, '/changes', { token });
       let cursor: string;
       try {
         const [ready] = await conn.waitForFrames(1);
-        cursor = (ready.data as { seq: string }).seq;
+        cursor = (ready.data as { cursor: string }).cursor;
       } finally {
         await conn.close();
       }
@@ -253,12 +265,12 @@ describe('GET /changes', () => {
       let cursor: string;
       try {
         const [ready] = await conn.waitForFrames(1);
-        cursor = (ready.data as { seq: string }).seq;
+        cursor = (ready.data as { cursor: string }).cursor;
       } finally {
         await conn.close();
       }
 
-      await req(t.app, 'DELETE', `/records/${record.id}?hard=true`, { token: TEST_TOKEN });
+      await req(t.app, 'DELETE', `/records/${record.id}?purge=true`, { token: TEST_TOKEN });
 
       const resumed = await openChangeFeed(t.app, '/changes', {
         token: TEST_TOKEN,
@@ -282,7 +294,7 @@ describe('GET /changes', () => {
       let cursor: string;
       try {
         const [ready] = await conn.waitForFrames(1);
-        cursor = (ready.data as { seq: string }).seq;
+        cursor = (ready.data as { cursor: string }).cursor;
       } finally {
         await conn.close();
       }
@@ -317,7 +329,7 @@ describe('GET /changes', () => {
       let cursor: string;
       try {
         const [ready] = await conn.waitForFrames(1);
-        cursor = (ready.data as { seq: string }).seq;
+        cursor = (ready.data as { cursor: string }).cursor;
       } finally {
         await conn.close();
       }
@@ -406,9 +418,13 @@ describe('GET /changes', () => {
   it('closes the connection when the token store cannot answer a session re-check', async () => {
     const dbPath = tempDbPath();
     const ctx = await createTestContext(dbPath);
-    await ctx.stack.defineType(NOTE_TYPE, 'Note', { title: { kind: 'string' } });
+    await ctx.stack.defineType({
+      id: NOTE_TYPE,
+      name: 'Note',
+      schema: { title: { kind: 'string' } },
+    });
     const config = testConfig(dbPath);
-    const { token } = await ctx.adapter.createToken(CONTRIBUTOR_ID);
+    const { token } = await ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     const app = testChangesApp(ctx, config, { sessionCheckMs: 20, keepaliveMs: 60_000 });
 
     // The store is reachable at connect (auth succeeds) and unreachable by
@@ -451,7 +467,7 @@ describe('GET /changes', () => {
 
   describe('includeUnlisted', () => {
     it('refuses a non-owner with 403 before the SSE stream opens', async () => {
-      const { token } = await t.ctx.adapter.createToken(CONTRIBUTOR_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
       const { status } = await req(t.app, 'GET', '/changes?includeUnlisted=true', { token });
       expect(status).toBe(403);
     });
@@ -566,12 +582,12 @@ describe('GET /changes', () => {
       }
     });
 
-    it('hard delete while unlisted emits nothing', async () => {
+    it('purge while unlisted emits nothing', async () => {
       const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' }, { unlisted: true });
       const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
       try {
         await conn.waitForFrames(1); // ready
-        await t.ctx.stack.delete(record.id, { hard: true });
+        await t.ctx.stack.delete(record.id, { purge: true });
         const proof = await t.ctx.stack.create(NOTE_TYPE, { title: 'public' });
         const [, frame] = await conn.waitForFrames(2);
         expect((frame.data as { recordId: string }).recordId).toBe(proof.id);
@@ -594,10 +610,11 @@ describe('GET /changes', () => {
   describe('permission scoping on a live connection', () => {
     it('stops delivering once a type-level grant is withdrawn mid-stream', async () => {
       const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'covered by a grant' });
-      const [grantRecord] = await t.ctx.stack.grant({ kind: 'entity', entityId: CONTRIBUTOR_ID }, [
-        { typeId: NOTE_TYPE, actions: ['read-any'] },
-      ]);
-      const { token } = await t.ctx.tokens.createToken(CONTRIBUTOR_ID);
+      const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE, {
+        actions: ['read-any'],
+        grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+      });
+      const { token } = await t.ctx.tokens.createToken({ subjectId: CONTRIBUTOR_ID });
 
       const conn = await openChangeFeed(t.app, '/changes', { token });
       try {
@@ -622,7 +639,7 @@ describe('GET /changes', () => {
               {
                 kind: 'permission',
                 label: 'read',
-                grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+                grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
               },
             ],
           },
@@ -636,7 +653,7 @@ describe('GET /changes', () => {
 
     it('starts delivering once a record is shared mid-stream', async () => {
       const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'private' });
-      const { token } = await t.ctx.tokens.createToken(CONTRIBUTOR_ID);
+      const { token } = await t.ctx.tokens.createToken({ subjectId: CONTRIBUTOR_ID });
 
       const conn = await openChangeFeed(t.app, '/changes', { token });
       try {
@@ -647,7 +664,7 @@ describe('GET /changes', () => {
         await t.ctx.stack.grantAccess(record.id, {
           kind: 'permission',
           label: 'read',
-          grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
         });
         await t.ctx.stack.patchContent(record.id, { title: 'now shared' });
 
@@ -667,12 +684,12 @@ describe('GET /changes', () => {
             {
               kind: 'relationship',
               label: 'admin',
-              target: { scope: 'entity', entityId: t.ctx.stack.ownerEntityId },
+              target: { kind: 'entity', entityId: t.ctx.stack.ownerEntityId },
             },
             {
               kind: 'relationship',
               label: 'member',
-              target: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+              target: { kind: 'entity', entityId: CONTRIBUTOR_ID },
             },
           ],
         },
@@ -685,12 +702,12 @@ describe('GET /changes', () => {
             {
               kind: 'permission',
               label: 'read',
-              grantee: { scope: 'group', groupId: group.id, role: 'member' },
+              grantee: { kind: 'group', groupId: group.id, role: 'member' },
             },
           ],
         },
       );
-      const { token } = await t.ctx.tokens.createToken(CONTRIBUTOR_ID);
+      const { token } = await t.ctx.tokens.createToken({ subjectId: CONTRIBUTOR_ID });
 
       const conn = await openChangeFeed(t.app, '/changes', { token });
       try {
@@ -704,7 +721,7 @@ describe('GET /changes', () => {
         await t.ctx.stack.dissociate(group.id, {
           kind: 'relationship',
           label: 'member',
-          target: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+          target: { kind: 'entity', entityId: CONTRIBUTOR_ID },
         });
         await t.ctx.stack.patchContent(record.id, { title: 'off the roster' });
 
@@ -716,7 +733,7 @@ describe('GET /changes', () => {
               {
                 kind: 'permission',
                 label: 'read',
-                grantee: { scope: 'entity', entityId: CONTRIBUTOR_ID },
+                grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
               },
             ],
           },

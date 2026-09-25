@@ -31,12 +31,12 @@ const init = workerData as QueryWorkerInit;
 // pool.ts). open() (not openOrInitialize()) reflects that: there is no
 // first-run path to handle here.
 const adapter = await LocalAdapter.open({ path: init.dbPath });
-const stack = await Stack.create(adapter);
+const stack = await Stack.open(adapter);
 
 parentPort.on('message', async (req: QueryRequest) => {
   const port = parentPort!;
   try {
-    const scoped = req.session ? stack.forSession(req.session) : stack.asEntity(null);
+    const scoped = req.session ? stack.asActor(req.session) : stack.asEntity(null);
     const result = await scoped.query(req.query);
     port.postMessage({ id: req.id, ok: true, result } satisfies QueryResponse);
   } catch (err) {

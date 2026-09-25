@@ -1,7 +1,9 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
+import { knownParams, booleanParam } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import type { ScopedStack, TokenSession } from '@haverstack/core';
+import type { ScopedStack } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core/wire';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import {
@@ -16,7 +18,7 @@ import {
 import { clampLimit, clampJournalLimit } from '../lib/queryLimit.js';
 import { serializeRecord, serializeVersion, serializeJournalEntry } from '@haverstack/wire-types';
 import type { WireQueryResponse, WireJournalResponse } from '@haverstack/wire-types';
-import { StackValidationError, StackQueryError, StackNotFoundError } from '@haverstack/core';
+import { StackValidationError, StackBadRequestError, StackNotFoundError } from '@haverstack/core';
 import type { AuthorityAssociation, DataAssociation, TypeId } from '@haverstack/core';
 
 // ---------------------------------------------------------------------------
@@ -36,7 +38,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   /** Scope to a session if authenticated, else the anonymous view. */
   function scopeFor(auth: TokenSession | null): ScopedStack {
-    return auth ? stack.forSession(auth) : stack.asEntity(null);
+    return auth ? stack.asActor(auth) : stack.asEntity(null);
   }
 
   // POST /records/query — full query with content-field filters. Optional
@@ -44,7 +46,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // anonymous caller gets the same public-record subset either way.
   // Registered ahead of the /:id patterns, which would otherwise capture
   // the literal "query" segment.
-  app.post('/query', async (c) => {
+  app.post('/query', knownParams(), async (c) => {
     const auth = c.get('auth');
     const query = clampLimit(parseQueryBody(await readJson(c)));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
@@ -67,23 +69,23 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     return c.json(body);
   });
 
-  // POST /records — a full record body, but version, entityId and
-  // principalId are stamped here and never trusted from it. Everything else
+  // POST /records — a full record body, but version, createdBy and
+  // updatedBy are stamped here and never trusted from it. Everything else
   // a wire record body can carry — which fields are forwarded as-is, which
   // are owner-acting-alone-only, and which reduce to a boolean rather than
   // their literal value — is `createOptionsFromWireRecord()`'s disposition
   // to make, not this route's: see `@haverstack/core/wire` and
   // docs/spec/wire-format.md § Records.
-  app.post('/', requireAuth(), async (c) => {
+  app.post('/', knownParams(), requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await readJson(c);
     const { typeId, content, options } = createOptionsFromWireRecord(body, auth, ownerEntityId);
-    const created = await stack.forSession(auth).create(typeId, content, options);
+    const created = await stack.asActor(auth).create(typeId, content, options);
     return c.json(serializeRecord(created), 200);
   });
 
   // GET /records/:id
-  app.get('/:id', async (c) => {
+  app.get('/:id', knownParams(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const record = await scopeFor(auth).get(id);
@@ -109,19 +111,19 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // docs/spec/access-control.md) and resolves each change-set key against its
   // own gate, so a denial round-trips as the core error it is rather than a
   // guess made before the permission check ran.
-  app.patch('/:id', requireAuth(), async (c) => {
+  app.patch('/:id', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const changes = changesFromWireBody(await readJson(c));
 
     const updated = await stack
-      .forSession(auth)
+      .asActor(auth)
       .mutate(id, changes, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(updated));
   });
 
-  // DELETE /records/:id  (?hard=true for permanent). Both answer 200 with
-  // a record: a soft delete with the tombstone it produced, a hard delete
+  // DELETE /records/:id  (?purge=true for permanent). Both answer 200 with
+  // a record: a soft delete with the tombstone it produced, a purge
   // with the record as it stood immediately before destruction. That body
   // is the requester's only report of the files the purge stranded; every
   // other row naming them is gone by the time it lands. deleteAndReturn()
@@ -129,14 +131,14 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // record, so there is no read-then-delete window for a concurrent write
   // to fall into. See docs/spec/wire-format.md § Records and
   // docs/spec/attachments.md § A purge strands the bytes it referenced.
-  app.delete('/:id', requireAuth(), async (c) => {
+  app.delete('/:id', knownParams('purge'), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const hard = new URL(c.req.url).searchParams.get('hard') === 'true';
-    const session = stack.forSession(auth);
+    const purge = booleanParam(new URL(c.req.url), 'purge');
+    const session = stack.asActor(auth);
 
     const { record } = await session.deleteAndReturn(id, {
-      hard,
+      purge,
       ifVersion: parseIfMatch(c.req.header('If-Match')),
     });
     if (!record) throw new StackNotFoundError('Record not found');
@@ -144,11 +146,11 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // POST /records/:id/undelete — reverses a soft delete; idempotent
-  app.post('/:id/undelete', requireAuth(), async (c) => {
+  app.post('/:id/undelete', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const restored = await stack
-      .forSession(auth)
+      .asActor(auth)
       .undelete(id, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(restored));
   });
@@ -157,7 +159,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // Permissions
   // ------------------------------------------------------------------
 
-  app.get('/:id/permissions', async (c) => {
+  app.get('/:id/permissions', knownParams(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const record = await scopeFor(auth).get(id);
@@ -172,21 +174,21 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // this surface and holds the set to `write` implying `read`, so nothing
   // here inspects the body. See docs/spec/access-control.md
   // § Record-level permissions.
-  app.post('/:id/permissions', requireAuth(), async (c) => {
+  app.post('/:id/permissions', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<AuthorityAssociation>(c);
-    const updated = await stack.forSession(auth).grantAccess(id, body);
+    const updated = await stack.asActor(auth).grantAccess(id, body);
     return c.json(serializeRecord(updated));
   });
 
   // POST to a /delete sub-path for the reason the association endpoints
   // use one, below.
-  app.post('/:id/permissions/delete', requireAuth(), async (c) => {
+  app.post('/:id/permissions/delete', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<AuthorityAssociation>(c);
-    const updated = await stack.forSession(auth).revokeAccess(id, body);
+    const updated = await stack.asActor(auth).revokeAccess(id, body);
     return c.json(serializeRecord(updated));
   });
 
@@ -194,7 +196,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // Associations
   // ------------------------------------------------------------------
 
-  app.get('/:id/associations', async (c) => {
+  app.get('/:id/associations', knownParams('kind', 'label'), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const record = await scopeFor(auth).get(id);
@@ -212,23 +214,23 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // write order, so there is no race for a precondition to fence. Both
   // answer with a record carrying whatever version it already had. See
   // docs/spec/wire-format.md § Associations.
-  app.post('/:id/associations', requireAuth(), async (c) => {
+  app.post('/:id/associations', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<DataAssociation>(c);
-    if (!body.kind || !body.label) throw new StackQueryError('kind and label are required');
-    const updated = await stack.forSession(auth).associate(id, body);
+    if (!body.kind || !body.label) throw new StackBadRequestError('kind and label are required');
+    const updated = await stack.asActor(auth).associate(id, body);
     return c.json(serializeRecord(updated));
   });
 
   // POST, not DELETE — a DELETE request body has no defined semantics
   // (RFC 9110 §9.3.5) and is a portability landmine for proxies/gateways
   // that drop or reject it.
-  app.post('/:id/associations/delete', requireAuth(), async (c) => {
+  app.post('/:id/associations/delete', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
     const body = await readJson<DataAssociation>(c);
-    const updated = await stack.forSession(auth).dissociate(id, body);
+    const updated = await stack.asActor(auth).dissociate(id, body);
     return c.json(serializeRecord(updated));
   });
 
@@ -266,14 +268,14 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // Versions
   // ------------------------------------------------------------------
 
-  app.get('/:id/versions', async (c) => {
+  app.get('/:id/versions', knownParams(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
     const versions = await scopeFor(auth).getVersions(id);
     return c.json(versions.map(serializeVersion));
   });
 
-  app.get('/:id/versions/:version', async (c) => {
+  app.get('/:id/versions/:version', knownParams(), async (c) => {
     const id = c.req.param('id');
     const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth');
@@ -283,12 +285,12 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   });
 
   // POST /records/:id/restore/:version — creates new version, does not rewrite history
-  app.post('/:id/restore/:version', requireAuth(), async (c) => {
+  app.post('/:id/restore/:version', knownParams(), requireAuth(), async (c) => {
     const id = c.req.param('id');
     const vNum = parsePositiveInt(c.req.param('version'), 'version number');
     const auth = c.get('auth')!;
     const restored = await stack
-      .forSession(auth)
+      .asActor(auth)
       .restoreVersion(id, vNum, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
     return c.json(serializeRecord(restored));
   });
@@ -299,21 +301,21 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // ScopedStack.commitMigration(). Owner acting alone only: replacing
   // content and typeId wholesale would have to re-derive every gate
   // create() and update() apply at both ends.
-  app.post('/:id/migrate', requireOwner(ownerEntityId), async (c) => {
+  app.post('/:id/migrate', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const body = await readJson<Record<string, unknown>>(c);
+    const body = await readJson<Record<string, unknown>>(c, ['toTypeId', 'content']);
     if (!body.toTypeId || typeof body.toTypeId !== 'string')
-      throw new StackQueryError('toTypeId is required');
+      throw new StackBadRequestError('toTypeId is required');
     if (!body.content || typeof body.content !== 'object')
-      throw new StackQueryError('content is required');
+      throw new StackBadRequestError('content is required');
     if (!(await stack.getType(body.toTypeId as TypeId)))
       throw new StackValidationError([
         { path: 'toTypeId', message: `Unknown type: "${body.toTypeId}"` },
       ]);
 
     const migrated = await stack
-      .forSession(auth)
+      .asActor(auth)
       .commitMigration(id, body.toTypeId as TypeId, body.content as Record<string, unknown>, {
         ifVersion: parseIfMatch(c.req.header('If-Match')),
       });

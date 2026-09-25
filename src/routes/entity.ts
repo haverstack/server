@@ -1,31 +1,36 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../types.js';
+import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import { serializeRecord } from '@haverstack/wire-types';
-import { StackNotFoundError } from '@haverstack/core';
+import { StackBadRequestError, StackNotFoundError, StackValidationError } from '@haverstack/core';
 
 export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
 
-  app.get('/', requireAuth(), async (c) => {
+  app.get('/', knownParams(), requireAuth(), async (c) => {
     const auth = c.get('auth')!;
-    const record = await stack.forSession(auth).getOwnerEntity();
+    const record = await stack.asActor(auth).getOwnerEntity();
     if (!record) throw new StackNotFoundError('Entity record not found');
     return c.json(serializeRecord(record));
   });
 
-  app.patch('/', requireOwner(ownerEntityId), async (c) => {
+  app.patch('/', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const auth = c.get('auth')!;
-    const record = await stack.forSession(auth).getOwnerEntity();
+    const body = await readJson<Record<string, unknown>>(c, ['content']);
+    const content = body.content;
+    if (content === undefined) throw new StackBadRequestError('content is required');
+    if (typeof content !== 'object' || content === null || Array.isArray(content))
+      throw new StackValidationError([{ path: 'content', message: 'Must be an object' }]);
+    const record = await stack.asActor(auth).getOwnerEntity();
     if (!record) throw new StackNotFoundError('Entity record not found');
-    const body = await readJson<Record<string, unknown>>(c);
     const updated = await stack
-      .forSession(auth)
-      .patchContent(record.id, (body.content ?? {}) as Record<string, unknown>);
+      .asActor(auth)
+      .patchContent(record.id, content as Record<string, unknown>);
     return c.json(serializeRecord(updated));
   });
 

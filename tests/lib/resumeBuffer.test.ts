@@ -25,12 +25,12 @@ describe('ResumeBuffer', () => {
     expect(decoded.n).toBe(0);
   });
 
-  it("advances the head cursor and attaches it as each entry's seq", () => {
+  it("advances the head cursor and attaches it as each entry's cursor", () => {
     const buffer = new ResumeBuffer(10);
     const entry = buffer.append(change());
     expect(entry.n).toBe(1);
-    expect(entry.frame.seq).toBe(buffer.headCursor());
-    expect(decodeCursor(entry.frame.seq!)!.n).toBe(1);
+    expect(entry.frame.cursor).toBe(buffer.headCursor());
+    expect(decodeCursor(entry.frame.cursor!)!.n).toBe(1);
   });
 
   it('notifies every attached live listener of each append, and stops once detached', () => {
@@ -108,7 +108,7 @@ describe('resumeBufferKey', () => {
     const filtered = resumeBufferKey({
       principalId: null,
       subjectId: null,
-      filter: { entityId: 'e1' },
+      filter: { createdBy: { subjectId: 'e1' } },
       includeRecords: false,
       includeUnlisted: false,
     });
@@ -158,13 +158,25 @@ describe('resumeBufferKey', () => {
       includeUnlisted: false,
     };
     expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
-      resumeBufferKey({ ...base, filter: { entityId: 'e1' } }),
+      resumeBufferKey({ ...base, filter: { createdBy: { subjectId: 'e1' } } }),
     );
     expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
       resumeBufferKey({ ...base, filter: { typeId: [] } }),
     );
     expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
       resumeBufferKey({ ...base, filter: { kinds: [] } }),
+    );
+  });
+
+  it('keys an empty createdBy the same as no createdBy', () => {
+    const base = {
+      principalId: null,
+      subjectId: null,
+      includeRecords: false,
+      includeUnlisted: false,
+    };
+    expect(resumeBufferKey({ ...base, filter: { createdBy: {} } })).toBe(
+      resumeBufferKey({ ...base, filter: {} }),
     );
   });
 
@@ -176,7 +188,13 @@ describe('resumeBufferKey', () => {
       includeUnlisted: false,
     };
     expect(resumeBufferKey({ ...base, filter: { parentId: 'x' } })).not.toBe(
-      resumeBufferKey({ ...base, filter: { entityId: 'x' } }),
+      resumeBufferKey({ ...base, filter: { createdBy: { subjectId: 'x' } } }),
+    );
+    expect(resumeBufferKey({ ...base, filter: { typeId: 'x@1' } })).not.toBe(
+      resumeBufferKey({ ...base, filter: { baseId: 'x@1' } }),
+    );
+    expect(resumeBufferKey({ ...base, filter: { createdBy: { subjectId: 'x' } } })).not.toBe(
+      resumeBufferKey({ ...base, filter: { createdBy: { principalId: 'x' } } }),
     );
   });
 });

@@ -6,13 +6,14 @@ import {
 } from '@haverstack/wire-types';
 import type { DiscoveryResponse } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
+import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import type { Config } from '../config.js';
 
 export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
-  app.get('/stack', (c) => {
+  app.get('/stack', knownParams(), (c) => {
     const body: DiscoveryResponse = {
       version: WIRE_PROTOCOL_VERSION,
       entityId: ctx.stack.ownerEntityId,
@@ -22,7 +23,7 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
       // imposes a limit, but this server enforces both. See
       // docs/spec/wire-format.md § Discovery.
       capabilities: {
-        ...ctx.stack.features,
+        ...ctx.stack.capabilities,
         limits: {
           attachmentBytes: config.maxAttachmentBytes,
           contentBytes: config.maxContentBytes,
@@ -34,7 +35,7 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
       // rather than discovering it as a 404 partway through one.
       auth: { methods: [AUTH_METHOD_DID_CHALLENGE] },
       // Top-level rather than inside `capabilities`, which carries only
-      // what the `...ctx.stack.features` spread brings. An object rather
+      // what the `...ctx.stack.capabilities` spread brings. An object rather
       // than a boolean for the same reason `auth` is: the surface grows
       // entries — another transport, batched frames — not more booleans.
       //

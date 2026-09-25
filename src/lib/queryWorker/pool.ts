@@ -40,7 +40,8 @@
  * by-id reads stay on the main thread.
  */
 import { Worker } from 'node:worker_threads';
-import type { StackQuery, QueryResult, TokenSession } from '@haverstack/core';
+import type { StackQuery, QueryResult } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core/wire';
 import { StackTimeoutError } from '@haverstack/core';
 import { deserializeError } from '@haverstack/wire-types';
 import type { Logger } from 'pino';

@@ -7,7 +7,8 @@
  * (serializeError/deserializeError from @haverstack/wire-types) since a
  * custom Error subclass doesn't survive structured clone as itself.
  */
-import type { StackQuery, QueryResult, TokenSession } from '@haverstack/core';
+import type { StackQuery, QueryResult } from '@haverstack/core';
+import type { TokenSession } from '@haverstack/core/wire';
 import type { WireError } from '@haverstack/wire-types';
 
 /**

@@ -41,7 +41,7 @@ describe('Types', () => {
     });
 
     it('returns 403 for a non-owner entity', async () => {
-      const { token } = await t.ctx.adapter.createToken(OTHER_ENTITY_ID);
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status } = await req(t.app, 'POST', '/types', {
         token,
         body: { id: typeId, baseId: 'x', version: 1, name: 'x', schema: {}, schemaHash: 'x' },
@@ -106,7 +106,7 @@ describe('Types', () => {
 
   describe('GET /types', () => {
     it('returns all registered types (no auth required)', async () => {
-      await t.ctx.stack.defineType(typeId, 'Item', schema);
+      await t.ctx.stack.defineType({ id: typeId, name: 'Item', schema: schema });
       const { status, data } = await req(t.app, 'GET', '/types');
       expect(status).toBe(200);
       expect((data as unknown[]).length).toBeGreaterThanOrEqual(1);
@@ -115,7 +115,7 @@ describe('Types', () => {
 
   describe('GET /types/:id', () => {
     it('returns one type (URL-encoded, no auth required)', async () => {
-      await t.ctx.stack.defineType(typeId, 'Item', schema);
+      await t.ctx.stack.defineType({ id: typeId, name: 'Item', schema: schema });
       const { status, data } = await req(t.app, 'GET', `/types/${encodeURIComponent(typeId)}`);
       expect(status).toBe(200);
       expect((data as Record<string, unknown>).id).toBe(typeId);

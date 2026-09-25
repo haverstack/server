@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { StackPermissionError, StackPayloadTooLargeError } from '@haverstack/core';
+import {
+  StackPermissionError,
+  StackPayloadTooLargeError,
+  StackValidationError,
+} from '@haverstack/core';
 import {
   resolveAttachmentDownloadContentType,
   resolveReferencedAttachment,
@@ -10,8 +14,10 @@ import {
 } from '@haverstack/core/wire';
 import { serializeRecord } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
+import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { readJson } from '../lib/json.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -35,25 +41,25 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   // _attachment@1 runs before a single byte is written: an authenticated
   // requester with no grant is refused, not merely denied a metadata
   // record afterward. See docs/spec/wire-format.md § Upload.
-  app.post('/', attachmentBodyLimit, requireAuth(), async (c) => {
+  app.post('/', knownParams('appId'), attachmentBodyLimit, requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const mimeType = c.req.header('Content-Type') || 'application/octet-stream';
     const filename = parseUploadFilename(c.req.header('Content-Disposition'));
     const appId = c.req.query('appId') || undefined;
 
     const data = new Uint8Array(await c.req.arrayBuffer());
-    const record = await stack.forSession(auth).putAttachment(data, mimeType, filename, appId);
+    const record = await stack.asActor(auth).putAttachment(data, { mimeType, filename, appId });
     return c.json(serializeRecord(record), 200);
   });
 
   // GET /attachments/:fileId — download
-  app.get('/:fileId', async (c) => {
+  app.get('/:fileId', knownParams('contentType', 'filename'), async (c) => {
     const fileId = c.req.param('fileId');
     const auth = c.get('auth');
 
     let data: Uint8Array;
     try {
-      data = await (auth ? stack.forSession(auth) : stack.asEntity(null)).getAttachment(fileId);
+      data = await (auth ? stack.asActor(auth) : stack.asEntity(null)).getAttachment(fileId);
     } catch (e) {
       // Anonymous and denied is a transport-auth failure, distinct from an
       // authenticated requester lacking access; everything else belongs to
@@ -105,7 +111,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   });
 
   // DELETE /attachments/:fileId
-  app.delete('/:fileId', requireOwner(ownerEntityId), async (c) => {
+  app.delete('/:fileId', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const fileId = c.req.param('fileId');
     await stack.deleteAttachment(fileId);
     return c.body(null, 204);
@@ -115,12 +121,22 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   // Owner-only, invoke-only (no built-in scheduling): dryRun makes a
   // cron-from-outside workflow safe. Body is entirely optional — every
   // field defaults inside ScopedStack.collectAttachmentGarbage().
-  app.post('/gc', requireOwner(ownerEntityId), async (c) => {
+  app.post('/gc', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const auth = c.get('auth')!;
-    const raw = await c.req.text();
-    const body = raw ? (JSON.parse(raw) as { graceMs?: number; dryRun?: boolean }) : {};
-    const result = await stack.forSession(auth).collectAttachmentGarbage({
-      ...(typeof body.graceMs === 'number' && { graceMs: body.graceMs }),
+    const body = (await c.req.text())
+      ? await readJson<{ graceMs?: unknown; dryRun?: unknown }>(c, ['graceMs', 'dryRun'])
+      : {};
+    if (
+      body.graceMs !== undefined &&
+      (typeof body.graceMs !== 'number' || !Number.isInteger(body.graceMs) || body.graceMs < 0)
+    )
+      throw new StackValidationError([
+        { path: 'graceMs', message: 'Must be a non-negative integer' },
+      ]);
+    if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean')
+      throw new StackValidationError([{ path: 'dryRun', message: 'Must be a boolean' }]);
+    const result = await stack.asActor(auth).collectAttachmentGarbage({
+      ...(body.graceMs !== undefined && { graceMs: body.graceMs }),
       ...(body.dryRun === true && { dryRun: true }),
     });
     return c.json(result, 200);

@@ -37,8 +37,12 @@ const THIRD_ENTITY_ID = 'did:key:third-entity-id-00000003';
 let t: TestApp;
 beforeEach(async () => {
   t = await buildTestApp();
-  await t.ctx.stack.defineType(NOTE_TYPE, 'Note', {
-    title: { kind: 'string', required: true },
+  await t.ctx.stack.defineType({
+    id: NOTE_TYPE,
+    name: 'Note',
+    schema: {
+      title: { kind: 'string', required: true },
+    },
   });
 });
 afterEach(async () => {
@@ -47,7 +51,7 @@ afterEach(async () => {
 
 /** A token the auth middleware will resolve to an undelegated session for `did`. */
 async function tokenFor(did: string): Promise<string> {
-  const { token } = await t.ctx.tokens.createToken(did);
+  const { token } = await t.ctx.tokens.createToken({ subjectId: did });
   return token;
 }
 
@@ -79,17 +83,17 @@ async function seedNotes() {
   const owner = await t.ctx.stack.create(
     NOTE_TYPE,
     { title: 'owner' },
-    { entityId: TEST_ENTITY_ID },
+    { createdBy: { subjectId: TEST_ENTITY_ID } },
   );
   const other = await t.ctx.stack.create(
     NOTE_TYPE,
     { title: 'other' },
-    { entityId: OTHER_ENTITY_ID },
+    { createdBy: { subjectId: OTHER_ENTITY_ID } },
   );
   const third = await t.ctx.stack.create(
     NOTE_TYPE,
     { title: 'third' },
-    { entityId: THIRD_ENTITY_ID },
+    { createdBy: { subjectId: THIRD_ENTITY_ID } },
   );
   return { owner, other, third };
 }
@@ -97,9 +101,10 @@ async function seedNotes() {
 describe('query scoping across the worker boundary', () => {
   it('answers a read-own grantee with their own records and nobody else’s', async () => {
     const { owner, other, third } = await seedNotes();
-    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { typeId: NOTE_TYPE, actions: ['read-own'] },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-own'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
 
     expect(await queryIds(token)).toEqual([other.id]);
@@ -109,9 +114,10 @@ describe('query scoping across the worker boundary', () => {
 
   it('widens to every record of the type under read-any', async () => {
     const { owner, other, third } = await seedNotes();
-    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { typeId: NOTE_TYPE, actions: ['read-any'] },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
 
     expect(await queryIds(token)).toEqual([owner.id, other.id, third.id].sort());
@@ -119,9 +125,10 @@ describe('query scoping across the worker boundary', () => {
 
   it('stops answering on the next query once the grant is withdrawn', async () => {
     const { owner } = await seedNotes();
-    const [grantRecord] = await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { typeId: NOTE_TYPE, actions: ['read-any'] },
-    ]);
+    const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
     expect(await queryIds(token)).toContain(owner.id);
 
@@ -133,9 +140,10 @@ describe('query scoping across the worker boundary', () => {
 
   it('confers again once the withdrawn grant is undeleted', async () => {
     const { owner } = await seedNotes();
-    const [grantRecord] = await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { typeId: NOTE_TYPE, actions: ['read-any'] },
-    ]);
+    const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
     await req(t.app, 'DELETE', `/records/${grantRecord!.id}`, { token: TEST_TOKEN });
     expect(await queryIds(token)).not.toContain(owner.id);
@@ -154,19 +162,20 @@ describe('query scoping across the worker boundary', () => {
           {
             kind: 'relationship',
             label: 'admin',
-            target: { scope: 'entity', entityId: TEST_ENTITY_ID },
+            target: { kind: 'entity', entityId: TEST_ENTITY_ID },
           },
           {
             kind: 'relationship',
             label: 'member',
-            target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
       },
     );
-    await t.ctx.stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
-      { typeId: NOTE_TYPE, actions: ['read-any'] },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: group.id, role: 'member' },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
     expect(await queryIds(token)).toContain(owner.id);
 
@@ -187,19 +196,20 @@ describe('query scoping across the worker boundary', () => {
           {
             kind: 'relationship',
             label: 'admin',
-            target: { scope: 'entity', entityId: TEST_ENTITY_ID },
+            target: { kind: 'entity', entityId: TEST_ENTITY_ID },
           },
           {
             kind: 'relationship',
             label: 'member',
-            target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+            target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
           },
         ],
       },
     );
-    await t.ctx.stack.grant({ kind: 'group', groupId: group.id, role: 'member' }, [
-      { typeId: NOTE_TYPE, actions: ['read-any'] },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'group', groupId: group.id, role: 'member' },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
     expect(await queryIds(token)).toContain(owner.id);
 
@@ -208,7 +218,7 @@ describe('query scoping across the worker boundary', () => {
       body: {
         kind: 'relationship',
         label: 'member',
-        target: { scope: 'entity', entityId: OTHER_ENTITY_ID },
+        target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
       },
     });
     expect(await queryIds(token)).not.toContain(owner.id);
@@ -216,9 +226,10 @@ describe('query scoping across the worker boundary', () => {
 
   it('never enumerates a _grant record for a grantee', async () => {
     await seedNotes();
-    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { typeId: NOTE_TYPE, actions: ['read-any'] },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
 
     // A _grant carries no entityId and no permissions, so no grant on
@@ -231,9 +242,10 @@ describe('query scoping across the worker boundary', () => {
 
   it('answers both query encodings with the same set', async () => {
     await seedNotes();
-    await t.ctx.stack.grant({ kind: 'entity', entityId: OTHER_ENTITY_ID }, [
-      { typeId: NOTE_TYPE, actions: ['read-own'] },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-own'],
+      grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+    });
     const token = await tokenFor(OTHER_ENTITY_ID);
 
     // One scoping rule, two parsers: a content filter must not widen what
@@ -253,9 +265,10 @@ describe('query scoping across the worker boundary', () => {
     await seedNotes();
     // `{ kind: 'authenticated' }` is every entity that turned up with a DID,
     // which is never the anonymous view.
-    await t.ctx.stack.grant({ kind: 'authenticated' }, [
-      { typeId: NOTE_TYPE, actions: ['read-any'] },
-    ]);
+    await t.ctx.stack.grantType(NOTE_TYPE, {
+      actions: ['read-any'],
+      grantee: { kind: 'authenticated' },
+    });
 
     expect(await queryIds(undefined)).toEqual([]);
     expect((await queryIds(await tokenFor(THIRD_ENTITY_ID))).length).toBe(3);

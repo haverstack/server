@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidSeq } from '@haverstack/wire-types';
+import { isValidCursor } from '@haverstack/wire-types';
 import { encodeCursor, decodeCursor } from '../../src/lib/resumeCursor.js';
 
 describe('resume cursor codec', () => {
@@ -10,7 +10,7 @@ describe('resume cursor codec', () => {
 
   it('mints only base64url-charset cursors, whatever the buffer id contains', () => {
     const seq = encodeCursor('weird:id/with+chars=', 0);
-    expect(isValidSeq(seq)).toBe(true);
+    expect(isValidCursor(seq)).toBe(true);
   });
 
   it('distinguishes buffer ids and positions that would collide as plain strings', () => {
