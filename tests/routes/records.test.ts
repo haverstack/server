@@ -44,7 +44,6 @@ describe('Records', () => {
         body: {
           typeId: NOTE_TYPE_ID,
           content: { body: 'Test note' },
-          entityId: TEST_ENTITY_ID,
         },
       });
       expect(status).toBe(200);
