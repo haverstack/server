@@ -6,6 +6,12 @@ import type { TokenSession } from '@haverstack/core/wire';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import {
+  rejectRenamedParams,
+  RENAMED_RECORD_QUERY_PARAMS,
+  RENAMED_JOURNAL_PARAMS,
+  RENAMED_DELETE_PARAMS,
+} from '../lib/renamed.js';
+import {
   parseQueryBody,
   parseQueryParams,
   parseJournalParams,
@@ -59,7 +65,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // GET /records — query by native fields via URL params
   app.get('/', async (c) => {
     const auth = c.get('auth');
-    const query = clampLimit(parseQueryParams(new URL(c.req.url)));
+    const url = new URL(c.req.url);
+    rejectRenamedParams(url, RENAMED_RECORD_QUERY_PARAMS);
+    const query = clampLimit(parseQueryParams(url));
     const result = await queryWorker.query(auth, query, queryTimeoutMs);
     const body: WireQueryResponse = {
       records: result.records.map(serializeRecord),
@@ -133,7 +141,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.delete('/:id', requireAuth(), async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth')!;
-    const purge = new URL(c.req.url).searchParams.get('purge') === 'true';
+    const url = new URL(c.req.url);
+    rejectRenamedParams(url, RENAMED_DELETE_PARAMS);
+    const purge = url.searchParams.get('purge') === 'true';
     const session = stack.asActor(auth);
 
     const { record } = await session.deleteAndReturn(id, {
@@ -251,7 +261,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.get('/:id/journal', async (c) => {
     const id = c.req.param('id');
     const auth = c.get('auth');
-    const query = parseJournalParams(new URL(c.req.url));
+    const url = new URL(c.req.url);
+    rejectRenamedParams(url, RENAMED_JOURNAL_PARAMS);
+    const query = parseJournalParams(url);
     const limit = clampJournalLimit(query.limit);
 
     const entries = await scopeFor(auth).getJournal(id, { ...query, limit });

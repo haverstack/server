@@ -133,10 +133,13 @@ export function resumeBufferKey(parts: ResumeBufferKeyParts): string {
   const { filter } = parts;
   const typeId = asSortedSet(filter.typeId);
   const baseId = asSortedSet(filter.baseId);
-  const createdBy = filter.createdBy && {
-    subjectId: asSortedSet(filter.createdBy.subjectId),
-    principalId: asSortedSet(filter.createdBy.principalId),
-  };
+  const createdBySubject = asSortedSet(filter.createdBy?.subjectId);
+  const createdByPrincipal = asSortedSet(filter.createdBy?.principalId);
+  // `createdBy: {}` constrains nothing, so it keys the same as no createdBy.
+  const createdBy =
+    createdBySubject || createdByPrincipal
+      ? { subjectId: createdBySubject, principalId: createdByPrincipal }
+      : undefined;
   const kinds = asSortedSet(filter.kinds);
   return JSON.stringify({
     principalId: parts.principalId,

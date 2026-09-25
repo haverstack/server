@@ -12,6 +12,7 @@ import { serializeChange, isValidCursor } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
 import { safeCompare, isOwnerActingAlone } from '../middleware/auth.js';
+import { rejectRenamedParams, RENAMED_CHANGE_PARAMS } from '../lib/renamed.js';
 import { FrameGate } from '../lib/frameGate.js';
 import { decodeCursor } from '../lib/resumeCursor.js';
 import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
@@ -88,6 +89,7 @@ export function changeRoutes(
   app.get('/', async (c) => {
     const url = new URL(c.req.url);
     const auth = c.get('auth');
+    rejectRenamedParams(url, RENAMED_CHANGE_PARAMS);
     const { filter, includeRecords, includeUnlisted } = parseChangeParams(url);
     const presentedRaw = presentedCursorRaw(c, url);
 

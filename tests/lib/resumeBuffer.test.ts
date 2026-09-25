@@ -168,6 +168,18 @@ describe('resumeBufferKey', () => {
     );
   });
 
+  it('keys an empty createdBy the same as no createdBy', () => {
+    const base = {
+      principalId: null,
+      subjectId: null,
+      includeRecords: false,
+      includeUnlisted: false,
+    };
+    expect(resumeBufferKey({ ...base, filter: { createdBy: {} } })).toBe(
+      resumeBufferKey({ ...base, filter: {} }),
+    );
+  });
+
   it("does not let one field's value imitate another's", () => {
     const base = {
       principalId: null,

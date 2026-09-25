@@ -3,6 +3,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
+import { rejectRenamedFields, RENAMED_TOKEN_FIELDS } from '../lib/renamed.js';
 import { parseDate } from '@haverstack/wire-types';
 import { StackValidationError } from '@haverstack/core';
 import { isValidDid } from '@haverstack/core/did';
@@ -25,6 +26,9 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
       label?: string;
       expiresAt?: string;
     }>(c);
+    // A stale client's `entityId` would otherwise be ignored and the token
+    // minted for the owner — a full owner token handed to whoever it was for.
+    rejectRenamedFields(body, RENAMED_TOKEN_FIELDS);
     if (body.principalId !== undefined && !isValidDid(body.principalId))
       throw new StackValidationError([{ path: 'principalId', message: 'Must be a DID' }]);
     if (body.subjectId !== undefined && !isValidDid(body.subjectId))
