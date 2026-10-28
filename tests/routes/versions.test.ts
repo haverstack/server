@@ -21,9 +21,9 @@ describe('Versions', () => {
 
   async function createAndPatch() {
     const record = await t.ctx.stack.create(TYPE_ID, { body: 'v1' });
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
+    await req(t.app, 'PATCH', `/records/${record.id}/content`, {
       token: TEST_TOKEN,
-      body: { contentPatch: { body: 'v2' } },
+      body: { body: 'v2' },
     });
     return record;
   }
@@ -34,7 +34,7 @@ describe('Versions', () => {
       token: TEST_TOKEN,
     });
     expect(status).toBe(200);
-    expect((data as unknown[]).length).toBe(1);
+    expect((data as { versions: unknown[] }).versions).toHaveLength(1);
   });
 
   it('GET /records/:id/versions/:version returns one version', async () => {
@@ -155,7 +155,7 @@ describe('Versions', () => {
         token,
       });
       expect(status).toBe(200);
-      expect((data as unknown[]).length).toBe(1);
+      expect((data as { versions: unknown[] }).versions).toHaveLength(1);
     });
   });
 
@@ -181,7 +181,7 @@ describe('Versions', () => {
     const { data } = await req(t.app, 'GET', `/records/${record.id}/versions`, {
       token: TEST_TOKEN,
     });
-    const snapshot = (data as Array<Record<string, unknown>>)[0];
+    const snapshot = (data as { versions: Array<Record<string, unknown>> }).versions[0]!;
     expect(snapshot.content).toEqual({ body: 'v1' });
     expect(snapshot.parentId).toBeUndefined();
     expect(snapshot.unlistedAt).toBeUndefined();
@@ -195,13 +195,15 @@ describe('Versions', () => {
     // Associations, the ACL and listing state are all no-bump tiers: their
     // inverse is the same shape as the forward operation, so none of them
     // needs a snapshot to be recoverable from.
-    await t.ctx.stack.associate(record.id, { kind: 'tag', label: 'starred' });
+    await t.ctx.stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
     expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(1);
 
-    await t.ctx.stack.mutate(record.id, { permissions: [{ kind: 'anyone', label: 'read' }] });
+    await t.ctx.stack.setAccess(record.id, [{ kind: 'anyone', label: 'read' }]);
     expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(1);
 
-    await t.ctx.stack.mutate(record.id, { unlisted: true });
+    await t.ctx.stack.setUnlisted(record.id, true);
     expect((await t.ctx.adapter.getRecord(record.id))?.version).toBe(1);
 
     await t.ctx.stack.patchContent(record.id, { body: 'v2' });

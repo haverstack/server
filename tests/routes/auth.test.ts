@@ -68,10 +68,10 @@ describe('POST /auth/challenge', () => {
     expect((data as { error: { code: string } }).error.code).toBe('invalid_did');
   });
 
-  it('rejects a missing did with 400 invalid_did', async () => {
+  it('rejects a body with no did as malformed, with 400 bad_request', async () => {
     const { status, data } = await req(t.app, 'POST', '/auth/challenge', { body: {} });
     expect(status).toBe(400);
-    expect((data as { error: { code: string } }).error.code).toBe('invalid_did');
+    expect((data as { error: { code: string } }).error.code).toBe('bad_request');
   });
 });
 

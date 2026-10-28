@@ -38,9 +38,9 @@ describe('request body size limit', () => {
     });
     const id = (created.data as { id: string }).id;
 
-    const { status, data } = await req(smallApp, 'PATCH', `/records/${id}`, {
+    const { status, data } = await req(smallApp, 'PATCH', `/records/${id}/content`, {
       token: TEST_TOKEN,
-      body: { contentPatch: { body: 'x'.repeat(6000) } },
+      body: { body: 'x'.repeat(6000) },
     });
     expect(status).toBe(413);
     expect((data as { error: { code: string } }).error.code).toBe('payload_too_large');

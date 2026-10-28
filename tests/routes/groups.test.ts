@@ -26,11 +26,16 @@ describe('_group ACL', () => {
 
   it('an entity added to a real _group roster gains group-scoped read access', async () => {
     const group = await t.ctx.stack.create(GROUP_TYPE, { name: 'Test Group' });
-    await t.ctx.stack.associate(group.id, {
-      kind: 'relationship',
-      label: 'member',
-      target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
-    });
+    await t.ctx.stack.editAssociations(group.id, [
+      {
+        op: 'add',
+        association: {
+          kind: 'relationship',
+          label: 'member',
+          target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+        },
+      },
+    ]);
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'group-visible' },

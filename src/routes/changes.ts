@@ -7,11 +7,11 @@ import type { Config } from '../config.js';
 import type { ScopedStack, RecordChange } from '@haverstack/core';
 import type { TokenSession } from '@haverstack/core/wire';
 import { StackBadRequestError, StackPermissionError } from '@haverstack/core';
-import { parseChangeParams } from '@haverstack/core/wire';
+import { parseChangeParams, isOwnerActingAlone } from '@haverstack/core/wire';
 import { serializeChange, isValidCursor } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
-import { safeCompare, isOwnerActingAlone } from '../middleware/auth.js';
+import { safeCompare } from '../middleware/auth.js';
 import { FrameGate } from '../lib/frameGate.js';
 import { decodeCursor } from '../lib/resumeCursor.js';
 import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
@@ -88,14 +88,14 @@ export function changeRoutes(
   app.get('/', async (c) => {
     const url = new URL(c.req.url);
     const auth = c.get('auth');
-    const { filter, includeRecords, includeUnlisted } = parseChangeParams(url);
+    const { filter, includeRecords } = parseChangeParams(url);
     const presentedRaw = presentedCursorRaw(c, url);
 
     // Refused before the stream opens: a throw from subscribe() after
     // streaming starts is caught below and merely closes the connection,
     // silently, having already answered 200. includeUnlisted owes a real
     // 403, the same one GET /records answers with.
-    if (includeUnlisted && !isOwnerActingAlone(auth, ctx.stack.ownerEntityId)) {
+    if (filter.includeUnlisted && !(auth && isOwnerActingAlone(auth, ctx.stack.ownerEntityId))) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
 
@@ -151,7 +151,7 @@ export function changeRoutes(
             (change: RecordChange) => {
               send('record', serializeChange(change));
             },
-            { filter, includeRecords, includeUnlisted },
+            { filter, includeRecords },
           );
         } else {
           const key = resumeBufferKey({
@@ -159,11 +159,10 @@ export function changeRoutes(
             subjectId: auth?.subjectId ?? null,
             filter,
             includeRecords,
-            includeUnlisted,
           });
           const scoped = scopeFor(auth);
           const buffer = await resumeBuffers.acquire(key, (onChange) =>
-            scoped.subscribe(onChange, { filter, includeRecords, includeUnlisted }),
+            scoped.subscribe(onChange, { filter, includeRecords }),
           );
 
           // Attached before anything below awaits, so there is no gap

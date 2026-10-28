@@ -30,10 +30,21 @@ describe('tombstone projection and mutation refusal', () => {
     await t.cleanup();
   });
 
-  it('GET on a soft-deleted record projects a tombstone: content emptied, deletedAt set', async () => {
+  it('GET on a soft-deleted record answers 404 unless asked to include it', async () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
     await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
-    const { status, data } = await req(t.app, 'GET', `/records/${record.id}`, {
+    const hidden = await req(t.app, 'GET', `/records/${record.id}`, { token: TEST_TOKEN });
+    expect(hidden.status).toBe(404);
+    const bad = await req(t.app, 'GET', `/records/${record.id}?includeDeleted=1`, {
+      token: TEST_TOKEN,
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('GET ?includeDeleted=true projects a tombstone: content emptied, deletedAt set', async () => {
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+    const { status, data } = await req(t.app, 'GET', `/records/${record.id}?includeDeleted=true`, {
       token: TEST_TOKEN,
     });
     expect(status).toBe(200);
@@ -76,9 +87,9 @@ describe('tombstone projection and mutation refusal', () => {
   it('mutating a soft-deleted record is refused with 409, not applied to the tombstone', async () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'z' });
     await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
-    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
+    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}/content`, {
       token: TEST_TOKEN,
-      body: { contentPatch: { title: 'edited' } },
+      body: { title: 'edited' },
     });
     expect(status).toBe(409);
     expect((data as { error: { code: string } }).error.code).toBe('conflict');
@@ -91,7 +102,7 @@ describe('tombstone projection and mutation refusal', () => {
       token: TEST_TOKEN,
     });
     expect(status).toBe(200);
-    const versions = data as Array<{ content: Record<string, unknown> }>;
+    const { versions } = data as { versions: Array<{ content: Record<string, unknown> }> };
     expect(versions[0]!.content).toEqual({ title: 'w' });
   });
 });

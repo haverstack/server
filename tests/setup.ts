@@ -4,6 +4,7 @@ import { createApp } from '../src/app.js';
 import type { StackContext } from '../src/stack.js';
 import type { Hono } from 'hono';
 import type { AppEnv } from '../src/app.js';
+import type { BaseId } from '@haverstack/core';
 import {
   TEST_ENTITY_ID,
   TEST_TOKEN,
@@ -46,6 +47,7 @@ export async function buildTestApp(opts: TestContextOpts = { timezone: 'UTC' }):
     await ctx.stack.close();
     await ctx.tokens.close();
     ctx.nonces.close();
+    ctx.installRequests.close();
     // Remove the whole temp directory (includes the .db file and attachments/).
     await rm(dirname(dbPath), { recursive: true, force: true }).catch(() => {});
   };
@@ -90,4 +92,9 @@ export async function req(
     data = text;
   }
   return { status: res.status, data };
+}
+
+/** The family a versioned TypeId belongs to — what a type-level grant names. */
+export function familyOf(typeId: string): BaseId {
+  return typeId.slice(0, typeId.indexOf('@')) as BaseId;
 }

@@ -28,7 +28,7 @@ const init = workerData as QueryWorkerInit;
 
 // The database already exists — the main thread's initStack() created or
 // opened it, and seeded system types, before any worker is spawned (see
-// pool.ts). open() (not openOrInitialize()) reflects that: there is no
+// pool.ts). open()'s default `create: 'never'` reflects that: there is no
 // first-run path to handle here.
 const adapter = await LocalAdapter.open({ path: init.dbPath });
 const stack = await Stack.open(adapter);

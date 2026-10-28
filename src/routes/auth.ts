@@ -1,13 +1,16 @@
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { verifyAuthChallenge, base64urlDecode } from '@haverstack/core/wire';
+import {
+  verifyAuthChallenge,
+  base64urlDecode,
+  parseAuthChallengeBody,
+  parseAuthTokenBody,
+} from '@haverstack/core/wire';
 import { isValidDidKey } from '@haverstack/core/did';
 import { WIRE_AUTH_ERROR_STATUS } from '@haverstack/wire-types';
 import type {
-  AuthChallengeRequest,
-  AuthChallengeResponse,
-  AuthTokenRequest,
-  AuthTokenResponse,
+  WireAuthChallengeResponse,
+  WireAuthTokenResponse,
   WireAuthErrorCode,
 } from '@haverstack/wire-types';
 import type { Context } from 'hono';
@@ -47,31 +50,21 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
   // POST /auth/challenge — issues a nonce bound to the requested DID.
   // Unauthenticated: this is how a token is earned in the first place.
   app.post('/challenge', knownParams(), async (c) => {
-    const body = await readJson<Partial<AuthChallengeRequest>>(c, ['did']);
-    if (typeof body.did !== 'string' || !isValidDidKey(body.did)) {
+    const body = parseAuthChallengeBody(await readJson(c));
+    if (!isValidDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
     }
     const { nonce, expiresAt } = ctx.nonces.issue(body.did);
-    const response: AuthChallengeResponse = { nonce, expiresAt: expiresAt.toISOString() };
+    const response: WireAuthChallengeResponse = { nonce, expiresAt: expiresAt.toISOString() };
     return c.json(response);
   });
 
   // POST /auth/token — redeems a signed nonce for a bearer token.
   // Unauthenticated for the same reason.
   app.post('/token', knownParams(), async (c) => {
-    const body = await readJson<Partial<AuthTokenRequest>>(c, ['did', 'nonce', 'signature']);
-    if (typeof body.did !== 'string' || !isValidDidKey(body.did)) {
+    const body = parseAuthTokenBody(await readJson(c));
+    if (!isValidDidKey(body.did)) {
       return authError(c, 'invalid_did', 'Not a valid did:key');
-    }
-    // Checked ahead of the signature so a nonce issued to a different DID
-    // is refused as unknown_nonce even when the caller's own signature over
-    // it is perfectly valid — the nonce belongs to the DID it was issued
-    // for, not to whoever can produce a valid signature.
-    if (typeof body.nonce !== 'string') {
-      return authError(c, 'unknown_nonce', 'Unknown or already-used nonce');
-    }
-    if (typeof body.signature !== 'string') {
-      return authError(c, 'invalid_signature', 'Signature does not verify');
     }
 
     // Spent on this call regardless of what happens next — single-use
@@ -119,7 +112,7 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
     // unauthenticated route that makes each handshake cost more than the
     // last. The store persists the Date unchanged, so a read-back could
     // only return what is already here.
-    const response: AuthTokenResponse = {
+    const response: WireAuthTokenResponse = {
       token,
       expiresAt: expiresAt.toISOString(),
       principalId: body.did,
