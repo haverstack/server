@@ -95,6 +95,91 @@ describe('installs', () => {
     expect(await t.ctx.stack.getType('com.example.notes/note@1')).toBeNull();
   });
 
+  it('fences an approval to the plan the owner reviewed', async () => {
+    await ask();
+    const [request] = await pending();
+    const review = await t.app.request(`/installs/requests/${request!.id}`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    const etag = review.headers.get('ETag')!;
+    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
+
+    // The stack moves on: the type the plan would define now exists.
+    await t.ctx.stack.defineType(MANIFEST.types[0]!);
+    const stale = await req(t.app, 'POST', `/installs/requests/${request!.id}/approve`, {
+      token: TEST_TOKEN,
+      headers: { 'If-Match': etag },
+    });
+    expect(stale.status).toBe(412);
+    expect((stale.data as { error: { code: string } }).error.code).toBe('precondition_failed');
+    expect(await pending()).toHaveLength(1);
+
+    // Reviewed again, the new tag approves.
+    const again = await t.app.request(`/installs/requests/${request!.id}`, {
+      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
+    });
+    const fresh = again.headers.get('ETag')!;
+    expect(fresh).not.toBe(etag);
+    const approved = await req(t.app, 'POST', `/installs/requests/${request!.id}/approve`, {
+      token: TEST_TOKEN,
+      headers: { 'If-Match': fresh },
+    });
+    expect(approved.status).toBe(200);
+  });
+
+  it('refuses a malformed If-Match on approval with 400', async () => {
+    await ask();
+    const [request] = await pending();
+    for (const header of ['W/"abc"', '*']) {
+      const { status } = await req(t.app, 'POST', `/installs/requests/${request!.id}/approve`, {
+        token: TEST_TOKEN,
+        headers: { 'If-Match': header },
+      });
+      expect(status).toBe(400);
+    }
+    expect(await pending()).toHaveLength(1);
+  });
+
+  it('keeps a request id when the same manifest is re-sent with its keys reordered', async () => {
+    await ask();
+    const [first] = await pending();
+    const reordered = JSON.parse(
+      JSON.stringify({
+        requests: MANIFEST.requests,
+        types: MANIFEST.types,
+        version: MANIFEST.version,
+        name: MANIFEST.name,
+        appId: MANIFEST.appId,
+      }),
+    ) as AppManifest;
+    await ask(reordered);
+    const [second] = await pending();
+    expect(second!.id).toBe(first!.id);
+  });
+
+  it('acts only on the request an id names, never on the one that replaced it', async () => {
+    await ask();
+    const [original] = await pending();
+    await ask({ ...MANIFEST, version: '1.1.0' });
+    for (const [method, path] of [
+      ['POST', `/installs/requests/${original!.id}/approve`],
+      ['DELETE', `/installs/requests/${original!.id}`],
+    ] as const) {
+      expect((await req(t.app, method, path, { token: TEST_TOKEN })).status).toBe(404);
+    }
+    const [replacement] = await pending();
+    expect(replacement!.manifest.version).toBe('1.1.0');
+  });
+
+  it('refuses a delegated session before reading its body', async () => {
+    const { token } = await t.ctx.adapter.createToken({
+      subjectId: OTHER_ENTITY_ID,
+      principalId: APP_KEY,
+    });
+    const { status } = await req(t.app, 'POST', '/installs', { token, body: { manifest: 5 } });
+    expect(status).toBe(403);
+  });
+
   it('answers 404 for a request id it does not hold', async () => {
     for (const [method, path] of [
       ['GET', '/installs/requests/nope'],

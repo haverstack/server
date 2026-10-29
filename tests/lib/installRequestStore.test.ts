@@ -32,6 +32,15 @@ describe('InstallRequestStore', () => {
     expect(store.get(id)?.manifest).toEqual(MANIFEST);
   });
 
+  it('removes by id, so a request its key replaced survives removing the old one', () => {
+    const old = store.put('did:key:a', MANIFEST);
+    const replacement = store.put('did:key:a', { ...MANIFEST, version: '2' });
+    store.remove(old.id);
+    expect(store.forKey('did:key:a')?.id).toBe(replacement.id);
+    store.remove(replacement.id);
+    expect(store.forKey('did:key:a')).toBeNull();
+  });
+
   it('forgets a request no one re-sends, and keeps one that is', () => {
     vi.useFakeTimers();
     const kept = store.put('did:key:a', MANIFEST);

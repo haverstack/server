@@ -1,9 +1,8 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
 import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import type { IfVersionOptions, ScopedStack } from '@haverstack/core';
+import type { ScopedStack } from '@haverstack/core';
 import type { TokenSession } from '@haverstack/core/wire';
 import { requireAuth } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
@@ -16,7 +15,6 @@ import {
   parseVersionsParams,
   parseAssociationParams,
   parseUnsignedInt,
-  parseIfMatch,
   createOptionsFromWireRecord,
   parseContentPatchBody,
   parseParentBody,
@@ -27,6 +25,7 @@ import {
   parseMigrationBody,
 } from '@haverstack/core/wire';
 import { readHistoryPage } from '../lib/historyPage.js';
+import { ifMatchVersion } from '../lib/ifMatch.js';
 import { serializeRecord, serializeVersion, serializeJournalEntry } from '@haverstack/wire-types';
 import type {
   WireQueryResponse,
@@ -117,7 +116,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const patch = parseContentPatchBody(await readJson(c));
     const updated = await stack
       .asActor(c.get('auth')!)
-      .patchContent(c.req.param('id'), patch, ifMatch(c));
+      .patchContent(c.req.param('id'), patch, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 
@@ -125,7 +124,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const { parentId } = parseParentBody(await readJson(c));
     const updated = await stack
       .asActor(c.get('auth')!)
-      .setParent(c.req.param('id'), parentId, ifMatch(c));
+      .setParent(c.req.param('id'), parentId, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 
@@ -133,7 +132,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const { unlisted } = parseUnlistedBody(await readJson(c));
     const updated = await stack
       .asActor(c.get('auth')!)
-      .setUnlisted(c.req.param('id'), unlisted, ifMatch(c));
+      .setUnlisted(c.req.param('id'), unlisted, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 
@@ -147,14 +146,16 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const { purge } = parseDeleteParams(new URL(c.req.url));
     const { record } = await stack
       .asActor(c.get('auth')!)
-      .delete(c.req.param('id'), { purge, ...ifMatch(c) });
+      .delete(c.req.param('id'), { purge, ...ifMatchVersion(c) });
     if (!record) throw new StackNotFoundError('Record not found');
     return c.json(serializeRecord(record));
   });
 
   // POST /records/:id/undelete — reverses a soft delete; idempotent
   app.post('/:id/undelete', knownParams(), requireAuth(), async (c) => {
-    const restored = await stack.asActor(c.get('auth')!).undelete(c.req.param('id'), ifMatch(c));
+    const restored = await stack
+      .asActor(c.get('auth')!)
+      .undelete(c.req.param('id'), ifMatchVersion(c));
     return c.json(serializeRecord(restored));
   });
 
@@ -177,7 +178,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const edits = parseAssociationEditsBody(await readJson(c));
     const updated = await stack
       .asActor(c.get('auth')!)
-      .editAccess(c.req.param('id'), edits, ifMatch(c));
+      .editAccess(c.req.param('id'), edits, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 
@@ -185,7 +186,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const permissions = parsePermissionsBody(await readJson(c));
     const updated = await stack
       .asActor(c.get('auth')!)
-      .setAccess(c.req.param('id'), permissions, ifMatch(c));
+      .setAccess(c.req.param('id'), permissions, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 
@@ -203,7 +204,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const edits = parseAssociationEditsBody(await readJson(c));
     const updated = await stack
       .asActor(c.get('auth')!)
-      .editAssociations(c.req.param('id'), edits, ifMatch(c));
+      .editAssociations(c.req.param('id'), edits, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 
@@ -211,7 +212,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const associations = parseAssociationsBody(await readJson(c));
     const updated = await stack
       .asActor(c.get('auth')!)
-      .setAssociations(c.req.param('id'), associations, ifMatch(c));
+      .setAssociations(c.req.param('id'), associations, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 
@@ -272,7 +273,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
       .restoreVersion(
         c.req.param('id'),
         parseUnsignedInt(c.req.param('version'), 'version number'),
-        ifMatch(c),
+        ifMatchVersion(c),
       );
     return c.json(serializeRecord(restored));
   });
@@ -286,14 +287,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const { toTypeId, content } = parseMigrationBody(await readJson(c));
     const migrated = await stack
       .asActor(c.get('auth')!)
-      .commitMigration(c.req.param('id'), toTypeId, content, ifMatch(c));
+      .commitMigration(c.req.param('id'), toTypeId, content, ifMatchVersion(c));
     return c.json(serializeRecord(migrated));
   });
 
   return app;
-}
-
-/** The `ifVersion` an `If-Match` header carries; every write reads one. */
-function ifMatch(c: Context<AppEnv>): IfVersionOptions {
-  return { ifVersion: parseIfMatch(c.req.header('If-Match')) };
 }

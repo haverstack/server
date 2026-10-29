@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { Hono } from 'hono';
-import { StackNotFoundError, StackPermissionError, isPlanEmpty } from '@haverstack/core';
+import { StackNotFoundError, isPlanEmpty } from '@haverstack/core';
 import type { InstallPlan } from '@haverstack/core';
 import { parseInstallBody } from '@haverstack/core/wire';
 import { serializeRecord } from '@haverstack/wire-types';
@@ -7,8 +8,11 @@ import type { WireInstallResponse } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { requireActingAlone, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
+import { canonicalJson } from '../lib/canonicalJson.js';
+import { ifMatchTag } from '../lib/ifMatch.js';
+import { wireError } from '../wireError.js';
 import type { InstallRequestEntry } from '../lib/installRequestStore.js';
 
 /**
@@ -28,15 +32,13 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   // the body, so no app can ask on behalf of a key it does not hold.
   // Planning writes nothing; only an empty plan is answered as installed.
   // See docs/spec/wire-format.md § Installs.
-  app.post('/', knownParams(), requireAuth(), async (c) => {
+  app.post('/', knownParams(), requireActingAlone(), async (c) => {
     const auth = c.get('auth')!;
     const manifest = parseInstallBody(await readJson(c));
-    if (auth.principalId !== auth.subjectId) {
-      throw new StackPermissionError('An install request must come from the key itself');
-    }
     const plan = await stack.planInstall(manifest, { did: auth.principalId });
     if (isPlanEmpty(plan)) {
-      installRequests.remove(auth.principalId);
+      const pending = installRequests.forKey(auth.principalId);
+      if (pending) installRequests.remove(pending.id);
       const body: WireInstallResponse = {
         status: 'installed',
         install: serializeRecord(plan.existing!),
@@ -53,25 +55,37 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   });
 
   // Planned on every read rather than stored, since what a manifest would
-  // change depends on the stack as it stands now.
+  // change depends on the stack as it stands now. The ETag names this plan,
+  // so an approval can be fenced to exactly what the owner reviewed.
   app.get('/requests/:id', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
-    const plan = await stack.planInstall(entry.manifest, { did: entry.did });
-    return c.json({ ...serializeRequest(entry), plan: serializePlan(plan) });
+    const plan = serializePlan(await stack.planInstall(entry.manifest, { did: entry.did }));
+    c.header('ETag', `"${planTag(plan)}"`);
+    return c.json({ ...serializeRequest(entry), plan });
   });
 
-  // Applies the manifest the id names, planned afresh: installApp()
-  // applies a plan only while it is still what planning would produce.
+  // Applies the manifest the id names, planned afresh. An If-Match carrying
+  // the review's ETag refuses the approval with 412 when that plan is no
+  // longer what applying it would do, as every write here checks If-Match.
   app.post('/requests/:id/approve', knownParams(), requireOwner(ownerEntityId), async (c) => {
+    const reviewed = ifMatchTag(c);
     const entry = requestOrNotFound(c.req.param('id'));
     const plan = await stack.planInstall(entry.manifest, { did: entry.did });
+    if (reviewed !== undefined && reviewed !== planTag(serializePlan(plan))) {
+      return wireError(
+        c,
+        412,
+        'precondition_failed',
+        'The install plan changed since it was reviewed',
+      );
+    }
     const install = await stack.installApp(plan);
-    installRequests.remove(entry.did);
+    installRequests.remove(entry.id);
     return c.json(serializeRecord(install));
   });
 
   app.delete('/requests/:id', knownParams(), requireOwner(ownerEntityId), (c) => {
-    installRequests.remove(requestOrNotFound(c.req.param('id')).did);
+    installRequests.remove(requestOrNotFound(c.req.param('id')).id);
     return c.body(null, 204);
   });
 
@@ -96,15 +110,11 @@ function serializeRequest(entry: InstallRequestEntry) {
 
 /** What a plan would change; its manifest and key are already on the request. */
 function serializePlan(plan: InstallPlan) {
-  return {
-    existing: plan.existing ? serializeRecord(plan.existing) : null,
-    newFamilies: plan.newFamilies,
-    newVersions: plan.newVersions,
-    requestsAdded: plan.requestsAdded,
-    requestsRemoved: plan.requestsRemoved,
-    foreignRequests: plan.foreignRequests,
-    typeChanges: plan.typeChanges,
-    newKey: plan.newKey,
-    linkedKeys: plan.linkedKeys,
-  };
+  const { manifest, did, existing, ...changes } = plan;
+  return { ...changes, existing: existing ? serializeRecord(existing) : null };
+}
+
+/** Names a reviewed plan: equal exactly when the two plans serialize alike. */
+function planTag(plan: ReturnType<typeof serializePlan>): string {
+  return createHash('sha256').update(canonicalJson(plan)).digest('hex');
 }

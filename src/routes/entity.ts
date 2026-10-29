@@ -5,7 +5,8 @@ import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import { serializeRecord } from '@haverstack/wire-types';
-import { parseContentPatchBody, parseIfMatch } from '@haverstack/core/wire';
+import { parseContentPatchBody } from '@haverstack/core/wire';
+import { ifMatchVersion } from '../lib/ifMatch.js';
 import { StackNotFoundError } from '@haverstack/core';
 
 export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
@@ -28,9 +29,7 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     const patch = parseContentPatchBody(await readJson(c));
     const record = await stack.asActor(auth).getOwnerEntity();
     if (!record) throw new StackNotFoundError('Entity record not found');
-    const updated = await stack
-      .asActor(auth)
-      .patchContent(record.id, patch, { ifVersion: parseIfMatch(c.req.header('If-Match')) });
+    const updated = await stack.asActor(auth).patchContent(record.id, patch, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 

@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { AppManifest, EntityId } from '@haverstack/core';
+import { canonicalJson } from './canonicalJson.js';
 
 // Any key that completes the handshake can ask, so a request no one
 // re-sends must not be kept forever. Re-sending refreshes it, and an app
@@ -54,12 +55,13 @@ export class InstallRequestStore {
 
   /**
    * Records `manifest` as `did`'s pending request, replacing any other it
-   * had. Re-sending the same manifest keeps its id and refreshes its
-   * expiry, so an id the owner reviewed always names what they reviewed.
+   * had. Re-sending the same manifest — compared as canonical JSON, so key
+   * order is not a difference — keeps its id and refreshes its expiry, so
+   * an id the owner reviewed always names what they reviewed.
    */
   put(did: EntityId, manifest: AppManifest): InstallRequestEntry {
     this.sweepExpired();
-    const json = JSON.stringify(manifest);
+    const json = canonicalJson(manifest);
     const now = Date.now();
     const expiresAt = now + REQUEST_TTL_MS;
     const existing = this.db.prepare('SELECT * FROM install_requests WHERE did = ?').get(did) as
@@ -95,9 +97,21 @@ export class InstallRequestStore {
     return rows.map(toEntry);
   }
 
-  /** Removes `did`'s request, if any — once it is installed or declined, there is nothing left to ask. */
-  remove(did: EntityId): void {
-    this.db.prepare('DELETE FROM install_requests WHERE did = ?').run(did);
+  /** The pending request `did` holds, if any. */
+  forKey(did: EntityId): InstallRequestEntry | null {
+    const row = this.db
+      .prepare('SELECT * FROM install_requests WHERE did = ? AND expiresAt >= ?')
+      .get(did, Date.now()) as Row | undefined;
+    return row ? toEntry(row) : null;
+  }
+
+  /**
+   * Removes the request `id` names — once it is installed or declined, there
+   * is nothing left to ask. A request its key has since replaced has a new
+   * id, so removing the old one leaves the new one standing.
+   */
+  remove(id: string): void {
+    this.db.prepare('DELETE FROM install_requests WHERE id = ?').run(id);
   }
 
   private sweepExpired(): void {

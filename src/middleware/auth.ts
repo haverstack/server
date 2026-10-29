@@ -68,3 +68,19 @@ export function requireOwner(ownerEntityId: string): MiddlewareHandler<AppEnv> {
     await next();
   };
 }
+
+/**
+ * Gates a route to a session acting as itself — not a principal acting
+ * for someone else. Checked before the body is read, like requireOwner(),
+ * so a refused identity is refused whatever it sent.
+ */
+export function requireActingAlone(): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const auth = c.get('auth');
+    if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+    if (auth.principalId !== auth.subjectId) {
+      throw new StackPermissionError('This request must come from the key acting as itself');
+    }
+    await next();
+  };
+}
