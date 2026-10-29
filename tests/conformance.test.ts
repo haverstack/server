@@ -37,15 +37,17 @@ import {
   deleteRecordFixtures,
   deleteRecordSequenceFixtures,
   undeleteRecordFixtures,
-  associateFixtures,
-  dissociateFixtures,
-  permissionsChangeFixtures,
-  grantAccessFixtures,
-  revokeAccessFixtures,
+  getRecordSequenceFixtures,
+  editAssociationsFixtures,
+  setAssociationsFixtures,
+  editAccessFixtures,
+  setAccessFixtures,
+  setParentFixtures,
+  setUnlistedFixtures,
   getJournalFixtures,
   getVersionsFixtures,
   getVersionFixtures,
-  getVersionsAfterMutateFixtures,
+  getVersionsSequenceFixtures,
   restoreVersionFixtures,
   commitMigrationFixtures,
   errorResponseFixtures,
@@ -54,17 +56,17 @@ import {
   authSequenceFixtures,
   changeFeedFixtures,
   changeFeedSequenceFixtures,
-  unlistedChangeFixtures,
-  parentChangeFixtures,
+  installRequestFixtures,
   attachmentDownloadFixtures,
   attachmentUploadFixtures,
   AUTH_FIXTURE_DID,
   AUTH_FIXTURE_NONCE,
 } from '@haverstack/conformance-fixtures';
 import * as conformanceFixtures from '@haverstack/conformance-fixtures';
+import type { ConformanceFixture } from '@haverstack/conformance-fixtures';
 import type { WireRecord, WireJournalResponse } from '@haverstack/wire-types';
 import { generateId, hashSchema } from '@haverstack/core';
-import type { DataAssociation } from '@haverstack/core';
+import type { AuthorityAssociation } from '@haverstack/core';
 import {
   buildTestApp,
   req,
@@ -73,6 +75,7 @@ import {
   TEST_ENTITY_ID,
   logger,
   type TestApp,
+  familyOf,
 } from './setup.js';
 import { openChangeFeed, type DecodedFrame } from './changeFeedClient.js';
 import { changeRoutes } from '../src/routes/changes.js';
@@ -251,6 +254,16 @@ describe('discovery fixtures', () => {
     expect(changes!.records).toBe(true);
   });
 
+  test('discovery-advertises-install-requests', async () => {
+    const fixture = discoveryFixtures.find(
+      (f) => f.name === 'discovery-advertises-install-requests',
+    )!;
+    handled.add(fixture.name);
+    const { status, data } = await req(t.app, fixture.method, fixture.path);
+    expect(status).toBe(fixture.responseStatus);
+    expect((data as { installs?: unknown }).installs).toEqual(fixture.responseBody!.installs);
+  });
+
   test('coverage', () => {
     assertCoverage(
       discoveryFixtures.map((f) => f.name),
@@ -291,7 +304,7 @@ describe('createRecord fixtures', () => {
     )!;
     handled.add(fixture.name);
     const body = withFreshId(fixture.requestBody as WireRecord & { appId?: string });
-    await t.ctx.stack.grantType(body.typeId, {
+    await t.ctx.stack.grantType(familyOf(body.typeId), {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
@@ -312,11 +325,11 @@ describe('createRecord fixtures', () => {
     )!;
     handled.add(fixture.name);
     const body = withFreshId(fixture.requestBody as WireRecord & { appId?: string });
-    await t.ctx.stack.grantType(body.typeId, {
+    await t.ctx.stack.grantType(familyOf(body.typeId), {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: BLOG_SUBJECT_ID },
     });
-    await t.ctx.stack.grantType(body.typeId, {
+    await t.ctx.stack.grantType(familyOf(body.typeId), {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: BLOG_APP_ID },
     });
@@ -370,12 +383,14 @@ describe('createRecord fixtures', () => {
     });
     const fileId = (uploaded.content as { fileId: string }).fileId;
     const note = await t.ctx.stack.create(NOTE_TYPE, { title: 'has a cover' });
-    await t.ctx.stack.associate(note.id, { kind: 'attachment', label: 'cover', fileId });
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.editAssociations(note.id, [
+      { op: 'add', association: { kind: 'attachment', label: 'cover', fileId } },
+    ]);
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
-    await t.ctx.stack.grantType(ATTACHMENT_TYPE, {
+    await t.ctx.stack.grantType(familyOf(ATTACHMENT_TYPE), {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
@@ -624,6 +639,101 @@ describe('queryRecords fixtures', () => {
     ]);
   });
 
+  /** Defines the fixtures' article and task Types, the shapes their response records carry. */
+  async function seedQueryTypes() {
+    await t.ctx.stack.defineType({
+      id: 'com.example/article@1',
+      name: 'Article',
+      schema: { title: { kind: 'string' } },
+    });
+    await t.ctx.stack.defineType({
+      id: 'com.example/task@1',
+      name: 'Task',
+      schema: { by: { kind: 'string' } },
+    });
+    await t.ctx.stack.defineType({
+      id: 'com.example/task@2',
+      name: 'Task',
+      schema: { owner: { kind: 'string' }, rank: { kind: 'number' } },
+    });
+  }
+
+  /**
+   * Creates the fixture's response records from the last listed to the first —
+   * so a query whose order falls back to createdAt, newest first, reads
+   * them back as listed — and returns both lists.
+   */
+  async function replay(fixture: ConformanceFixture) {
+    const expected = (fixture.responseBody as { records: WireRecord[] }).records;
+    for (const record of [...expected].reverse()) {
+      await t.ctx.stack.create(record.typeId, record.content);
+    }
+    const { status, data } = await req(t.app, fixture.method, fixture.path, {
+      token: TEST_TOKEN,
+      body: fixture.requestBody,
+    });
+    expect(status).toBe(fixture.responseStatus);
+    return { expected, actual: (data as { records: WireRecord[] }).records };
+  }
+
+  test('query-without-sort-returns-newest-first', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-without-sort-returns-newest-first',
+    )!;
+    await seedQueryTypes();
+    const { expected, actual } = await replay(fixture);
+    expect(actual.map((r) => r.content)).toEqual(expected.map((r) => r.content));
+  });
+
+  test('query-content-sort-defaults-to-ascending', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-content-sort-defaults-to-ascending',
+    )!;
+    await seedQueryTypes();
+    const { expected, actual } = await replay(fixture);
+    expect(actual.map((r) => r.content)).toEqual(expected.map((r) => r.content));
+  });
+
+  test('query-filters-content-by-type', async () => {
+    const fixture = queryRecordsFixtures.find((f) => f.name === 'query-filters-content-by-type')!;
+    await seedQueryTypes();
+    // Each arm names a field the other version lacks; a record satisfying
+    // the wrong arm's predicate must not match.
+    await t.ctx.stack.create('com.example/task@1', { by: 'Bea' });
+    await t.ctx.stack.create('com.example/task@2', { owner: 'Bea' });
+    const { expected, actual } = await replay(fixture);
+    expect(actual.map((r) => r.content)).toEqual(expected.map((r) => r.content));
+  });
+
+  test('query-sorts-by-a-content-field-per-type', async () => {
+    const fixture = queryRecordsFixtures.find(
+      (f) => f.name === 'query-sorts-by-a-content-field-per-type',
+    )!;
+    await seedQueryTypes();
+    const { expected, actual } = await replay(fixture);
+    expect(actual.map((r) => r.content)).toEqual(expected.map((r) => r.content));
+  });
+
+  test('query-by-type-family', async () => {
+    const fixture = queryRecordsFixtures.find((f) => f.name === 'query-by-type-family')!;
+    const { status, data } = await req(t.app, fixture.method, fixture.path, { token: TEST_TOKEN });
+    expect(status).toBe(fixture.responseStatus);
+    expect(data).toEqual(fixture.responseBody);
+
+    // Every version of the family, and never one that only shares its prefix.
+    await t.ctx.stack.defineType({
+      id: 'com.example/notebook@1',
+      name: 'Notebook',
+      schema: { title: { kind: 'string' } },
+    });
+    const v1 = await t.ctx.stack.create(NOTE_TYPE, { title: 'one' });
+    const v2 = await t.ctx.stack.create(NOTE_TYPE_V2, { title: 'two' });
+    await t.ctx.stack.create('com.example/notebook@1', { title: 'not a note' });
+    const family = await req(t.app, 'GET', fixture.path, { token: TEST_TOKEN });
+    const ids = (family.data as { records: WireRecord[] }).records.map((r) => r.id);
+    expect(ids.sort()).toEqual([v1.id, v2.id].sort());
+  });
+
   test('coverage', () => {
     // query-empty-page-with-live-cursor and query-get-records-uses-the-same-
     // envelope pin narrower edge cases of the same two invariants (a
@@ -645,6 +755,11 @@ describe('queryRecords fixtures', () => {
         'query-get-sorts-by-a-content-field',
         'query-attachment-label-and-file',
         'query-references-file',
+        'query-without-sort-returns-newest-first',
+        'query-content-sort-defaults-to-ascending',
+        'query-filters-content-by-type',
+        'query-sorts-by-a-content-field-per-type',
+        'query-by-type-family',
       ]),
       new Set(),
     );
@@ -652,8 +767,41 @@ describe('queryRecords fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Records: patchContent
+// Records: per-aspect writes
 // -------------------------------------------------------
+
+/**
+ * A fixture's request, aimed at `id` in place of the record its path
+ * names, with the fixture's own headers and body unless `opts` says
+ * otherwise. The owner's token unless another is given.
+ */
+function dispatchAt(
+  fixture: ConformanceFixture,
+  id: string,
+  opts: { token?: string; body?: unknown } = {},
+) {
+  return req(t.app, fixture.method, fixture.path.replace(/^\/records\/[^/?]+/, `/records/${id}`), {
+    token: opts.token ?? TEST_TOKEN,
+    body: 'body' in opts ? opts.body : fixture.requestBody,
+    ...(fixture.requestHeaders && { headers: fixture.requestHeaders }),
+  });
+}
+
+/** The fields of a fixture's record response that a server does not mint. */
+function aspectsOf(body: unknown) {
+  const { content, version, permissions, associations, parentId, unlistedAt } = body as Record<
+    string,
+    unknown
+  >;
+  return {
+    content,
+    version,
+    permissions,
+    associations,
+    parentId,
+    unlisted: unlistedAt !== undefined,
+  };
+}
 
 describe('patchContent fixtures', () => {
   const handled = new Set<string>();
@@ -667,14 +815,9 @@ describe('patchContent fixtures', () => {
       title: 'original title',
       body: 'original body',
     });
-    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    const d = data as Record<string, unknown>;
-    expect(d.content).toEqual(fixture.responseBody!.content);
-    expect(d.version).toBe(fixture.responseBody!.version);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
   test('patch-content-null-deletes-a-field', async () => {
@@ -682,18 +825,10 @@ describe('patchContent fixtures', () => {
       (f) => f.name === 'patch-content-null-deletes-a-field',
     )!;
     handled.add(fixture.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, {
-      title: 'to be removed',
-      body: 'kept',
-    });
-    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'to be removed', body: 'kept' });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    const d = data as Record<string, unknown>;
-    expect(d.content).toEqual(fixture.responseBody!.content);
-    expect(d.version).toBe(fixture.responseBody!.version);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
   test('patch-record-restamps-the-actor', async () => {
@@ -719,15 +854,12 @@ describe('patchContent fixtures', () => {
       },
     );
     const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
-    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token,
-      body: fixture.requestBody,
-    });
+    const { status, data } = await dispatchAt(fixture, record.id, { token });
     expect(status).toBe(fixture.responseStatus);
     const d = data as Record<string, unknown>;
     expect(d.content).toEqual(fixture.responseBody!.content);
-    // Authorship (entityId) is untouched by a non-author write; updatedBy
-    // moves to the requester who made this edit.
+    // Authorship is untouched by a non-author write; updatedBy moves to the
+    // requester who made this edit.
     expect((d.createdBy as { subjectId: string }).subjectId).toBe(TEST_ENTITY_ID);
     expect((d.updatedBy as { subjectId: string }).subjectId).toBe(CONTRIBUTOR_ID);
   });
@@ -741,9 +873,119 @@ describe('patchContent fixtures', () => {
   });
 });
 
+describe('setParent / setUnlisted fixtures', () => {
+  const handled = new Set<string>();
+
+  test('set-parent-moves-a-record-into-a-container', async () => {
+    const fixture = setParentFixtures.find(
+      (f) => f.name === 'set-parent-moves-a-record-into-a-container',
+    )!;
+    handled.add(fixture.name);
+    const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'folder' });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const { status, data } = await dispatchAt(fixture, record.id, {
+      body: { parentId: container.id },
+    });
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual({
+      ...aspectsOf(fixture.responseBody),
+      parentId: container.id,
+    });
+  });
+
+  test('set-parent-null-moves-a-record-to-the-root', async () => {
+    const fixture = setParentFixtures.find(
+      (f) => f.name === 'set-parent-null-moves-a-record-to-the-root',
+    )!;
+    handled.add(fixture.name);
+    const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'folder' });
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello', body: 'World' },
+      { parentId: container.id },
+    );
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+  });
+
+  test('set-unlisted-true', async () => {
+    const fixture = setUnlistedFixtures.find((f) => f.name === 'set-unlisted-true')!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+    // Withheld from enumeration, never from a read by id.
+    const listed = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
+    expect((listed.data as { records: { id: string }[] }).records.map((r) => r.id)).not.toContain(
+      record.id,
+    );
+  });
+
+  test('set-unlisted-false-relists', async () => {
+    const fixture = setUnlistedFixtures.find((f) => f.name === 'set-unlisted-false-relists')!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello', body: 'World' },
+      { unlisted: true },
+    );
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      [...setParentFixtures, ...setUnlistedFixtures].map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+});
+
 // -------------------------------------------------------
-// Records: delete / undelete
+// Records: get / delete / undelete
 // -------------------------------------------------------
+
+describe('getRecord sequence fixtures', () => {
+  const handled = new Set<string>();
+
+  test('get-record-after-soft-delete', async () => {
+    const sequence = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete',
+    )!;
+    handled.add(sequence.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    for (const step of sequence.steps) {
+      const { status } = await dispatchAt(step, record.id);
+      expect(status).toBe(step.responseStatus);
+    }
+  });
+
+  test('get-record-after-soft-delete-unreadable', async () => {
+    const sequence = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete-unreadable',
+    )!;
+    handled.add(sequence.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    await t.ctx.stack.delete(record.id);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
+    for (const step of sequence.steps) {
+      const { status } = await dispatchAt(step, record.id, { token });
+      expect(status).toBe(step.responseStatus);
+    }
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      getRecordSequenceFixtures.map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+});
 
 describe('deleteRecord fixtures', () => {
   const handled = new Set<string>();
@@ -751,23 +993,26 @@ describe('deleteRecord fixtures', () => {
   test('delete-record-soft', async () => {
     const fixture = deleteRecordFixtures.find((f) => f.name === 'delete-record-soft')!;
     handled.add(fixture.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    // Soft-deleted: still fetchable directly, history retained.
-    const after = await req(t.app, 'GET', `/records/${record.id}`, { token: TEST_TOKEN });
-    expect(after.status).toBe(200);
+    const d = data as WireRecord;
+    expect(d.version).toBe(fixture.responseBody!.version);
+    expect(d.deletedAt).toBeDefined();
+    // The tombstone projection: content is what a soft delete removes. See
+    // docs/spec/versioning.md § The tombstone is literal.
+    expect(d.content).toEqual({});
   });
 
   test('delete-record-purge', async () => {
     const fixture = deleteRecordFixtures.find((f) => f.name === 'delete-record-purge')!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'DELETE', `/records/${record.id}?purge=true`, {
+    const { status } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    const after = await req(t.app, 'GET', `/records/${record.id}?includeDeleted=true`, {
       token: TEST_TOKEN,
     });
-    expect(status).toBe(fixture.responseStatus);
-    const after = await req(t.app, 'GET', `/records/${record.id}`, { token: TEST_TOKEN });
     expect(after.status).toBe(404);
   });
 
@@ -805,15 +1050,19 @@ describe('deleteRecord fixtures', () => {
     );
 
     const [addStep, purgeStep] = sequence.steps;
-    const added = await req(t.app, addStep!.method, `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-      body: { kind: 'attachment', label: 'late-arrival', fileId: lateFileId },
+    const added = await dispatchAt(addStep!, record.id, {
+      body: {
+        changes: [
+          {
+            op: 'add',
+            association: { kind: 'attachment', label: 'late-arrival', fileId: lateFileId },
+          },
+        ],
+      },
     });
     expect(added.status).toBe(addStep!.responseStatus);
 
-    const purged = await req(t.app, purgeStep!.method, `/records/${record.id}?purge=true`, {
-      token: TEST_TOKEN,
-    });
+    const purged = await dispatchAt(purgeStep!, record.id);
     expect(purged.status).toBe(purgeStep!.responseStatus);
     const associations = (purged.data as { associations?: Array<{ label: string }> }).associations;
     expect(associations?.map((a) => a.label).sort()).toEqual(['cover', 'late-arrival']);
@@ -837,18 +1086,14 @@ describe('undeleteRecord fixtures', () => {
     const fixture = undeleteRecordFixtures.find((f) => f.name === 'undelete-record')!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
-    await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+    await t.ctx.stack.delete(record.id);
 
-    const first = await req(t.app, 'POST', fixture.path.replace('1hk153x00001', record.id), {
-      token: TEST_TOKEN,
-    });
+    const first = await dispatchAt(fixture, record.id);
     expect(first.status).toBe(fixture.responseStatus);
     const firstBody = first.data as Record<string, unknown>;
     expect(firstBody.deletedAt).toBeUndefined();
 
-    const second = await req(t.app, 'POST', fixture.path.replace('1hk153x00001', record.id), {
-      token: TEST_TOKEN,
-    });
+    const second = await dispatchAt(fixture, record.id);
     expect(second.status).toBe(200);
     expect((second.data as Record<string, unknown>).deletedAt).toBeUndefined();
     expect((second.data as Record<string, unknown>).content).toEqual(firstBody.content);
@@ -867,196 +1112,155 @@ describe('undeleteRecord fixtures', () => {
 // Associations
 // -------------------------------------------------------
 
-describe('associate fixtures', () => {
+describe('editAssociations / setAssociations fixtures', () => {
   const handled = new Set<string>();
 
-  test('associate-tag', async () => {
-    const fixture = associateFixtures.find((f) => f.name === 'associate-tag')!;
+  /** Uploads real bytes, so an attachment element names a stored file. */
+  async function upload() {
+    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
+      mimeType: 'image/png',
+      filename: 'embed.png',
+    });
+    return { fileId: (uploaded.content as { fileId: string }).fileId, recordId: uploaded.id };
+  }
+
+  test('edit-associations-add-tag', async () => {
+    const fixture = editAssociationsFixtures.find((f) => f.name === 'edit-associations-add-tag')!;
     handled.add(fixture.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-    });
-    expect((data as { associations: unknown[] }).associations).toEqual([fixture.requestBody]);
+    // Associations bump nothing.
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
-  test('associate-relationship-external-target', async () => {
-    const fixture = associateFixtures.find(
-      (f) => f.name === 'associate-relationship-external-target',
+  test('edit-associations-add-relationship-external-target', async () => {
+    const fixture = editAssociationsFixtures.find(
+      (f) => f.name === 'edit-associations-add-relationship-external-target',
     )!;
     handled.add(fixture.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-    });
     // The discriminated target travels verbatim — core validates the union,
     // this server neither flattens nor reshapes it.
-    expect((data as { associations: unknown[] }).associations).toEqual([fixture.requestBody]);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
-  test('associate-attachment-record-id', async () => {
-    const fixture = associateFixtures.find((f) => f.name === 'associate-attachment-record-id')!;
+  test('edit-associations-add-attachment-record-id', async () => {
+    const fixture = editAssociationsFixtures.find(
+      (f) => f.name === 'edit-associations-add-attachment-record-id',
+    )!;
     handled.add(fixture.name);
-    const body = fixture.requestBody as DataAssociation & {
-      kind: 'attachment';
-      fileId: string;
-      attachmentRecordId: string;
-    };
-    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
-      mimeType: 'image/png',
-      filename: 'embed.png',
-    });
-    const fileId = (uploaded.content as { fileId: string }).fileId;
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-      body: { ...body, fileId, attachmentRecordId: uploaded.id },
+    const { fileId, recordId } = await upload();
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const element = { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: recordId };
+    const { status, data } = await dispatchAt(fixture, record.id, {
+      body: { changes: [{ op: 'add', association: element }] },
     });
     expect(status).toBe(fixture.responseStatus);
-    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-    });
-    // attachmentRecordId travels verbatim, in both directions — the pointer
-    // annotates the reference rather than identifying it.
-    expect((data as { associations: unknown[] }).associations).toEqual([
-      { ...body, fileId, attachmentRecordId: uploaded.id },
-    ]);
+    // attachmentRecordId travels verbatim — the pointer annotates the
+    // reference rather than identifying it.
+    expect((data as { associations: unknown[] }).associations).toEqual([element]);
   });
 
-  test('coverage', () => {
-    assertCoverage(
-      associateFixtures.map((f) => f.name),
-      handled,
-      new Set(),
-    );
-  });
-});
-
-describe('dissociate fixtures', () => {
-  const handled = new Set<string>();
-
-  test('dissociate-tag', async () => {
-    const fixture = dissociateFixtures.find((f) => f.name === 'dissociate-tag')!;
+  test('edit-associations-remove-attachment-by-identity', async () => {
+    const fixture = editAssociationsFixtures.find(
+      (f) => f.name === 'edit-associations-remove-attachment-by-identity',
+    )!;
     handled.add(fixture.name);
-    const record = await t.ctx.stack.create(
-      NOTE_TYPE,
-      { title: 'x' },
-      { associations: [fixture.requestBody as DataAssociation] },
-    );
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
-    expect(status).toBe(fixture.responseStatus);
-    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-    });
-    expect((data as { associations: unknown[] }).associations).toEqual([]);
-  });
-
-  test('dissociate-attachment-by-identity', async () => {
-    const fixture = dissociateFixtures.find((f) => f.name === 'dissociate-attachment-by-identity')!;
-    handled.add(fixture.name);
-    const body = fixture.requestBody as DataAssociation & { kind: 'attachment'; fileId: string };
-    const uploaded = await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), {
-      mimeType: 'image/png',
-      filename: 'embed.png',
-    });
-    const fileId = (uploaded.content as { fileId: string }).fileId;
+    const { fileId, recordId } = await upload();
     // The stored association carries an attachmentRecordId, but identity
-    // stays (kind, label, fileId) — dissociating without the pointer still
-    // matches and removes it.
+    // stays (kind, label, fileId) — removing without the pointer still
+    // matches it.
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
-      { title: 'x' },
-      { associations: [{ ...body, fileId, attachmentRecordId: uploaded.id }] },
+      { title: 'Hello', body: 'World' },
+      {
+        associations: [
+          { kind: 'attachment', label: 'embed', fileId, attachmentRecordId: recordId },
+        ],
+      },
     );
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
-      token: TEST_TOKEN,
-      body: { ...body, fileId },
+    const { status, data } = await dispatchAt(fixture, record.id, {
+      body: {
+        changes: [{ op: 'remove', association: { kind: 'attachment', label: 'embed', fileId } }],
+      },
     });
     expect(status).toBe(fixture.responseStatus);
-    const { data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-    });
-    expect((data as { associations: unknown[] }).associations).toEqual([]);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
-  test('coverage', () => {
-    assertCoverage(
-      dissociateFixtures.map((f) => f.name),
-      handled,
-      new Set(),
-    );
-  });
-});
-
-// -------------------------------------------------------
-// Permissions
-// -------------------------------------------------------
-
-describe('permissions change fixtures', () => {
-  const handled = new Set<string>();
-
-  test('set-permissions-anyone', async () => {
-    const fixture = permissionsChangeFixtures.find((f) => f.name === 'set-permissions-anyone')!;
-    handled.add(fixture.name);
-    const record = await t.ctx.stack.create(
-      NOTE_TYPE,
-      { title: 'x' },
-      { associations: [{ kind: 'tag', label: 'draft' }] },
-    );
-    const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
-    expect(status).toBe(fixture.responseStatus);
-    const body = data as { permissions?: unknown[]; associations?: unknown[]; version: number };
-    expect(body.permissions).toEqual(fixture.responseBody!.permissions);
-    // A separate domain: the key replaces the ACL and leaves the tags where
-    // they are, and the write bumps nothing.
-    expect(body.associations).toEqual(fixture.responseBody!.associations);
-    expect(body.version).toBe(record.version);
-
-    const anon = await req(t.app, 'GET', `/records/${record.id}`);
-    expect(anon.status).toBe(200);
-  });
-
-  test('set-permissions-empty-is-private', async () => {
-    const fixture = permissionsChangeFixtures.find(
-      (f) => f.name === 'set-permissions-empty-is-private',
+  test('edit-associations-remove-tag', async () => {
+    const fixture = editAssociationsFixtures.find(
+      (f) => f.name === 'edit-associations-remove-tag',
     )!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
-      { title: 'x' },
-      { permissions: [{ kind: 'anyone', label: 'read' }] },
+      { title: 'Hello', body: 'World' },
+      { associations: [{ kind: 'tag', label: 'starred' }] },
     );
-    const { status } = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    // Anonymous can't tell "made private" from "never existed" — the
-    // anti-oracle rule, so 404 + WWW-Authenticate, not 403.
-    const anon = await t.app.request(`/records/${record.id}`);
-    expect(anon.status).toBe(404);
-    expect(anon.headers.get('WWW-Authenticate')).toBe('Bearer');
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+  });
+
+  test('edit-associations-swap-in-one-request', async () => {
+    const fixture = editAssociationsFixtures.find(
+      (f) => f.name === 'edit-associations-swap-in-one-request',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello', body: 'World' },
+      { associations: [{ kind: 'tag', label: 'draft' }] },
+    );
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+    // One write, so one journal entry for the swap.
+    const journal = await t.ctx.stack.getJournal(record.id);
+    expect(journal.at(-1)!.associations).toHaveLength(2);
+  });
+
+  test('set-associations-replaces-the-data-set', async () => {
+    const fixture = setAssociationsFixtures.find(
+      (f) => f.name === 'set-associations-replaces-the-data-set',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello', body: 'World' },
+      {
+        associations: [{ kind: 'tag', label: 'draft' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
+      },
+    );
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    // The data set is replaced; the permission set is another aspect.
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+  });
+
+  test('set-associations-if-match-current', async () => {
+    const fixture = setAssociationsFixtures.find(
+      (f) => f.name === 'set-associations-if-match-current',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello', body: 'World' },
+      { associations: [{ kind: 'tag', label: 'draft' }] },
+    );
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
   test('coverage', () => {
     assertCoverage(
-      permissionsChangeFixtures.map((f) => f.name),
+      [...editAssociationsFixtures, ...setAssociationsFixtures].map((f) => f.name),
       handled,
       new Set(),
     );
@@ -1064,50 +1268,38 @@ describe('permissions change fixtures', () => {
 });
 
 // -------------------------------------------------------
-// Record-level grant/revoke — the amending spelling of the permissions
-// key, carrying the reshare gate rather than the write bit.
+// Permissions — the same two spellings as associations, carrying the
+// reshare gate rather than the write bit.
 // -------------------------------------------------------
 
-describe('grantAccess / revokeAccess fixtures', () => {
+describe('editAccess / setAccess fixtures', () => {
   const handled = new Set<string>();
+  const MEMBER_ID = 'did:key:z6MkMember';
 
-  test('grant-access-entity', async () => {
-    const fixture = grantAccessFixtures.find((f) => f.name === 'grant-access-entity')!;
+  test('edit-permissions-add-entity', async () => {
+    const fixture = editAccessFixtures.find((f) => f.name === 'edit-permissions-add-entity')!;
     handled.add(fixture.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
-    const element = {
-      ...fixture.requestBody,
-      grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
-    };
-
-    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
-      token: TEST_TOKEN,
-      body: element,
-    });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    const body = data as { permissions?: unknown[]; version: number };
-    expect(body.permissions).toEqual([element]);
-    // A permission element is an association: no bump, no snapshot.
-    expect(body.version).toBe(record.version);
-
-    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+    const { token } = await t.ctx.adapter.createToken({ subjectId: MEMBER_ID });
     const read = await req(t.app, 'GET', `/records/${record.id}`, { token });
     expect(read.status).toBe(200);
   });
 
-  test('grant-access-group-role', async () => {
-    const fixture = grantAccessFixtures.find((f) => f.name === 'grant-access-group-role')!;
+  test('edit-permissions-add-group-role', async () => {
+    const fixture = editAccessFixtures.find((f) => f.name === 'edit-permissions-add-group-role')!;
     handled.add(fixture.name);
     const group = await t.ctx.stack.create(GROUP_TYPE, { name: 'Editors' });
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
     const element = {
-      ...fixture.requestBody,
+      kind: 'permission',
+      label: 'read',
       grantee: { kind: 'group', groupId: group.id, role: 'admin' },
     };
-
-    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
-      token: TEST_TOKEN,
-      body: element,
+    const { status, data } = await dispatchAt(fixture, record.id, {
+      body: { changes: [{ op: 'add', association: element }] },
     });
     expect(status).toBe(fixture.responseStatus);
     // The role travels verbatim — there is no absent-role spelling for a
@@ -1115,74 +1307,94 @@ describe('grantAccess / revokeAccess fixtures', () => {
     expect((data as { permissions?: unknown[] }).permissions).toEqual([element]);
   });
 
-  test('the endpoints amend the set where the change-set key replaces it', async () => {
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
-    await req(t.app, 'POST', `/records/${record.id}/permissions`, {
-      token: TEST_TOKEN,
-      body: {
-        kind: 'permission',
-        label: 'read',
-        grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
-      },
-    });
-    const { data } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
-      token: TEST_TOKEN,
-      body: { kind: 'anyone', label: 'read' },
-    });
-    expect((data as { permissions?: unknown[] }).permissions).toHaveLength(2);
+  test('edit-permissions-grant-read-and-write-together', async () => {
+    const fixture = editAccessFixtures.find(
+      (f) => f.name === 'edit-permissions-grant-read-and-write-together',
+    )!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
-  test('revoke-access-anyone', async () => {
-    const fixture = revokeAccessFixtures.find((f) => f.name === 'revoke-access-anyone')!;
+  test('edit-permissions-remove-anyone', async () => {
+    const fixture = editAccessFixtures.find((f) => f.name === 'edit-permissions-remove-anyone')!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
-      { title: 'Hello' },
+      { title: 'Hello', body: 'World' },
       { permissions: [{ kind: 'anyone', label: 'read' }] },
     );
-
-    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/permissions/delete`, {
-      token: TEST_TOKEN,
-      body: fixture.requestBody,
-    });
+    const { status, data } = await dispatchAt(fixture, record.id);
     expect(status).toBe(fixture.responseStatus);
-    const body = data as { permissions?: unknown[]; version: number };
-    // Reach to the world is its own kind, so withdrawing it names that kind
-    // and leaves the set empty rather than clearing a field.
-    expect(body.permissions ?? []).toEqual([]);
-    expect(body.version).toBe(record.version);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
   });
 
-  test('carries the reshare gate, not the write bit', async () => {
+  test('set-permissions-anyone', async () => {
+    const fixture = setAccessFixtures.find((f) => f.name === 'set-permissions-anyone')!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello', body: 'World' },
+      { associations: [{ kind: 'tag', label: 'draft' }] },
+    );
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    // A separate aspect: the set is replaced and the tags stay where they are.
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+    const anon = await req(t.app, 'GET', `/records/${record.id}`);
+    expect(anon.status).toBe(200);
+  });
+
+  test('set-permissions-empty-is-private', async () => {
+    const fixture = setAccessFixtures.find((f) => f.name === 'set-permissions-empty-is-private')!;
+    handled.add(fixture.name);
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'Hello', body: 'World' },
+      {
+        associations: [{ kind: 'tag', label: 'draft' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
+      },
+    );
+    const { status, data } = await dispatchAt(fixture, record.id);
+    expect(status).toBe(fixture.responseStatus);
+    expect(aspectsOf(data)).toEqual(aspectsOf(fixture.responseBody));
+    // Anonymous can't tell "made private" from "never existed" — the
+    // anti-oracle rule, so 404 + WWW-Authenticate, not 403.
+    const anon = await t.app.request(`/records/${record.id}`);
+    expect(anon.status).toBe(404);
+    expect(anon.headers.get('WWW-Authenticate')).toBe('Bearer');
+  });
+
+  test('both spellings carry the reshare gate, not the write bit', async () => {
     const record = await t.ctx.stack.create(
       NOTE_TYPE,
       { title: 'Hello' },
       {
         permissions: [
-          {
-            kind: 'permission',
-            label: 'read',
-            grantee: { kind: 'entity', entityId: WRITER_ID },
-          },
-          {
-            kind: 'permission',
-            label: 'write',
-            grantee: { kind: 'entity', entityId: WRITER_ID },
-          },
+          { kind: 'permission', label: 'read', grantee: { kind: 'entity', entityId: WRITER_ID } },
+          { kind: 'permission', label: 'write', grantee: { kind: 'entity', entityId: WRITER_ID } },
         ],
       },
     );
     const { token } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
-    const { status } = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
+    const edit = await req(t.app, 'POST', `/records/${record.id}/permissions`, {
       token,
-      body: { kind: 'anyone', label: 'read' },
+      body: { changes: [{ op: 'add', association: { kind: 'anyone', label: 'read' } }] },
     });
-    expect(status).toBe(403);
+    expect(edit.status).toBe(403);
+    const set = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {
+      token,
+      body: { permissions: [{ kind: 'anyone', label: 'read' }] },
+    });
+    expect(set.status).toBe(403);
   });
 
   test('coverage', () => {
     assertCoverage(
-      [...grantAccessFixtures.map((f) => f.name), ...revokeAccessFixtures.map((f) => f.name)],
+      [...editAccessFixtures, ...setAccessFixtures].map((f) => f.name),
       handled,
       new Set(),
     );
@@ -1205,7 +1417,7 @@ describe('journal fixtures', () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { kind: 'tag', label: 'starred' },
+      body: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
     });
 
     const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal`, {
@@ -1232,7 +1444,7 @@ describe('journal fixtures', () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { kind: 'tag', label: 'starred' },
+      body: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
     });
 
     const page = await req(t.app, 'GET', `/records/${record.id}/journal?afterSeq=0&limit=1`, {
@@ -1277,11 +1489,15 @@ describe('journal fixtures', () => {
     const association = { kind: 'attachment', label: 'embed', fileId };
     await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { ...association, attachmentRecordId: first.id },
+      body: {
+        changes: [{ op: 'add', association: { ...association, attachmentRecordId: first.id } }],
+      },
     });
     await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { ...association, attachmentRecordId: second.id },
+      body: {
+        changes: [{ op: 'add', association: { ...association, attachmentRecordId: second.id } }],
+      },
     });
 
     const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?afterSeq=2`, {
@@ -1318,11 +1534,13 @@ describe('journal fixtures', () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { ...association, attachmentRecordId: uploaded.id },
+      body: {
+        changes: [{ op: 'add', association: { ...association, attachmentRecordId: uploaded.id } }],
+      },
     });
-    await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+    await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: association,
+      body: { changes: [{ op: 'remove', association }] },
     });
 
     const { status, data } = await req(t.app, 'GET', `/records/${record.id}/journal?afterSeq=2`, {
@@ -1331,10 +1549,10 @@ describe('journal fixtures', () => {
     expect(status).toBe(fixture.responseStatus);
     const entry = (data as WireJournalResponse).entries[0]!;
     expect(entry.ops).toEqual(['dissociate']);
-    // `previous` is the association in full, annotation included — where
-    // the change frame for the same write names identity only.
+    // The removed association in full, annotation included — where the
+    // change frame for the same write names identity only.
     expect(entry.associations).toEqual([
-      { op: 'remove', previous: { ...association, attachmentRecordId: uploaded.id } },
+      { op: 'remove', association: { ...association, attachmentRecordId: uploaded.id } },
     ]);
   });
 
@@ -1345,7 +1563,7 @@ describe('journal fixtures', () => {
     handled.add(fixture.name);
     const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'Container' });
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
+    await req(t.app, 'PUT', `/records/${record.id}/parent`, {
       token: TEST_TOKEN,
       body: { parentId: container.id },
     });
@@ -1385,7 +1603,7 @@ describe('journal fixtures', () => {
     );
     await req(t.app, 'POST', `/records/${record.id}/permissions`, {
       token: TEST_TOKEN,
-      body: { kind: 'anyone', label: 'read' },
+      body: { changes: [{ op: 'add', association: { kind: 'anyone', label: 'read' } }] },
     });
 
     const { token } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
@@ -1428,6 +1646,16 @@ describe('journal fixtures', () => {
 describe('version lifecycle fixtures', () => {
   const handled = new Set<string>();
 
+  type VersionsPage = { versions: Array<Record<string, unknown>>; cursor: number | null };
+
+  /** A record at version 3 holding snapshots of versions 1 and 2, as the fixtures assume. */
+  async function recordAtVersion3(opts: { permissions?: AuthorityAssociation[] } = {}) {
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original title' }, opts);
+    await t.ctx.stack.patchContent(record.id, { title: 'intermediate title' });
+    await t.ctx.stack.patchContent(record.id, { title: 'title before restore' });
+    return record;
+  }
+
   test('every requester past the mutate gate sees the same snapshot rows', async () => {
     const ownerFixture = getVersionsFixtures.find((f) => f.name === 'get-versions-owner')!;
     const writerFixture = getVersionsFixtures.find(
@@ -1453,119 +1681,85 @@ describe('version lifecycle fixtures', () => {
     // it once to give version 1 a snapshot to appear in.
     await t.ctx.stack.patchContent(record.id, { title: 'updated title' });
 
-    const owner = await req(t.app, 'GET', `/records/${record.id}/versions`, { token: TEST_TOKEN });
+    const owner = await dispatchAt(ownerFixture, record.id);
     expect(owner.status).toBe(ownerFixture.responseStatus);
-    expect((owner.data as unknown[]).length).toBe(1);
+    const ownerPage = owner.data as VersionsPage;
+    expect(ownerPage.versions.map((v) => v.version)).toEqual([1]);
+    expect(ownerPage.cursor).toBeNull();
 
     const { token: writerToken } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
-    const writer = await req(t.app, 'GET', `/records/${record.id}/versions`, {
-      token: writerToken,
-    });
+    const writer = await dispatchAt(writerFixture, record.id, { token: writerToken });
     expect(writer.status).toBe(writerFixture.responseStatus);
     expect(writer.data).toEqual(owner.data);
 
-    const single = await req(t.app, 'GET', `/records/${record.id}/versions/1`, {
-      token: writerToken,
-    });
+    const single = await dispatchAt(singleFixture, record.id, { token: writerToken });
     expect(single.status).toBe(singleFixture.responseStatus);
-    expect(single.data).toEqual((owner.data as unknown[])[0]);
+    expect(single.data).toEqual(ownerPage.versions[0]);
   });
 
-  test('restore auto-snapshots the pre-restore state; migrate auto-snapshots the pre-migration state', async () => {
+  test('a page carries the cursor to resume from, and the last page a null one', async () => {
+    const pageFixture = getVersionsFixtures.find(
+      (f) => f.name === 'get-versions-page-reports-a-cursor-to-resume-from',
+    )!;
+    const lastFixture = getVersionsFixtures.find(
+      (f) => f.name === 'get-versions-before-version-ends-with-a-null-cursor',
+    )!;
+    handled.add(pageFixture.name);
+    handled.add(lastFixture.name);
+    const record = await recordAtVersion3();
+
+    const first = await req(t.app, 'GET', `/records/${record.id}/versions?limit=1`, {
+      token: TEST_TOKEN,
+    });
+    expect(first.status).toBe(pageFixture.responseStatus);
+    const firstPage = first.data as VersionsPage;
+    expect(firstPage.versions.map((v) => v.version)).toEqual([2]);
+    expect(firstPage.cursor).toBe(2);
+
+    const last = await req(
+      t.app,
+      'GET',
+      `/records/${record.id}/versions?beforeVersion=${firstPage.cursor}&limit=1`,
+      { token: TEST_TOKEN },
+    );
+    expect(last.status).toBe(lastFixture.responseStatus);
+    const lastPage = last.data as VersionsPage;
+    expect(lastPage.versions.map((v) => v.version)).toEqual([1]);
+    // Exactly as many rows as the limit, yet nothing older: the cursor says so.
+    expect(lastPage.cursor).toBeNull();
+  });
+
+  test('version-history-grows-on-restore-and-migrate-but-not-associate', async () => {
+    const sequence = getVersionsSequenceFixtures.find(
+      (f) => f.name === 'version-history-grows-on-restore-and-migrate-but-not-associate',
+    )!;
     const restoreFixture = restoreVersionFixtures.find((f) => f.name === 'restore-version')!;
     const migrateFixture = commitMigrationFixtures.find((f) => f.name === 'commit-migration')!;
-    const afterRestoreFixture = getVersionsAfterMutateFixtures.find(
-      (f) => f.name === 'get-versions-after-restore-includes-pre-restore-snapshot',
-    )!;
-    const afterMigrateFixture = getVersionsAfterMutateFixtures.find(
-      (f) => f.name === 'get-versions-after-migrate-includes-pre-migration-snapshot',
-    )!;
+    handled.add(sequence.name);
     handled.add(restoreFixture.name);
     handled.add(migrateFixture.name);
-    handled.add(afterRestoreFixture.name);
-    handled.add(afterMigrateFixture.name);
+    const record = await recordAtVersion3();
 
-    // v1
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original title' });
-    // v2 — an intermediate edit, so v3 (below) isn't restore-version's own
-    // pre-restore auto-snapshot colliding with the create itself.
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: { contentPatch: { title: 'intermediate title' } },
-    });
-    // v3 — the state restore-version will move away from
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: { contentPatch: { title: 'title before restore' } },
-    });
-
-    // v3 (auto pre-restore snapshot of v2) + v4 (restored content, from v1)
-    const restore = await req(t.app, 'POST', `/records/${record.id}/restore/1`, {
-      token: TEST_TOKEN,
-    });
-    expect(restore.status).toBe(restoreFixture.responseStatus);
-    const restored = restore.data as Record<string, unknown>;
-    expect(restored.content).toEqual(restoreFixture.responseBody!.content);
-    expect(restored.version).toBe(4);
-
-    // v5 (auto pre-migration snapshot of v4 is v4 itself) + new typeId/content
-    const migrateBody = migrateFixture.requestBody!;
-    const migrate = await req(t.app, 'POST', `/records/${record.id}/migrate`, {
-      token: TEST_TOKEN,
-      body: migrateBody,
-    });
-    expect(migrate.status).toBe(migrateFixture.responseStatus);
-    const migrated = migrate.data as Record<string, unknown>;
-    expect(migrated.typeId).toBe(migrateBody.toTypeId);
-    expect(migrated.content).toEqual(migrateBody.content);
-    expect(migrated.version).toBe(5);
-
-    const versions = await req(t.app, 'GET', `/records/${record.id}/versions`, {
-      token: TEST_TOKEN,
-    });
-    expect(versions.status).toBe(afterMigrateFixture.responseStatus);
-    const versionList = versions.data as Array<{ version: number; typeId: string }>;
-    const numbers = versionList.map((v) => v.version);
-    // v4 (pre-migration snapshot), v3 (pre-restore snapshot), v1 (original) —
-    // matches afterMigrateFixture/afterRestoreFixture's own version lists.
-    expect(numbers).toEqual(
-      expect.arrayContaining(afterMigrateFixture.responseBody!.map((v) => v.version)),
-    );
-    expect(numbers).toEqual(
-      expect.arrayContaining(afterRestoreFixture.responseBody!.map((v) => v.version)),
-    );
-    const v4Snapshot = versionList.find((v) => v.version === 4)!;
-    expect(v4Snapshot.typeId).toBe(NOTE_TYPE);
-  });
-
-  test('get-versions-after-associate-is-unchanged', async () => {
-    const fixture = getVersionsAfterMutateFixtures.find(
-      (f) => f.name === 'get-versions-after-associate-is-unchanged',
-    )!;
-    handled.add(fixture.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original title' });
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: { contentPatch: { title: 'updated title' } },
-    });
-    const before = await req(t.app, 'GET', `/records/${record.id}/versions`, {
-      token: TEST_TOKEN,
-    });
-    expect(before.status).toBe(fixture.responseStatus);
-
-    await req(t.app, 'POST', `/records/${record.id}/associations`, {
-      token: TEST_TOKEN,
-      body: { kind: 'tag', label: 'starred' },
-    });
-
-    const after = await req(t.app, 'GET', `/records/${record.id}/versions`, { token: TEST_TOKEN });
-    // Exactly the list it answered with before: no new entry, and no entry
-    // gains an associations key — a server that snapshots here hands every
-    // later restore a stale association set to put back.
-    expect(after.data).toEqual(before.data);
-    expect(
-      (after.data as Array<Record<string, unknown>>).every((v) => v.associations === undefined),
-    ).toBe(true);
+    for (const step of sequence.steps) {
+      const { status, data } = await dispatchAt(step, record.id);
+      expect(status).toBe(step.responseStatus);
+      if (step.method === 'GET') {
+        const expected = (step.responseBody as VersionsPage).versions.map((v) => v.version);
+        const page = data as VersionsPage;
+        expect(page.versions.map((v) => v.version)).toEqual(expected);
+        // No snapshot carries an aspect that bumps no version.
+        expect(page.versions.every((v) => v.associations === undefined)).toBe(true);
+      }
+      if (step.path.endsWith('/restore/1')) {
+        expect(aspectsOf(data)).toEqual(aspectsOf(restoreFixture.responseBody));
+      }
+      if (step.path.endsWith('/migrate')) {
+        const migrated = data as Record<string, unknown>;
+        expect(migrated.typeId).toBe(migrateFixture.responseBody!.typeId);
+        expect(migrated.content).toEqual(migrateFixture.responseBody!.content);
+        expect(migrated.version).toBe(migrateFixture.responseBody!.version);
+      }
+    }
   });
 
   test('a snapshot names no container, and a restore leaves the record where it sits', async () => {
@@ -1582,31 +1776,20 @@ describe('version lifecycle fixtures', () => {
     // v1, at the root
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original title' });
     // v2 — the state the restore below returns to, still at the root
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: { contentPatch: { title: 'title before restore' } },
-    });
+    await t.ctx.stack.patchContent(record.id, { title: 'title before restore' });
     // Aspects that take no snapshot of their own, set before the bump that
     // snapshots v2 — so a snapshot capturing any of them would show them.
-    await req(t.app, 'POST', `/records/${record.id}/permissions`, {
-      token: TEST_TOKEN,
-      body: { kind: 'anyone', label: 'read' },
-    });
+    await t.ctx.stack.editAccess(record.id, [
+      { op: 'add', association: { kind: 'anyone', label: 'read' } },
+    ]);
+    await t.ctx.stack.setUnlisted(record.id, true);
     // v3 — the content bump that writes v2's snapshot
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: { contentPatch: { title: 'current title' }, unlisted: true },
-    });
+    await t.ctx.stack.patchContent(record.id, { title: 'current title' });
     // A move bumps nothing, and is what leaves the record somewhere other
     // than where v2 was taken.
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: { parentId: container.id },
-    });
+    await t.ctx.stack.setParent(record.id, container.id);
 
-    const snapshot = await req(t.app, 'GET', `/records/${record.id}/versions/2`, {
-      token: TEST_TOKEN,
-    });
+    const snapshot = await dispatchAt(snapshotFixture, record.id);
     expect(snapshot.status).toBe(snapshotFixture.responseStatus);
     const v2 = snapshot.data as Record<string, unknown>;
     expect(v2.content).toEqual(snapshotFixture.responseBody!.content);
@@ -1616,9 +1799,7 @@ describe('version lifecycle fixtures', () => {
     expect(v2.permissions).toBeUndefined();
     expect(v2.associations).toBeUndefined();
 
-    const restore = await req(t.app, 'POST', `/records/${record.id}/restore/2`, {
-      token: TEST_TOKEN,
-    });
+    const restore = await dispatchAt(restoreFixture, record.id);
     expect(restore.status).toBe(restoreFixture.responseStatus);
     const restored = restore.data as { parentId?: string; content: unknown; version: number };
     expect(restored.content).toEqual(restoreFixture.responseBody!.content);
@@ -1632,11 +1813,98 @@ describe('version lifecycle fixtures', () => {
     const names = [
       ...getVersionsFixtures.map((f) => f.name),
       ...getVersionFixtures.map((f) => f.name),
-      ...getVersionsAfterMutateFixtures.map((f) => f.name),
+      ...getVersionsSequenceFixtures.map((f) => f.name),
       ...restoreVersionFixtures.map((f) => f.name),
       ...commitMigrationFixtures.map((f) => f.name),
     ];
     assertCoverage(names, handled, new Set());
+  });
+});
+
+// -------------------------------------------------------
+// Installs
+// -------------------------------------------------------
+
+describe('installRequest fixtures', () => {
+  const handled = new Set<string>();
+  const APP_KEY = 'did:key:z6Mkfsz9oK6i2355mvEwtDYdAmqCN6kmQETThJtARfj9iGum';
+
+  function fixture(name: string) {
+    const found = installRequestFixtures.find((f) => f.name === name)!;
+    handled.add(found.name);
+    return found;
+  }
+
+  /** An error's code and details are the contract; its message is for humans. */
+  function expectRefusal(data: unknown, expected: unknown) {
+    const { code, details } = (expected as { error: { code: string; details?: unknown } }).error;
+    const actual = (data as { error: { code: string; details?: unknown } }).error;
+    expect(actual.code).toBe(code);
+    expect(actual.details).toEqual(details);
+  }
+
+  test('install-request-pending', async () => {
+    const f = fixture('install-request-pending');
+    const { token } = await t.ctx.adapter.createToken({ subjectId: APP_KEY });
+    for (let i = 0; i < 2; i++) {
+      const { status, data } = await req(t.app, f.method, f.path, { token, body: f.requestBody });
+      expect(status).toBe(f.responseStatus);
+      expect(data).toEqual(f.responseBody);
+    }
+    // A request is not an approval: nothing landed in the stack.
+    expect(await t.ctx.stack.getType('com.example.notes/note@1')).toBeNull();
+  });
+
+  test('install-request-already-installed', async () => {
+    const f = fixture('install-request-already-installed');
+    const manifest = f.requestBody!.manifest;
+    await t.ctx.stack.installApp(await t.ctx.stack.planInstall(manifest, { did: APP_KEY }));
+    const { token } = await t.ctx.adapter.createToken({ subjectId: APP_KEY });
+    const { status, data } = await req(t.app, f.method, f.path, { token, body: f.requestBody });
+    expect(status).toBe(f.responseStatus);
+    const body = data as { status: string; install: WireRecord };
+    expect(body.status).toBe('installed');
+    expect(body.install.typeId).toBe('_install@1');
+    expect(body.install.content).toEqual((f.responseBody as typeof body).install.content);
+    // The key reads its own install.
+    const read = await req(t.app, 'GET', `/records/${body.install.id}`, { token });
+    expect(read.status).toBe(200);
+  });
+
+  test('install-request-type-outside-namespace', async () => {
+    const f = fixture('install-request-type-outside-namespace');
+    const { token } = await t.ctx.adapter.createToken({ subjectId: APP_KEY });
+    const { status, data } = await req(t.app, f.method, f.path, { token, body: f.requestBody });
+    expect(status).toBe(f.responseStatus);
+    expectRefusal(data, f.responseBody);
+  });
+
+  test('install-request-key-registered-to-another-app', async () => {
+    const f = fixture('install-request-key-registered-to-another-app');
+    await t.ctx.stack.create(APP_TYPE, { appId: 'com.example.other', name: 'Other', did: APP_KEY });
+    const { token } = await t.ctx.adapter.createToken({ subjectId: APP_KEY });
+    const { status, data } = await req(t.app, f.method, f.path, { token, body: f.requestBody });
+    expect(status).toBe(f.responseStatus);
+    expectRefusal(data, f.responseBody);
+  });
+
+  test('install-request-delegated-session', async () => {
+    const f = fixture('install-request-delegated-session');
+    const { token } = await t.ctx.adapter.createToken({
+      subjectId: TEST_ENTITY_ID,
+      principalId: APP_KEY,
+    });
+    const { status, data } = await req(t.app, f.method, f.path, { token, body: f.requestBody });
+    expect(status).toBe(f.responseStatus);
+    expectRefusal(data, f.responseBody);
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      installRequestFixtures.map((f) => f.name),
+      handled,
+      new Set(),
+    );
   });
 });
 
@@ -1655,17 +1923,40 @@ describe('error response fixtures', () => {
     return fixture;
   }
 
+  /** The fixture's request, aimed at `recordId` in place of the record its path names. */
   async function dispatch(
     fixture: (typeof errorResponseFixtures)[number],
     token: string | undefined,
-    pathOverride?: string,
+    recordId?: string,
     bodyOverride?: unknown,
   ) {
     const body = bodyOverride !== undefined ? bodyOverride : fixture.requestBody;
-    return req(t.app, fixture.method, pathOverride ?? fixture.path, {
+    const path =
+      recordId === undefined
+        ? fixture.path
+        : fixture.path.replace(/^\/records\/[^/?]+/, `/records/${recordId}`);
+    return req(t.app, fixture.method, path, {
       token,
       ...(body !== undefined && { body }),
       ...(fixture.requestHeaders && { headers: fixture.requestHeaders }),
+    });
+  }
+
+  /**
+   * Writes a _grant@1 Record straight to storage, past every write-time
+   * check — how a grant from an import or a foreign server arrives — so a
+   * test can pin what evaluation makes of one.
+   */
+  async function storeGrant(content: Record<string, unknown>) {
+    const now = new Date();
+    await t.ctx.adapter.createRecord({
+      id: generateId(),
+      typeId: GRANT_TYPE,
+      createdAt: now,
+      updatedAt: now,
+      content,
+      version: 1,
+      createdBy: { subjectId: TEST_ENTITY_ID },
     });
   }
 
@@ -1702,7 +1993,7 @@ describe('error response fixtures', () => {
       },
     );
     const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
-    const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, token, record.id);
     expectError(status, data, fixture);
   });
 
@@ -1710,14 +2001,14 @@ describe('error response fixtures', () => {
     const fixture = find('error-not-found-record-the-requester-cannot-read');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
     const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
-    const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, token, record.id);
     expectError(status, data, fixture);
   });
 
   test('error-validation-permission-write-without-read', async () => {
     const fixture = find('error-validation-permission-write-without-read');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
   });
 
@@ -1727,7 +2018,7 @@ describe('error response fixtures', () => {
     // Format is checked before existence, so the empty string answers for
     // being malformed rather than for naming nothing. It is not a spelling
     // of the root here — `null` is.
-    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
   });
 
@@ -1738,7 +2029,7 @@ describe('error response fixtures', () => {
     // owner sees it: the reference gate exempts them, so the existence check
     // behind it is theirs to reach. Anyone else gets one indistinguishable
     // 403 for a destination they cannot read and one that is not there.
-    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
   });
 
@@ -1758,7 +2049,7 @@ describe('error response fixtures', () => {
       },
     );
     const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
-    const { status, data } = await dispatch(fixture, token, `/records/${record.id}/versions`);
+    const { status, data } = await dispatch(fixture, token, record.id);
     expectError(status, data, fixture);
   });
 
@@ -1771,7 +2062,7 @@ describe('error response fixtures', () => {
 
   test('create-attachment-record-non-owner-without-carve-out-refused', async () => {
     const fixture = find('create-attachment-record-non-owner-without-carve-out-refused');
-    await t.ctx.stack.grantType(ATTACHMENT_TYPE, {
+    await t.ctx.stack.grantType(familyOf(ATTACHMENT_TYPE), {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
@@ -1841,7 +2132,7 @@ describe('error response fixtures', () => {
     await t.ctx.stack.patchContent(record.id, { coverFileId: null });
 
     const { token } = await t.ctx.adapter.createToken({ subjectId: WRITER_ID });
-    const { status, data } = await dispatch(fixture, token, `/records/${record.id}/restore/1`);
+    const { status, data } = await dispatch(fixture, token, record.id);
     expectError(status, data, fixture);
 
     // The refusal is about the reference, not about write access: give the
@@ -1884,7 +2175,7 @@ describe('error response fixtures', () => {
       content: { title: 42 },
       updatedAt: new Date(),
     });
-    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}/restore/1`);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
     // Nothing was applied: the record still holds its pre-restore content.
     const after = await req(t.app, 'GET', `/records/${record.id}`, { token: TEST_TOKEN });
@@ -1941,7 +2232,7 @@ describe('error response fixtures', () => {
       },
     );
     const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
-    const { status, data } = await dispatch(fixture, token, `/records/${record.id}/journal`);
+    const { status, data } = await dispatch(fixture, token, record.id);
     expectError(status, data, fixture);
   });
 
@@ -1954,7 +2245,7 @@ describe('error response fixtures', () => {
 
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'about to be purged' });
     await t.ctx.stack.delete(record.id, { purge: true });
-    const purged = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}/journal`);
+    const purged = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(purged.status, purged.data, fixture);
   });
 
@@ -1994,11 +2285,7 @@ describe('error response fixtures', () => {
   test('error-validation-anyone-element-labelled-write', async () => {
     const fixture = find('error-validation-anyone-element-labelled-write');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status, data } = await dispatch(
-      fixture,
-      TEST_TOKEN,
-      `/records/${record.id}/permissions`,
-    );
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
   });
 
@@ -2008,8 +2295,8 @@ describe('error response fixtures', () => {
     // which is the point: this pins the second half of the rule, where a
     // grant that reached storage some other way is read back as conferring
     // nothing rather than trusted.
-    await t.ctx.stack.create(GRANT_TYPE, {
-      typeId: APP_TYPE,
+    await storeGrant({
+      baseId: familyOf(APP_TYPE),
       actions: ['create', 'read-any'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
@@ -2023,7 +2310,7 @@ describe('error response fixtures', () => {
     // the create, so the refusal above is the family's and not the absence
     // of any machinery to read.
     await t.ctx.stack.create(GRANT_TYPE, {
-      typeId: COMMENT_TYPE,
+      baseId: familyOf(COMMENT_TYPE),
       actions: ['create', 'read-any'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
@@ -2041,42 +2328,39 @@ describe('error response fixtures', () => {
     // than a 403. Written directly for the same reason as above — the
     // companion rule is enforced where the grant is read, not only where a
     // helper wrote it.
-    await t.ctx.stack.create(GRANT_TYPE, {
-      typeId: NOTE_TYPE,
+    await storeGrant({
+      baseId: familyOf(NOTE_TYPE),
       actions: ['create', 'update-any'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: "someone else's" });
     const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
-    const { status, data } = await dispatch(fixture, token, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, token, record.id);
     expectError(status, data, fixture);
 
     // The control: add the read companion the grant was missing and the very
     // same PATCH succeeds. Without it this test would pass against a server
     // that had no grant for this requester at all, since both answer 404.
     await t.ctx.stack.create(GRANT_TYPE, {
-      typeId: NOTE_TYPE,
+      baseId: familyOf(NOTE_TYPE),
       actions: ['update-any', 'read-any'],
       grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
     });
-    const control = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token,
-      body: fixture.requestBody,
-    });
+    const control = await dispatch(fixture, token, record.id);
     expect(control.status).toBe(200);
   });
 
   test('error-query-permission-kind-in-associations-key', async () => {
     const fixture = find('error-query-permission-kind-in-associations-key');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
   });
 
   test('error-query-association-kind-in-permissions-key', async () => {
     const fixture = find('error-query-association-kind-in-permissions-key');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
   });
 
@@ -2091,7 +2375,7 @@ describe('error response fixtures', () => {
   test('error-validation-failed — PATCH content fails the type schema', async () => {
     const fixture = find('error-validation-failed');
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
-    const { status, data } = await dispatch(fixture, TEST_TOKEN, `/records/${record.id}`);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
   });
 
@@ -2202,6 +2486,96 @@ describe('error response fixtures', () => {
     const fixture = find('error-unauthorized-anonymous');
     const { status } = await dispatch(fixture, undefined);
     expect(status).toBe(fixture.responseStatus);
+  });
+
+  test.each([
+    'error-bad-request-content-by-type-beside-content',
+    'error-bad-request-empty-content-by-type',
+    'error-bad-request-non-boolean-param',
+    'error-bad-request-unknown-query-body-key',
+    'error-bad-request-unknown-query-param',
+    'error-bad-request-unknown-record-key',
+    'error-validation-query-versioned-base-id',
+  ])('%s — refused before anything is read', async (name) => {
+    const fixture = find(name);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN);
+    expectError(status, data, fixture);
+  });
+
+  test.each([
+    'error-bad-request-edit-associations-repoint',
+    'error-bad-request-unknown-grantee-key',
+    'error-validation-edit-permissions-write-without-read',
+  ])('%s — refused, and the record unchanged', async (name) => {
+    const fixture = find(name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
+    expectError(status, data, fixture);
+    const after = await t.ctx.stack.get(record.id);
+    expect(after?.associations).toEqual(record.associations);
+    expect(after?.permissions).toEqual(record.permissions);
+  });
+
+  test('error-bad-request-non-boolean-purge', async () => {
+    const fixture = find('error-bad-request-non-boolean-purge');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
+    expectError(status, data, fixture);
+    // Deletes nothing, soft or otherwise.
+    expect((await t.ctx.stack.get(record.id))?.deletedAt).toBeUndefined();
+  });
+
+  test('error-bad-request-unknown-auth-token-key', async () => {
+    const fixture = find('error-bad-request-unknown-auth-token-key');
+    t.ctx.nonces.seedForTesting(
+      AUTH_FIXTURE_NONCE,
+      AUTH_FIXTURE_DID,
+      new Date(Date.now() + 60_000),
+    );
+    const { status, data } = await dispatch(fixture, undefined);
+    expectError(status, data, fixture);
+  });
+
+  test.each([
+    'error-validation-grant-protected-system-type',
+    'error-validation-grant-versioned-base-id',
+  ])('%s — a grant target is checked on every _grant write', async (name) => {
+    const fixture = find(name);
+    const body = withFreshId(fixture.requestBody as WireRecord);
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, undefined, body);
+    expectError(status, data, fixture);
+  });
+
+  test('error-schema-drift-enum-values-removed', async () => {
+    const fixture = find('error-schema-drift-enum-values-removed');
+    await t.ctx.stack.defineType({
+      id: 'com.example/book@1',
+      name: 'Book',
+      schema: { status: { kind: 'enum', values: ['want', 'reading', 'finished'] } },
+    });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN);
+    expectError(status, data, fixture);
+  });
+
+  test('error-validation-enum-value-not-listed', async () => {
+    const fixture = find('error-validation-enum-value-not-listed');
+    await t.ctx.stack.defineType({
+      id: 'com.example/book@1',
+      name: 'Book',
+      schema: { status: { kind: 'enum', values: ['want', 'reading', 'finished'] } },
+    });
+    const record = await t.ctx.stack.create('com.example/book@1', { status: 'want' });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
+    expectError(status, data, fixture);
+  });
+
+  test('error-version-conflict-if-match-on-a-write-that-does-not-bump', async () => {
+    const fixture = find('error-version-conflict-if-match-on-a-write-that-does-not-bump');
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
+    expectError(status, data, fixture);
+    // Changes nothing: the record is still private.
+    expect((await t.ctx.stack.get(record.id))?.permissions).toBeUndefined();
   });
 
   test('coverage', () => {
@@ -2319,9 +2693,9 @@ describe('changeFeed fixtures', () => {
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${record.id}`, {
-        token,
-        body: { contentPatch: { title: 'edited by a contributor' } },
+      await req(t.app, 'PATCH', `/records/${record.id}/content`, {
+        token: token,
+        body: { title: 'edited by a contributor' },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
@@ -2345,7 +2719,7 @@ describe('changeFeed fixtures', () => {
       await conn.waitForFrames(1); // ready
       await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: { kind: 'tag', label: 'starred' },
+        body: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
@@ -2375,15 +2749,17 @@ describe('changeFeed fixtures', () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { ...association, attachmentRecordId: uploaded.id },
+      body: {
+        changes: [{ op: 'add', association: { ...association, attachmentRecordId: uploaded.id } }],
+      },
     });
 
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+      await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: association,
+        body: { changes: [{ op: 'remove', association: association }] },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
@@ -2409,7 +2785,7 @@ describe('changeFeed fixtures', () => {
       await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
-      expect(data.kind).toBe('deleted');
+      expect(data.kind).toBe('removed');
       expect(data.ops).toEqual(['delete']);
       expect(data.recordId).toBe(record.id);
     } finally {
@@ -2458,9 +2834,9 @@ describe('changeFeed fixtures', () => {
     const conn = await openChangeFeed(t.app, '/changes?include=record', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${record.id}`, {
+      await req(t.app, 'PATCH', `/records/${record.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'Updated title' } },
+        body: { title: 'Updated title' },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
@@ -2495,13 +2871,13 @@ describe('changeFeed fixtures', () => {
     const conn = await openChangeFeed(t.app, '/changes', { token });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${privateRecord.id}`, {
+      await req(t.app, 'PATCH', `/records/${privateRecord.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'still private' } },
+        body: { title: 'still private' },
       });
-      await req(t.app, 'PATCH', `/records/${sharedRecord.id}`, {
+      await req(t.app, 'PATCH', `/records/${sharedRecord.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'shared, updated' } },
+        body: { title: 'shared, updated' },
       });
       // Exactly one more frame — the readable record's — proves the
       // private edit produced none rather than merely arriving later.
@@ -2529,13 +2905,13 @@ describe('changeFeed fixtures', () => {
     });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${comment.id}`, {
+      await req(t.app, 'PATCH', `/records/${comment.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { body: 'still unrelated' } },
+        body: { body: 'still unrelated' },
       });
-      await req(t.app, 'PATCH', `/records/${later.id}`, {
+      await req(t.app, 'PATCH', `/records/${later.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'Later' } },
+        body: { title: 'Later' },
       });
       await req(t.app, 'POST', `/records/${note.id}/migrate`, {
         token: TEST_TOKEN,
@@ -2567,13 +2943,13 @@ describe('changeFeed fixtures', () => {
     });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${comment.id}`, {
+      await req(t.app, 'PATCH', `/records/${comment.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { body: 'still unrelated' } },
+        body: { body: 'still unrelated' },
       });
-      await req(t.app, 'PATCH', `/records/${later.id}`, {
+      await req(t.app, 'PATCH', `/records/${later.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'Later' } },
+        body: { title: 'Later' },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
@@ -2614,22 +2990,22 @@ describe('changeFeed fixtures', () => {
     }
   });
 
-  test('change-feed-unlist-frame-is-a-deleted-kind', async () => {
+  test('change-feed-unlist-frame-is-a-removed-kind', async () => {
     const fixture = changeFeedFixtures.find(
-      (f) => f.name === 'change-feed-unlist-frame-is-a-deleted-kind',
+      (f) => f.name === 'change-feed-unlist-frame-is-a-removed-kind',
     )!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${record.id}`, {
+      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
         token: TEST_TOKEN,
         body: { unlisted: true },
       });
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
-      expect(data.kind).toBe('deleted');
+      expect(data.kind).toBe('removed');
       expect(data.ops).toEqual(['unlist']);
       expect(data.recordId).toBe(record.id);
     } finally {
@@ -2643,11 +3019,11 @@ describe('changeFeed fixtures', () => {
     )!;
     handled.add(fixture.name);
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
-    await t.ctx.stack.mutate(record.id, { unlisted: true });
+    await t.ctx.stack.setUnlisted(record.id, true);
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${record.id}`, {
+      await req(t.app, 'PUT', `/records/${record.id}/unlisted`, {
         token: TEST_TOKEN,
         body: { unlisted: false },
       });
@@ -2667,18 +3043,18 @@ describe('changeFeed fixtures', () => {
     )!;
     handled.add(fixture.name);
     const unlistedRecord = await t.ctx.stack.create(NOTE_TYPE, { title: 'Unlisted' });
-    await t.ctx.stack.mutate(unlistedRecord.id, { unlisted: true });
+    await t.ctx.stack.setUnlisted(unlistedRecord.id, true);
     const visibleRecord = await t.ctx.stack.create(NOTE_TYPE, { title: 'Visible' });
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${unlistedRecord.id}`, {
+      await req(t.app, 'PATCH', `/records/${unlistedRecord.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'Edited while unlisted' } },
+        body: { title: 'Edited while unlisted' },
       });
-      await req(t.app, 'PATCH', `/records/${visibleRecord.id}`, {
+      await req(t.app, 'PATCH', `/records/${visibleRecord.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'Edited, visible' } },
+        body: { title: 'Edited, visible' },
       });
       // Exactly one more frame — the visible record's — proves the
       // unlisted edit produced none rather than merely arriving later.
@@ -2709,7 +3085,7 @@ describe('changeFeed fixtures', () => {
     });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${record.id}`, {
+      await req(t.app, 'PUT', `/records/${record.id}/parent`, {
         token: TEST_TOKEN,
         body: { parentId: destination.id },
       });
@@ -2755,9 +3131,9 @@ describe('changeFeed sequence fixtures', () => {
       const [ready] = await first.waitForFrames(1);
       expect(ready.event).toBe('ready');
       expect(frameData(ready).cursor).toMatch(CURSOR_PATTERN);
-      await req(t.app, 'PATCH', `/records/${record.id}`, {
+      await req(t.app, 'PATCH', `/records/${record.id}/content`, {
         token: TEST_TOKEN,
-        body: { contentPatch: { title: 'first' } },
+        body: { title: 'first' },
       });
       const [, changeFrame] = await first.waitForFrames(2);
       expect(changeFrame.event).toBe('record');
@@ -2769,9 +3145,9 @@ describe('changeFeed sequence fixtures', () => {
 
     // A second edit lands with nobody listening — the buffer (retained
     // past disconnect) keeps collecting on its own.
-    await req(t.app, 'PATCH', `/records/${record.id}`, {
+    await req(t.app, 'PATCH', `/records/${record.id}/content`, {
       token: TEST_TOKEN,
-      body: { contentPatch: { title: 'second' } },
+      body: { title: 'second' },
     });
 
     // Step 2: reconnect presenting the last id seen. ready still leads,
@@ -2990,109 +3366,6 @@ describe('auth handshake fixtures', () => {
   test('coverage: authChallengeFixtures + authTokenFixtures + authSequenceFixtures', () => {
     assertCoverage(
       [...authChallengeFixtures, ...authTokenFixtures, ...authSequenceFixtures].map((f) => f.name),
-      handled,
-      new Set(),
-    );
-  });
-});
-
-// -------------------------------------------------------
-// Records: the unlisted change-set key
-// -------------------------------------------------------
-
-describe('unlisted change fixtures', () => {
-  const handled = new Set<string>();
-
-  // Run together against one seeded record, same as the versions block
-  // below — set-unlisted-false-relists assumes set-unlisted-true already
-  // ran (its own description says so).
-  test('set-unlisted-true then set-unlisted-false-relists', async () => {
-    const trueFixture = unlistedChangeFixtures.find((f) => f.name === 'set-unlisted-true')!;
-    const falseFixture = unlistedChangeFixtures.find(
-      (f) => f.name === 'set-unlisted-false-relists',
-    )!;
-    handled.add(trueFixture.name);
-    handled.add(falseFixture.name);
-
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
-
-    const unlisted = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: trueFixture.requestBody,
-    });
-    expect(unlisted.status).toBe(trueFixture.responseStatus);
-    expect((unlisted.data as WireRecord).unlistedAt).toBeDefined();
-
-    // Excluded from an unfiltered query, same posture as a soft-deleted record.
-    const queried = await req(t.app, 'GET', '/records', { token: TEST_TOKEN });
-    expect(
-      (queried.data as { records: WireRecord[] }).records.some((r) => r.id === record.id),
-    ).toBe(false);
-
-    const relisted = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: falseFixture.requestBody,
-    });
-    expect(relisted.status).toBe(falseFixture.responseStatus);
-    expect((relisted.data as WireRecord).unlistedAt).toBeUndefined();
-  });
-
-  test('coverage', () => {
-    assertCoverage(
-      unlistedChangeFixtures.map((f) => f.name),
-      handled,
-      new Set(),
-    );
-  });
-});
-
-// -------------------------------------------------------
-// Records: the parentId change-set key
-// -------------------------------------------------------
-
-describe('parent change fixtures', () => {
-  const handled = new Set<string>();
-
-  // Run together against one seeded record: the null fixture moves a
-  // record back to the root, which only means anything once something
-  // has moved it off the root.
-  test('set-parent-moves-a-record-into-a-container then back to the root', async () => {
-    const intoFixture = parentChangeFixtures.find(
-      (f) => f.name === 'set-parent-moves-a-record-into-a-container',
-    )!;
-    const rootFixture = parentChangeFixtures.find(
-      (f) => f.name === 'set-parent-null-moves-a-record-to-the-root',
-    )!;
-    handled.add(intoFixture.name);
-    handled.add(rootFixture.name);
-
-    // The destination has to exist: a caller-named parentId is checked for
-    // format and then for existence, so the fixture's own literal id would
-    // answer 409 here rather than moving anything.
-    const container = await t.ctx.stack.create(NOTE_TYPE, { title: 'Container' });
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello', body: 'World' });
-
-    const moved = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: { ...intoFixture.requestBody, parentId: container.id },
-    });
-    expect(moved.status).toBe(intoFixture.responseStatus);
-    expect((moved.data as WireRecord).parentId).toBe(container.id);
-    // A move touches containment and nothing else.
-    expect((moved.data as WireRecord).content).toEqual({ title: 'Hello', body: 'World' });
-
-    const toRoot = await req(t.app, 'PATCH', `/records/${record.id}`, {
-      token: TEST_TOKEN,
-      body: rootFixture.requestBody,
-    });
-    expect(toRoot.status).toBe(rootFixture.responseStatus);
-    // State spells the root by omission, where the input spelled it null.
-    expect((toRoot.data as WireRecord).parentId).toBeUndefined();
-  });
-
-  test('coverage', () => {
-    assertCoverage(
-      parentChangeFixtures.map((f) => f.name),
       handled,
       new Set(),
     );

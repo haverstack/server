@@ -44,7 +44,7 @@ export function errorMiddleware(logger: Logger, stack: Stack): ErrorHandler<AppE
       if (err instanceof StackNotFoundError && auth) {
         const recordId = c.req.param('id');
         if (recordId) {
-          const existing = await stack.get(recordId);
+          const existing = await stack.get(recordId, { includeDeleted: true });
           logger.debug(
             {
               requestId: c.get('requestId'),

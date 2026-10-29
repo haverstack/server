@@ -5,7 +5,9 @@ import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import { serializeRecord } from '@haverstack/wire-types';
-import { StackBadRequestError, StackNotFoundError, StackValidationError } from '@haverstack/core';
+import { parseContentPatchBody } from '@haverstack/core/wire';
+import { ifMatchVersion } from '../lib/ifMatch.js';
+import { StackNotFoundError } from '@haverstack/core';
 
 export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -19,18 +21,15 @@ export function entityRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(serializeRecord(record));
   });
 
-  app.patch('/', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  // An alias for PATCH /records/:id/content on the owner's entity record,
+  // so it takes the same bare patch and the same If-Match.
+  // See docs/spec/wire-format.md § Entity.
+  app.patch('/content', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const auth = c.get('auth')!;
-    const body = await readJson<Record<string, unknown>>(c, ['content']);
-    const content = body.content;
-    if (content === undefined) throw new StackBadRequestError('content is required');
-    if (typeof content !== 'object' || content === null || Array.isArray(content))
-      throw new StackValidationError([{ path: 'content', message: 'Must be an object' }]);
+    const patch = parseContentPatchBody(await readJson(c));
     const record = await stack.asActor(auth).getOwnerEntity();
     if (!record) throw new StackNotFoundError('Entity record not found');
-    const updated = await stack
-      .asActor(auth)
-      .patchContent(record.id, content as Record<string, unknown>);
+    const updated = await stack.asActor(auth).patchContent(record.id, patch, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 

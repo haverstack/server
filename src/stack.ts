@@ -3,10 +3,12 @@ import {
   ARTICLE,
   BOOKMARK,
   CONTACT,
+  IMAGE,
   NOTE,
   PAGE,
-  PHOTO,
   PLACE,
+  POST,
+  SITE,
   TASK,
   defineCommonsTypes,
 } from '@haverstack/commons';
@@ -15,6 +17,7 @@ import type { StackTokenStore } from '@haverstack/core/wire';
 import type { Logger } from 'pino';
 import type { Config } from './config.js';
 import { AuthNonceStore, defaultNonceStorePath } from './lib/nonceStore.js';
+import { InstallRequestStore, defaultInstallRequestStorePath } from './lib/installRequestStore.js';
 import { QueryWorkerPool } from './lib/queryWorker/pool.js';
 import { ChangeStreamRegistry } from './lib/changeStreams.js';
 
@@ -28,6 +31,9 @@ export type StackContext = {
   // DID challenge-response nonces — see AuthNonceStore. Also kept outside
   // the portable stack file, in its own sibling store beside the tokens.
   nonces: AuthNonceStore;
+  // POST /installs requests awaiting the owner — see InstallRequestStore.
+  // A request is not an approval, so it too stays out of the stack file.
+  installRequests: InstallRequestStore;
   // Runs ScopedStack.query() off the request thread with a per-request
   // deadline. See docs/spec/wire-format.md § Bounding query cost and
   // src/lib/queryWorker/pool.ts.
@@ -38,13 +44,14 @@ export type StackContext = {
 };
 
 export async function initStack(config: Config, logger: Logger): Promise<StackContext> {
-  // openOrInitialize() decides between open and create without a TOCTOU
-  // gap. ownerEntityId goes in as a lazy provider so openOrInitialize()'s own
+  // `create: 'ifMissing'` decides between open and create without a TOCTOU
+  // gap. ownerEntityId goes in as a lazy provider so open()'s own
   // owner-mismatch check, which throws, never runs on the open path —
   // ENTITY_ID divergence is a warning below, not a failure — and so a
   // missing ENTITY_ID is an error only when creating a database.
-  const adapter = await LocalAdapter.openOrInitialize({
+  const adapter = await LocalAdapter.open({
     path: config.dbPath,
+    create: 'ifMissing',
     ownerEntityId: () => {
       if (!config.entityId) {
         throw new Error(
@@ -73,7 +80,18 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
   // Opt-in (SEED_COMMONS_TYPES). defineType() is idempotent — an identical
   // schema is a no-op preserving createdAt — so this is safe every boot.
   if (config.seedCommonsTypes) {
-    await defineCommonsTypes(stack, [NOTE, BOOKMARK, TASK, CONTACT, ARTICLE, PLACE, PAGE, PHOTO]);
+    await defineCommonsTypes(stack, [
+      NOTE,
+      BOOKMARK,
+      TASK,
+      CONTACT,
+      ARTICLE,
+      PLACE,
+      PAGE,
+      IMAGE,
+      POST,
+      SITE,
+    ]);
   }
 
   // Composed as a separate part rather than sniffed off the adapter: auth
@@ -81,6 +99,7 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
   // portable stack export) per docs/spec/wire-format.md § Authentication.
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(config.dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(config.dbPath));
+  const installRequests = InstallRequestStore.open(defaultInstallRequestStorePath(config.dbPath));
 
   // Spawned only once the adapter has opened and seeded stack.db: each
   // worker opens its own connection to that same file, and idempotent
@@ -92,5 +111,13 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
     logger,
   });
 
-  return { adapter, stack, tokens, nonces, queryWorker, changeStreams: new ChangeStreamRegistry() };
+  return {
+    adapter,
+    stack,
+    tokens,
+    nonces,
+    installRequests,
+    queryWorker,
+    changeStreams: new ChangeStreamRegistry(),
+  };
 }

@@ -43,7 +43,7 @@ describe('initStack double-open protection', () => {
     // the scenario being tested.
     writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: process.ppid }));
 
-    // Second call finds the db already exists (openOrInitialize's open path)
+    // Second call finds the db already exists (open()'s ifMissing path)
     // and hits the same lock check LocalAdapter.open() always enforced.
     await expect(initStack(config, logger)).rejects.toThrow(/in use by another process/);
   });
@@ -121,7 +121,7 @@ describe('initStack bootstrap', () => {
     ctx.nonces.close();
   });
 
-  it('registers all eight commons types when SEED_COMMONS_TYPES is set', async () => {
+  it('registers every commons type when SEED_COMMONS_TYPES is set', async () => {
     dbPath = tempDbPath();
     const config = { ...testConfig(dbPath), seedCommonsTypes: true };
 
@@ -133,10 +133,12 @@ describe('initStack bootstrap', () => {
         'org.haverstack/article@1',
         'org.haverstack/bookmark@1',
         'org.haverstack/contact@1',
+        'org.haverstack/image@1',
         'org.haverstack/note@1',
         'org.haverstack/page@1',
-        'org.haverstack/photo@1',
         'org.haverstack/place@1',
+        'org.haverstack/post@1',
+        'org.haverstack/site@1',
         'org.haverstack/task@1',
       ].sort(),
     );
