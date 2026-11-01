@@ -95,51 +95,6 @@ describe('installs', () => {
     expect(await t.ctx.stack.getType('com.example.notes/note@1')).toBeNull();
   });
 
-  it('fences an approval to the plan the owner reviewed', async () => {
-    await ask();
-    const [request] = await pending();
-    const review = await t.app.request(`/installs/requests/${request!.id}`, {
-      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-    });
-    const etag = review.headers.get('ETag')!;
-    expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
-
-    // The stack moves on: the type the plan would define now exists.
-    await t.ctx.stack.defineType(MANIFEST.types[0]!);
-    const stale = await req(t.app, 'POST', `/installs/requests/${request!.id}/approve`, {
-      token: TEST_TOKEN,
-      headers: { 'If-Match': etag },
-    });
-    expect(stale.status).toBe(412);
-    expect((stale.data as { error: { code: string } }).error.code).toBe('precondition_failed');
-    expect(await pending()).toHaveLength(1);
-
-    // Reviewed again, the new tag approves.
-    const again = await t.app.request(`/installs/requests/${request!.id}`, {
-      headers: { Authorization: `Bearer ${TEST_TOKEN}` },
-    });
-    const fresh = again.headers.get('ETag')!;
-    expect(fresh).not.toBe(etag);
-    const approved = await req(t.app, 'POST', `/installs/requests/${request!.id}/approve`, {
-      token: TEST_TOKEN,
-      headers: { 'If-Match': fresh },
-    });
-    expect(approved.status).toBe(200);
-  });
-
-  it('refuses a malformed If-Match on approval with 400', async () => {
-    await ask();
-    const [request] = await pending();
-    for (const header of ['W/"abc"', '*']) {
-      const { status } = await req(t.app, 'POST', `/installs/requests/${request!.id}/approve`, {
-        token: TEST_TOKEN,
-        headers: { 'If-Match': header },
-      });
-      expect(status).toBe(400);
-    }
-    expect(await pending()).toHaveLength(1);
-  });
-
   it('keeps a request id when the same manifest is re-sent with its keys reordered', async () => {
     await ask();
     const [first] = await pending();

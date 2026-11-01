@@ -84,6 +84,22 @@ describe('tombstone projection and mutation refusal', () => {
     }
   });
 
+  it.each(['associations', 'permissions'])(
+    'GET /records/:id/%s answers 404 for a soft-deleted record, as GET /records/:id does',
+    async (aspect) => {
+      const record = await t.ctx.stack.create(
+        NOTE_TYPE,
+        { title: 'x' },
+        { permissions: [{ kind: 'anyone', label: 'read' }] },
+      );
+      await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+      const { status } = await req(t.app, 'GET', `/records/${record.id}/${aspect}`, {
+        token: TEST_TOKEN,
+      });
+      expect(status).toBe(404);
+    },
+  );
+
   it('mutating a soft-deleted record is refused with 409, not applied to the tombstone', async () => {
     const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'z' });
     await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
