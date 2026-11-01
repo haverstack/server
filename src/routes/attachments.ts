@@ -11,6 +11,7 @@ import {
   parseUploadFilename,
   NOSNIFF_HEADER_NAME,
   NOSNIFF_HEADER_VALUE,
+  parseDownloadParams,
 } from '@haverstack/core/wire';
 import { serializeRecord } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
@@ -18,6 +19,7 @@ import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
+import { wireError } from '../wireError.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -53,9 +55,10 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   });
 
   // GET /attachments/:fileId — download
-  app.get('/:fileId', knownParams('contentType', 'filename'), async (c) => {
+  app.get('/:fileId', async (c) => {
     const fileId = c.req.param('fileId');
     const auth = c.get('auth');
+    const { contentTypeParam, filenameParam } = parseDownloadParams(new URL(c.req.url));
 
     let data: Uint8Array;
     try {
@@ -67,7 +70,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       // for missing and forbidden, so this handler owes no anti-oracle
       // logic of its own — only to leave that answer intact.
       if (!auth && e instanceof StackPermissionError) {
-        return c.json({ error: 'Unauthorized' }, 401);
+        return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
       }
       throw e;
     }
@@ -83,9 +86,6 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const referenced = resolveReferencedAttachment(metaRecords, {
       requesterEntityId: auth?.subjectId,
     });
-
-    const contentTypeParam = c.req.query('contentType');
-    const filenameParam = c.req.query('filename');
 
     const { contentType, forced } = resolveAttachmentDownloadContentType({
       contentTypeParam,

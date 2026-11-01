@@ -17,6 +17,7 @@ function fakeCtx(): StackContext {
     } as unknown as StackContext['stack'],
     tokens: { close: vi.fn().mockResolvedValue(undefined) } as unknown as StackContext['tokens'],
     nonces: { close: vi.fn() } as unknown as StackContext['nonces'],
+    installRequests: { close: vi.fn() } as unknown as StackContext['installRequests'],
     queryWorker: {
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as StackContext['queryWorker'],
@@ -46,6 +47,7 @@ describe('createShutdownHandler', () => {
     expect(ctx.stack.close).toHaveBeenCalled();
     expect(ctx.tokens.close).toHaveBeenCalled();
     expect(ctx.nonces.close).toHaveBeenCalled();
+    expect(ctx.installRequests.close).toHaveBeenCalled();
   });
 
   it('does not force connections closed if close() finishes just under the deadline', async () => {

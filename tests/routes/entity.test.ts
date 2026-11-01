@@ -91,7 +91,7 @@ describe('GET /entity', () => {
   });
 });
 
-describe('PATCH /entity', () => {
+describe('PATCH /entity/content', () => {
   let t: TestApp;
   beforeEach(async () => {
     t = await buildTestApp();
@@ -102,9 +102,9 @@ describe('PATCH /entity', () => {
 
   it('merges content and returns the updated record', async () => {
     await seedEntityRecord(t.ctx);
-    const { status, data } = await req(t.app, 'PATCH', '/entity', {
+    const { status, data } = await req(t.app, 'PATCH', '/entity/content', {
       token: TEST_TOKEN,
-      body: { content: { name: 'Updated Entity', handle: 'updated' } },
+      body: { name: 'Updated Entity', handle: 'updated' },
     });
     expect(status).toBe(200);
     const content = (data as Record<string, unknown>).content as Record<string, unknown>;
@@ -113,18 +113,18 @@ describe('PATCH /entity', () => {
   });
 
   it('returns 404 when the entity record does not exist', async () => {
-    const { status } = await req(t.app, 'PATCH', '/entity', {
+    const { status } = await req(t.app, 'PATCH', '/entity/content', {
       token: TEST_TOKEN,
-      body: { content: { name: 'X' } },
+      body: { name: 'X' },
     });
     expect(status).toBe(404);
   });
 
   it('updates the owner record found by content.did even when its id differs from ownerEntityId', async () => {
     await seedEntityRecordWithGeneratedId(t.ctx);
-    const { status, data } = await req(t.app, 'PATCH', '/entity', {
+    const { status, data } = await req(t.app, 'PATCH', '/entity/content', {
       token: TEST_TOKEN,
-      body: { content: { name: 'Renamed' } },
+      body: { name: 'Renamed' },
     });
     expect(status).toBe(200);
     const content = (data as Record<string, unknown>).content as Record<string, unknown>;
@@ -135,16 +135,16 @@ describe('PATCH /entity', () => {
   it('returns 403 for a non-owner authenticated entity', async () => {
     await seedEntityRecord(t.ctx);
     const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
-    const { status } = await req(t.app, 'PATCH', '/entity', {
+    const { status } = await req(t.app, 'PATCH', '/entity/content', {
       token,
-      body: { content: { name: 'Hacked' } },
+      body: { name: 'Hacked' },
     });
     expect(status).toBe(403);
   });
 
   it('returns 401 for an unauthenticated request', async () => {
-    const { status } = await req(t.app, 'PATCH', '/entity', {
-      body: { content: { name: 'X' } },
+    const { status } = await req(t.app, 'PATCH', '/entity/content', {
+      body: { name: 'X' },
     });
     expect(status).toBe(401);
   });
@@ -154,16 +154,16 @@ describe('PATCH /entity', () => {
     await req(t.app, 'GET', '/entity', { token: TEST_TOKEN });
 
     await t.ctx.adapter.deleteRecord(record.id, { purge: true });
-    const stale = await req(t.app, 'PATCH', '/entity', {
+    const stale = await req(t.app, 'PATCH', '/entity/content', {
       token: TEST_TOKEN,
-      body: { content: { name: 'X' } },
+      body: { name: 'X' },
     });
     expect(stale.status).toBe(404);
 
     await seedEntityRecordWithGeneratedId(t.ctx);
-    const recovered = await req(t.app, 'PATCH', '/entity', {
+    const recovered = await req(t.app, 'PATCH', '/entity/content', {
       token: TEST_TOKEN,
-      body: { content: { name: 'Recovered' } },
+      body: { name: 'Recovered' },
     });
     expect(recovered.status).toBe(200);
   });

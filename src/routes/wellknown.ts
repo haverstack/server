@@ -48,6 +48,8 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
         resume: true,
         records: true,
       },
+      // POST /installs is always served, so, like `changes`, always advertised.
+      installs: { requests: true },
     };
     return c.json(body);
   });

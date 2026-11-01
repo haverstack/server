@@ -37,13 +37,11 @@ describe('unrecognized request input', () => {
 
   it.each([
     ['/tokens', { principalId: OTHER_ENTITY_ID, extra: true }],
-    ['/entity', { content: {}, extra: true }],
     ['/attachments/gc', { dryRun: true, extra: true }],
     ['/auth/challenge', { did: OTHER_ENTITY_ID, extra: true }],
     ['/records/1hk153x00001/migrate', { toTypeId: 'x', content: {}, extra: true }],
-  ] as const)('POST/PATCH %s refuses an unknown body key', async (path, body) => {
-    const method = path === '/entity' ? 'PATCH' : 'POST';
-    const { status, data } = await req(t.app, method, path, { token: TEST_TOKEN, body });
+  ] as const)('POST %s refuses an unknown body key', async (path, body) => {
+    const { status, data } = await req(t.app, 'POST', path, { token: TEST_TOKEN, body });
     expect(status).toBe(400);
     expect(JSON.stringify(data)).toContain('extra');
   });
@@ -66,16 +64,11 @@ describe('unrecognized request input', () => {
     expect(status).toBe(422);
   });
 
-  it('PATCH /entity refuses non-object content with 422', async () => {
-    const { status } = await req(t.app, 'PATCH', '/entity', {
-      token: TEST_TOKEN,
-      body: { content: [] },
-    });
-    expect(status).toBe(422);
-  });
-
-  it('PATCH /entity requires content', async () => {
-    const { status } = await req(t.app, 'PATCH', '/entity', { token: TEST_TOKEN, body: {} });
-    expect(status).toBe(400);
-  });
+  it.each(['/entity/content', '/records/1hk153x00001/content'])(
+    'PATCH %s refuses a body that is not an object with 400',
+    async (path) => {
+      const { status } = await req(t.app, 'PATCH', path, { token: TEST_TOKEN, body: [] });
+      expect(status).toBe(400);
+    },
+  );
 });

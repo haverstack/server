@@ -25,6 +25,7 @@ import {
   TEST_ENTITY_ID,
   OTHER_ENTITY_ID,
   type TestApp,
+  familyOf,
 } from '../setup.js';
 import type { StackRecord } from '@haverstack/core';
 
@@ -101,7 +102,7 @@ async function seedNotes() {
 describe('query scoping across the worker boundary', () => {
   it('answers a read-own grantee with their own records and nobody else’s', async () => {
     const { owner, other, third } = await seedNotes();
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-own'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
@@ -114,7 +115,7 @@ describe('query scoping across the worker boundary', () => {
 
   it('widens to every record of the type under read-any', async () => {
     const { owner, other, third } = await seedNotes();
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
@@ -125,7 +126,7 @@ describe('query scoping across the worker boundary', () => {
 
   it('stops answering on the next query once the grant is withdrawn', async () => {
     const { owner } = await seedNotes();
-    const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE, {
+    const grantRecord = await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
@@ -140,7 +141,7 @@ describe('query scoping across the worker boundary', () => {
 
   it('confers again once the withdrawn grant is undeleted', async () => {
     const { owner } = await seedNotes();
-    const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE, {
+    const grantRecord = await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
@@ -172,7 +173,7 @@ describe('query scoping across the worker boundary', () => {
         ],
       },
     );
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
     });
@@ -206,19 +207,26 @@ describe('query scoping across the worker boundary', () => {
         ],
       },
     );
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'group', groupId: group.id, role: 'member' },
     });
     const token = await tokenFor(OTHER_ENTITY_ID);
     expect(await queryIds(token)).toContain(owner.id);
 
-    await req(t.app, 'POST', `/records/${group.id}/associations/delete`, {
+    await req(t.app, 'POST', `/records/${group.id}/associations`, {
       token: TEST_TOKEN,
       body: {
-        kind: 'relationship',
-        label: 'member',
-        target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+        changes: [
+          {
+            op: 'remove',
+            association: {
+              kind: 'relationship',
+              label: 'member',
+              target: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+            },
+          },
+        ],
       },
     });
     expect(await queryIds(token)).not.toContain(owner.id);
@@ -226,7 +234,7 @@ describe('query scoping across the worker boundary', () => {
 
   it('never enumerates a _grant record for a grantee', async () => {
     await seedNotes();
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
@@ -242,7 +250,7 @@ describe('query scoping across the worker boundary', () => {
 
   it('answers both query encodings with the same set', async () => {
     await seedNotes();
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-own'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
@@ -255,7 +263,9 @@ describe('query scoping across the worker boundary', () => {
 
   it('answers an anonymous requester with world-readable records only', async () => {
     const { owner, other } = await seedNotes();
-    await t.ctx.stack.grantAccess(owner.id, { kind: 'anyone', label: 'read' });
+    await t.ctx.stack.editAccess(owner.id, [
+      { op: 'add', association: { kind: 'anyone', label: 'read' } },
+    ]);
 
     expect(await queryIds(undefined)).toEqual([owner.id]);
     expect(await queryIds(undefined)).not.toContain(other.id);
@@ -265,7 +275,7 @@ describe('query scoping across the worker boundary', () => {
     await seedNotes();
     // `{ kind: 'authenticated' }` is every entity that turned up with a DID,
     // which is never the anonymous view.
-    await t.ctx.stack.grantType(NOTE_TYPE, {
+    await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
       actions: ['read-any'],
       grantee: { kind: 'authenticated' },
     });

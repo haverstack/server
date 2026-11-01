@@ -87,22 +87,20 @@ describe('resumeBufferKey', () => {
     const a = resumeBufferKey({
       principalId: 'p1',
       subjectId: 's1',
-      filter: { typeId: ['b', 'a'], kinds: ['deleted', 'created'] },
+      filter: { typeId: ['b', 'a'], kinds: ['removed', 'created'] },
       includeRecords: true,
-      includeUnlisted: false,
     });
     const b = resumeBufferKey({
       principalId: 'p1',
       subjectId: 's1',
-      filter: { typeId: ['a', 'b'], kinds: ['created', 'deleted'] },
+      filter: { typeId: ['a', 'b'], kinds: ['created', 'removed'] },
       includeRecords: true,
-      includeUnlisted: false,
     });
     expect(a).toBe(b);
   });
 
-  it('differs across sessions, filters, the includeRecords choice, or the includeUnlisted choice', () => {
-    const base = { filter: {}, includeRecords: false, includeUnlisted: false };
+  it('differs across sessions, filters, the includeRecords choice, or includeUnlisted', () => {
+    const base = { filter: {}, includeRecords: false };
     const anon = resumeBufferKey({ principalId: null, subjectId: null, ...base });
     const authed = resumeBufferKey({ principalId: 'p1', subjectId: 's1', ...base });
     const filtered = resumeBufferKey({
@@ -110,7 +108,6 @@ describe('resumeBufferKey', () => {
       subjectId: null,
       filter: { createdBy: { subjectId: 'e1' } },
       includeRecords: false,
-      includeUnlisted: false,
     });
     const withRecords = resumeBufferKey({
       principalId: null,
@@ -122,7 +119,7 @@ describe('resumeBufferKey', () => {
       principalId: null,
       subjectId: null,
       ...base,
-      includeUnlisted: true,
+      filter: { includeUnlisted: true },
     });
 
     const keys = new Set([anon, authed, filtered, withRecords, withUnlisted]);
@@ -141,7 +138,6 @@ describe('resumeBufferKey', () => {
       principalId: null,
       subjectId: null,
       includeRecords: false,
-      includeUnlisted: false,
     };
     const unfiltered = resumeBufferKey({ ...base, filter: {} });
     const rootsOnly = resumeBufferKey({ ...base, filter: { parentId: null } });
@@ -155,7 +151,6 @@ describe('resumeBufferKey', () => {
       principalId: null,
       subjectId: null,
       includeRecords: false,
-      includeUnlisted: false,
     };
     expect(resumeBufferKey({ ...base, filter: {} })).not.toBe(
       resumeBufferKey({ ...base, filter: { createdBy: { subjectId: 'e1' } } }),
@@ -168,12 +163,18 @@ describe('resumeBufferKey', () => {
     );
   });
 
+  it('keys includeUnlisted: false the same as no includeUnlisted', () => {
+    const base = { principalId: null, subjectId: null, includeRecords: false };
+    expect(resumeBufferKey({ ...base, filter: { includeUnlisted: false } })).toBe(
+      resumeBufferKey({ ...base, filter: {} }),
+    );
+  });
+
   it('keys an empty createdBy the same as no createdBy', () => {
     const base = {
       principalId: null,
       subjectId: null,
       includeRecords: false,
-      includeUnlisted: false,
     };
     expect(resumeBufferKey({ ...base, filter: { createdBy: {} } })).toBe(
       resumeBufferKey({ ...base, filter: {} }),
@@ -185,7 +186,6 @@ describe('resumeBufferKey', () => {
       principalId: null,
       subjectId: null,
       includeRecords: false,
-      includeUnlisted: false,
     };
     expect(resumeBufferKey({ ...base, filter: { parentId: 'x' } })).not.toBe(
       resumeBufferKey({ ...base, filter: { createdBy: { subjectId: 'x' } } }),

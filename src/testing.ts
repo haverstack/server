@@ -23,6 +23,7 @@ import type { Logger } from 'pino';
 import { createApp } from './app.js';
 import { createShutdownHandler } from './shutdown.js';
 import { AuthNonceStore, defaultNonceStorePath } from './lib/nonceStore.js';
+import { InstallRequestStore, defaultInstallRequestStorePath } from './lib/installRequestStore.js';
 import { QueryWorkerPool } from './lib/queryWorker/pool.js';
 import { ChangeStreamRegistry } from './lib/changeStreams.js';
 import type { Config } from './config.js';
@@ -64,21 +65,31 @@ export async function createTestContext(
   dbPath: string,
   opts: TestContextOpts = { timezone: 'UTC' },
 ): Promise<StackContext> {
-  const adapter = await LocalAdapter.initialize({
+  const adapter = await LocalAdapter.open({
     path: dbPath,
+    create: 'exclusive',
     ownerEntityId: TEST_ENTITY_ID,
     ...(opts.timezone !== undefined && { timezone: opts.timezone }),
   });
   const stack = await Stack.open(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(dbPath));
+  const installRequests = InstallRequestStore.open(defaultInstallRequestStorePath(dbPath));
   const queryWorker = new QueryWorkerPool({
     init: { dbPath },
     poolSize: 1,
     queueLimit: 64,
     logger,
   });
-  return { adapter, stack, tokens, nonces, queryWorker, changeStreams: new ChangeStreamRegistry() };
+  return {
+    adapter,
+    stack,
+    tokens,
+    nonces,
+    installRequests,
+    queryWorker,
+    changeStreams: new ChangeStreamRegistry(),
+  };
 }
 
 export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {

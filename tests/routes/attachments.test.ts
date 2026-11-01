@@ -196,15 +196,14 @@ describe('GET /attachments/:fileId', () => {
     );
     const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
 
+    const missingId = '0000000000000000000000000000000000000000000000000000000000000000';
     const inaccessible = await req(t.app, 'GET', `/attachments/${fileId}`, { token });
-    const missing = await req(
-      t.app,
-      'GET',
-      '/attachments/0000000000000000000000000000000000000000000000000000000000000000',
-      { token },
-    );
+    const missing = await req(t.app, 'GET', `/attachments/${missingId}`, { token });
     expect(inaccessible.status).toBe(missing.status);
-    expect(inaccessible.data).toEqual(missing.data);
+    // A refusal names the id the caller passed, and nothing else differs.
+    expect(JSON.stringify(inaccessible.data).replaceAll(fileId, '<id>')).toBe(
+      JSON.stringify(missing.data).replaceAll(missingId, '<id>'),
+    );
   });
 
   it('uses ?contentType param as Content-Type without a metadata record', async () => {
@@ -291,7 +290,7 @@ describe('GET /attachments/:fileId', () => {
 
   it("prefers the requester's own record for filename over the first-recorded record", async () => {
     const bytes = new TextEncoder().encode('shared content 2');
-    await t.ctx.stack.grantType('_attachment@1', {
+    await t.ctx.stack.grantType('_attachment', {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });
@@ -417,7 +416,7 @@ describe('POST /attachments', () => {
   });
 
   it('allows an entity with a create grant on _attachment@1 to upload', async () => {
-    await t.ctx.stack.grantType('_attachment@1', {
+    await t.ctx.stack.grantType('_attachment', {
       actions: ['create'],
       grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
     });

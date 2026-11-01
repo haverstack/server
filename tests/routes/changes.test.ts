@@ -9,6 +9,7 @@ import {
   TEST_TOKEN,
   logger,
   type TestApp,
+  familyOf,
 } from '../setup.js';
 import { changeRoutes, type ChangeRouteOptions } from '../../src/routes/changes.js';
 import { authMiddleware } from '../../src/middleware/auth.js';
@@ -79,33 +80,12 @@ describe('GET /changes', () => {
   });
 
   it('never honors a bearer token passed as a query parameter', async () => {
-    // A private, owner-only record. A connection presenting the owner's
-    // token via ?token= rather than Authorization must still be treated as
-    // anonymous — it must not see this change.
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'private' });
-    const conn = await openChangeFeed(t.app, `/changes?token=${TEST_TOKEN}`);
-    try {
-      await conn.waitForFrames(1); // ready
-      await req(t.app, 'PATCH', `/records/${record.id}`, {
-        token: TEST_TOKEN,
-        body: { contentPatch: { title: 'still private' } },
-      });
-      // Prove the connection is otherwise live (so a missing frame above
-      // isn't just a dead connection) by making a public edit land.
-      const publicRecord = await t.ctx.stack.create(
-        NOTE_TYPE,
-        { title: 'public' },
-        { permissions: [{ kind: 'anyone', label: 'read' }] },
-      );
-      await req(t.app, 'PATCH', `/records/${publicRecord.id}`, {
-        token: TEST_TOKEN,
-        body: { contentPatch: { title: 'still public' } },
-      });
-      const [, frame] = await conn.waitForFrames(2);
-      expect((frame.data as { recordId: string }).recordId).toBe(publicRecord.id);
-    } finally {
-      await conn.close();
-    }
+    // A credential belongs in Authorization, never somewhere a browser might
+    // log or cache it, so ?token= is a param the feed does not define and is
+    // refused outright rather than read as anonymous or as the owner.
+    const { status, data } = await req(t.app, 'GET', `/changes?token=${TEST_TOKEN}`);
+    expect(status).toBe(400);
+    expect((data as { error: { code: string } }).error.code).toBe('bad_request');
   });
 
   it('sends periodic keepalive comments on an otherwise-idle connection', async () => {
@@ -238,7 +218,7 @@ describe('GET /changes', () => {
       // so it's buffered), then revoke recordA's grant, then edit recordB
       // (still readable throughout).
       await t.ctx.stack.patchContent(recordA.id, { title: 'a, edited' });
-      await t.ctx.stack.mutate(recordA.id, { permissions: [] });
+      await t.ctx.stack.setAccess(recordA.id, []);
       await t.ctx.stack.patchContent(recordB.id, { title: 'b, edited' });
 
       const resumed = await openChangeFeed(t.app, '/changes', {
@@ -536,16 +516,16 @@ describe('GET /changes', () => {
       }
     });
 
-    it('listed -> unlisted emits a deleted/unlist frame', async () => {
+    it('listed -> unlisted emits a removed/unlist frame', async () => {
       const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
       const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
       try {
         await conn.waitForFrames(1); // ready
-        await t.ctx.stack.mutate(record.id, { unlisted: true });
+        await t.ctx.stack.setUnlisted(record.id, true);
         const [, frame] = await conn.waitForFrames(2);
         const data = frame.data as { kind: string; ops: string[]; recordId: string };
         expect(data.recordId).toBe(record.id);
-        expect(data.kind).toBe('deleted');
+        expect(data.kind).toBe('removed');
         expect(data.ops).toEqual(['unlist']);
       } finally {
         await conn.close();
@@ -571,7 +551,7 @@ describe('GET /changes', () => {
       const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
       try {
         await conn.waitForFrames(1); // ready
-        await t.ctx.stack.mutate(record.id, { unlisted: false });
+        await t.ctx.stack.setUnlisted(record.id, false);
         const [, frame] = await conn.waitForFrames(2);
         const data = frame.data as { kind: string; ops: string[]; recordId: string };
         expect(data.recordId).toBe(record.id);
@@ -610,7 +590,7 @@ describe('GET /changes', () => {
   describe('permission scoping on a live connection', () => {
     it('stops delivering once a type-level grant is withdrawn mid-stream', async () => {
       const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'covered by a grant' });
-      const grantRecord = await t.ctx.stack.grantType(NOTE_TYPE, {
+      const grantRecord = await t.ctx.stack.grantType(familyOf(NOTE_TYPE), {
         actions: ['read-any'],
         grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
       });
@@ -661,11 +641,16 @@ describe('GET /changes', () => {
         await t.ctx.stack.patchContent(record.id, { title: 'still private' });
         await expect(conn.waitForFrames(2, 300)).rejects.toThrow();
 
-        await t.ctx.stack.grantAccess(record.id, {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
-        });
+        await t.ctx.stack.editAccess(record.id, [
+          {
+            op: 'add',
+            association: {
+              kind: 'permission',
+              label: 'read',
+              grantee: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+            },
+          },
+        ]);
         await t.ctx.stack.patchContent(record.id, { title: 'now shared' });
 
         const frames = await conn.waitForFrames(2);
@@ -718,11 +703,16 @@ describe('GET /changes', () => {
 
         // Removal is a write to the _group record, which expires the
         // connection's resolved roles rather than its grant set.
-        await t.ctx.stack.dissociate(group.id, {
-          kind: 'relationship',
-          label: 'member',
-          target: { kind: 'entity', entityId: CONTRIBUTOR_ID },
-        });
+        await t.ctx.stack.editAssociations(group.id, [
+          {
+            op: 'remove',
+            association: {
+              kind: 'relationship',
+              label: 'member',
+              target: { kind: 'entity', entityId: CONTRIBUTOR_ID },
+            },
+          },
+        ]);
         await t.ctx.stack.patchContent(record.id, { title: 'off the roster' });
 
         const proof = await t.ctx.stack.create(

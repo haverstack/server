@@ -4,9 +4,9 @@ import type { AppEnv } from '../types.js';
 
 /**
  * Refuse any query param the route doesn't define, for the same reason
- * `rejectUnknownKeys()` refuses body keys. Routes whose params core's wire
- * parsers read (`GET /records`, `GET /changes`, the journal) leave the
- * check to those parsers.
+ * `rejectUnknownKeys()` refuses body keys. A route whose params one of
+ * core's wire parsers reads leaves the check to that parser; this is for
+ * the rest. See docs/spec/wire-format.md § Unrecognized input.
  */
 export function knownParams(...names: string[]): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
@@ -21,12 +21,4 @@ export function knownParams(...names: string[]): MiddlewareHandler<AppEnv> {
     }
     await next();
   };
-}
-
-/** A boolean query param: absent is false, and anything but `true`/`false` is refused. */
-export function booleanParam(url: URL, name: string): boolean {
-  const value = url.searchParams.get(name);
-  if (value === null || value === 'false') return false;
-  if (value === 'true') return true;
-  throw new StackBadRequestError(`Invalid ${name}: expected true or false, got "${value}"`);
 }

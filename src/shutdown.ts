@@ -51,6 +51,7 @@ export function createShutdownHandler(
     await ctx.stack.close();
     await ctx.tokens.close();
     ctx.nonces.close();
+    ctx.installRequests.close();
     logger.info('Clean shutdown complete');
   };
 }

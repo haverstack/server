@@ -27,7 +27,7 @@ describe('Associations', () => {
     const record = await seedRecord();
     const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { kind: 'tag', label: 'starred' },
+      body: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
     });
     expect(status).toBe(200);
     expect((data as Record<string, unknown>).associations).toEqual([
@@ -41,7 +41,9 @@ describe('Associations', () => {
     const target = { kind: 'record' as const, recordId: other.id };
     const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { kind: 'relationship', label: 'reply-to', target },
+      body: {
+        changes: [{ op: 'add', association: { kind: 'relationship', label: 'reply-to', target } }],
+      },
     });
     expect(status).toBe(200);
     expect((data as Record<string, unknown>).associations).toEqual([
@@ -58,7 +60,11 @@ describe('Associations', () => {
       const record = await seedRecord();
       const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: { kind: 'relationship', label: 'reply-to', target },
+        body: {
+          changes: [
+            { op: 'add', association: { kind: 'relationship', label: 'reply-to', target } },
+          ],
+        },
       });
       expect(status).toBe(200);
       expect((data as Record<string, unknown>).associations).toEqual([
@@ -69,8 +75,12 @@ describe('Associations', () => {
 
   it('GET returns all associations', async () => {
     const record = await seedRecord();
-    await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-    await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'archived' });
+    await t.ctx.adapter.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    await t.ctx.adapter.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'archived' } },
+    ]);
     const { status, data } = await req(t.app, 'GET', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
     });
@@ -80,7 +90,9 @@ describe('Associations', () => {
 
   it('GET ?kind=tag filters by kind', async () => {
     const record = await seedRecord();
-    await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
+    await t.ctx.adapter.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
     const { status, data } = await req(
       t.app,
       'GET',
@@ -92,12 +104,14 @@ describe('Associations', () => {
     expect(assocs.every((a) => a.kind === 'tag')).toBe(true);
   });
 
-  it('POST .../associations/delete removes an association and answers with the updated record', async () => {
+  it('POST a remove edit removes an association and answers with the updated record', async () => {
     const record = await seedRecord();
-    await t.ctx.adapter.associate(record.id, { kind: 'tag', label: 'starred' });
-    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+    await t.ctx.adapter.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'starred' } },
+    ]);
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { kind: 'tag', label: 'starred' },
+      body: { changes: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }] },
     });
     expect(status).toBe(200);
     expect((data as Record<string, unknown>).associations).toBeUndefined();
@@ -105,18 +119,49 @@ describe('Associations', () => {
     expect(after?.associations?.some((a) => a.label === 'starred')).toBeFalsy();
   });
 
-  it('POST .../associations/delete removes a relationship association regardless of target kind', async () => {
+  it('POST a remove edit removes a relationship association regardless of target kind', async () => {
     const record = await seedRecord();
     const target = { kind: 'entity' as const, entityId: 'did:key:z6MkAlice' };
-    await t.ctx.adapter.associate(record.id, { kind: 'relationship', label: 'author', target });
-    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+    await t.ctx.adapter.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'relationship', label: 'author', target } },
+    ]);
+    const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
       token: TEST_TOKEN,
-      body: { kind: 'relationship', label: 'author', target },
+      body: {
+        changes: [{ op: 'remove', association: { kind: 'relationship', label: 'author', target } }],
+      },
     });
     expect(status).toBe(200);
     expect((data as Record<string, unknown>).associations).toBeUndefined();
     const after = await t.ctx.adapter.getRecord(record.id);
     expect(after?.associations?.some((a) => a.label === 'author')).toBeFalsy();
+  });
+
+  it('PUT replaces the data set and leaves permissions alone', async () => {
+    const record = await t.ctx.stack.create(
+      TYPE_ID,
+      { text: 'Hello' },
+      {
+        associations: [{ kind: 'tag', label: 'draft' }],
+        permissions: [{ kind: 'anyone', label: 'read' }],
+      },
+    );
+    const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/associations`, {
+      token: TEST_TOKEN,
+      body: { associations: [{ kind: 'tag', label: 'reviewed' }] },
+    });
+    expect(status).toBe(200);
+    const body = data as { associations?: unknown[]; permissions?: unknown[] };
+    expect(body.associations).toEqual([{ kind: 'tag', label: 'reviewed' }]);
+    expect(body.permissions).toEqual([{ kind: 'anyone', label: 'read' }]);
+  });
+
+  it('GET refuses a kind no association has, rather than answering every kind', async () => {
+    const record = await seedRecord();
+    const { status } = await req(t.app, 'GET', `/records/${record.id}/associations?kind=tags`, {
+      token: TEST_TOKEN,
+    });
+    expect(status).toBe(400);
   });
 
   describe('no-bump semantics', () => {
@@ -126,14 +171,14 @@ describe('Associations', () => {
 
       const added = await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: { kind: 'tag', label: 'starred' },
+        body: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
       });
       expect(added.status).toBe(200);
       expect((added.data as { version: number }).version).toBe(before!.version);
 
-      const removed = await req(t.app, 'POST', `/records/${record.id}/associations/delete`, {
+      const removed = await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: { kind: 'tag', label: 'starred' },
+        body: { changes: [{ op: 'remove', association: { kind: 'tag', label: 'starred' } }] },
       });
       expect(removed.status).toBe(200);
 
@@ -146,22 +191,28 @@ describe('Associations', () => {
       const record = await seedRecord();
       await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: { kind: 'tag', label: 'starred' },
+        body: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
       });
       const { data } = await req(t.app, 'GET', `/records/${record.id}/versions`, {
         token: TEST_TOKEN,
       });
-      expect(data).toEqual([]);
+      expect(data).toEqual({ versions: [], cursor: null });
     });
 
-    it('ignores an If-Match that names a stale version rather than refusing it', async () => {
+    it('checks If-Match like every write, though it bumps nothing', async () => {
       const record = await seedRecord();
-      const { status } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+      const stale = await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
-        body: { kind: 'tag', label: 'starred' },
+        body: { changes: [{ op: 'add', association: { kind: 'tag', label: 'starred' } }] },
         headers: { 'If-Match': `"${record.version + 99}"` },
       });
-      expect(status).toBe(200);
+      expect(stale.status).toBe(412);
+      const current = await req(t.app, 'PUT', `/records/${record.id}/associations`, {
+        token: TEST_TOKEN,
+        body: { associations: [{ kind: 'tag', label: 'starred' }] },
+        headers: { 'If-Match': `"${record.version}"` },
+      });
+      expect(current.status).toBe(200);
     });
   });
 
@@ -171,26 +222,28 @@ describe('Associations', () => {
       const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
         token: TEST_TOKEN,
         body: {
-          kind: 'permission',
-          label: 'read',
-          grantee: { kind: 'entity', entityId: 'entity-other' },
+          changes: [
+            {
+              op: 'add',
+              association: {
+                kind: 'permission',
+                label: 'read',
+                grantee: { kind: 'entity', entityId: 'entity-other' },
+              },
+            },
+          ],
         },
       });
       expect(status).toBe(400);
       expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
 
-    it('refuses an anyone element sent to POST /associations/delete', async () => {
+    it('refuses an anyone element in a remove edit', async () => {
       const record = await seedRecord();
-      const { status, data } = await req(
-        t.app,
-        'POST',
-        `/records/${record.id}/associations/delete`,
-        {
-          token: TEST_TOKEN,
-          body: { kind: 'anyone', label: 'read' },
-        },
-      );
+      const { status, data } = await req(t.app, 'POST', `/records/${record.id}/associations`, {
+        token: TEST_TOKEN,
+        body: { changes: [{ op: 'remove', association: { kind: 'anyone', label: 'read' } }] },
+      });
       expect(status).toBe(400);
       expect((data as { error: { code: string } }).error.code).toBe('bad_request');
     });
