@@ -2,12 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import type { AppManifest, EntityId } from '@haverstack/core';
 import { canonicalJson } from './canonicalJson.js';
-
-// Any key that completes the handshake can ask, so a request no one
-// re-sends must not be kept forever. Re-sending refreshes it, and an app
-// waiting on approval re-sends to check, so this bounds abandoned
-// requests rather than live ones. Matches the handshake token's lifetime.
-const REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+import { SELF_SERVICE_TTL_MS } from './selfService.js';
 
 /** Conventional sibling path for the install request store beside a stack's main .db file. */
 export const defaultInstallRequestStorePath = (dbPath: string): string => `${dbPath}.installs`;
@@ -63,7 +58,7 @@ export class InstallRequestStore {
     this.sweepExpired();
     const json = canonicalJson(manifest);
     const now = Date.now();
-    const expiresAt = now + REQUEST_TTL_MS;
+    const expiresAt = now + SELF_SERVICE_TTL_MS;
     const existing = this.db.prepare('SELECT * FROM install_requests WHERE did = ?').get(did) as
       Row | undefined;
     if (existing && existing.manifest === json) {

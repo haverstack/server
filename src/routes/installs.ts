@@ -64,7 +64,8 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
     const plan = await stack.planInstall(entry.manifest, { did: entry.did });
     const install = await stack.installApp(plan);
     installRequests.remove(entry.id);
-    return c.json(serializeRecord(install));
+    const body: WireInstallResponse = { status: 'installed', install: serializeRecord(install) };
+    return c.json(body);
   });
 
   app.delete('/requests/:id', knownParams(), requireOwner(ownerEntityId), (c) => {
@@ -91,8 +92,24 @@ function serializeRequest(entry: InstallRequestEntry) {
   };
 }
 
-/** What a plan would change; its manifest and key are already on the request. */
-function serializePlan(plan: InstallPlan) {
-  const { manifest, did, existing, ...changes } = plan;
-  return { ...changes, existing: existing ? serializeRecord(existing) : null };
+/**
+ * What a plan would change; its manifest and key are already on the request.
+ * Every field is named, so nothing reaches the wire unchosen, and the return
+ * type covers every InstallPlan field, so a field core adds fails to compile
+ * here until someone decides whether the owner's review shows it.
+ */
+function serializePlan(
+  plan: InstallPlan,
+): Record<Exclude<keyof InstallPlan, 'manifest' | 'did'>, unknown> {
+  return {
+    existing: plan.existing ? serializeRecord(plan.existing) : null,
+    newFamilies: plan.newFamilies,
+    newVersions: plan.newVersions,
+    requestsAdded: plan.requestsAdded,
+    requestsRemoved: plan.requestsRemoved,
+    foreignRequests: plan.foreignRequests,
+    typeChanges: plan.typeChanges,
+    newKey: plan.newKey,
+    linkedKeys: plan.linkedKeys,
+  };
 }

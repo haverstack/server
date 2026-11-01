@@ -70,12 +70,15 @@ describe('installs', () => {
       token: TEST_TOKEN,
     });
     expect(approved.status).toBe(200);
-    expect((approved.data as { typeId: string }).typeId).toBe('_install@1');
+    // The same body POST /installs answers once the plan is empty.
+    const approvedBody = approved.data as { status: string; install: { typeId: string } };
+    expect(approvedBody.status).toBe('installed');
+    expect(approvedBody.install.typeId).toBe('_install@1');
     expect(await pending()).toEqual([]);
 
     const { status, data } = await ask();
     expect(status).toBe(200);
-    expect((data as { status: string }).status).toBe('installed');
+    expect(data).toEqual(approved.data);
     // The grant the manifest asked for now holds.
     const created = await req(t.app, 'POST', '/records', {
       token: appToken,

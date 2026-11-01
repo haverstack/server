@@ -20,12 +20,11 @@ import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { readJson } from '../lib/json.js';
 import { createExpiredTokenSweeper } from '../lib/tokenSweep.js';
+import { SELF_SERVICE_TTL_MS } from '../lib/selfService.js';
 
 // The handshake never issues a delegated token: proving key possession
-// proves the principal and nothing about whom it may act for. It gets a
-// default TTL rather than the owner's choice of one, because a token
-// anyone can mint for themselves owes a bounded lifetime.
-const AUTH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// proves the principal and nothing about whom it may act for. It gets the
+// self-service lifetime rather than the owner's choice of one.
 
 // Stamped on every handshake-issued token. GET /tokens is the owner's only
 // view of what exists, and without this a self-service token is
@@ -98,7 +97,7 @@ export function authRoutes(ctx: StackContext, authOrigin: string, logger: Logger
 
     // Undelegated by construction: principalId and subjectId are both the
     // proven DID. Never let a client name its own subject.
-    const expiresAt = new Date(Date.now() + AUTH_TOKEN_TTL_MS);
+    const expiresAt = new Date(Date.now() + SELF_SERVICE_TTL_MS);
     const { token } = await ctx.tokens.createToken(
       { subjectId: body.did, principalId: body.did },
       {
