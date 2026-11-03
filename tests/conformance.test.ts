@@ -33,6 +33,7 @@ import {
   discoveryFixtures,
   createRecordFixtures,
   queryRecordsFixtures,
+  queryWholeDeletedFixtures,
   patchContentFixtures,
   deleteRecordFixtures,
   deleteRecordSequenceFixtures,
@@ -1644,6 +1645,67 @@ describe('journal fixtures', () => {
 });
 
 // -------------------------------------------------------
+// wholeDeleted — the owner reading a soft-deleted Record as stored, which a
+// copy of the stack needs.
+// -------------------------------------------------------
+
+describe('query wholeDeleted fixtures', () => {
+  const handled = new Set<string>();
+  const fixture = (name: string) => queryWholeDeletedFixtures.find((f) => f.name === name)!;
+
+  test('query-whole-deleted-reads-a-soft-deleted-record-as-stored', async () => {
+    const f = fixture('query-whole-deleted-reads-a-soft-deleted-record-as-stored');
+    handled.add(f.name);
+    const expected = (f.responseBody as { records: WireRecord[] }).records[0]!;
+    const record = await t.ctx.stack.create(NOTE_TYPE, expected.content, {
+      createdBy: { subjectId: TEST_ENTITY_ID },
+    });
+    await t.ctx.stack.editAssociations(record.id, [
+      { op: 'add', association: { kind: 'tag', label: 'kept' } },
+    ]);
+    await t.ctx.stack.delete(record.id);
+
+    const { status, data } = await req(t.app, f.method, f.path, {
+      token: TEST_TOKEN,
+      body: f.requestBody,
+    });
+    expect(status).toBe(f.responseStatus);
+    const found = (data as { records: WireRecord[] }).records.find((r) => r.id === record.id)!;
+    expect(found.content).toEqual(expected.content);
+    expect(found.associations).toEqual(expected.associations);
+    expect(found.createdBy).toEqual({ subjectId: TEST_ENTITY_ID });
+    expect(typeof found.deletedAt).toBe('string');
+  });
+
+  test.each(['query-whole-deleted-non-owner', 'query-whole-deleted-delegated-session'])(
+    '%s',
+    async (name) => {
+      const f = fixture(name);
+      handled.add(f.name);
+      const { token } = await t.ctx.adapter.createToken(
+        name.endsWith('delegated-session')
+          ? { subjectId: TEST_ENTITY_ID, principalId: OTHER_ENTITY_ID }
+          : { subjectId: OTHER_ENTITY_ID },
+      );
+      const { status, data } = await req(t.app, f.method, f.path, {
+        token,
+        body: f.requestBody,
+      });
+      expect(status).toBe(f.responseStatus);
+      expect((data as WireError).error.code).toBe((f.responseBody as WireError).error.code);
+    },
+  );
+
+  test('coverage', () => {
+    assertCoverage(
+      queryWholeDeletedFixtures.map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+});
+
+// -------------------------------------------------------
 // Blobs and head — what lets the owner read a hosted stack in full, as one
 // moment. Both are served to the owner acting alone.
 // -------------------------------------------------------
@@ -2598,6 +2660,7 @@ describe('error response fixtures', () => {
     'error-bad-request-unknown-query-body-key',
     'error-bad-request-unknown-query-param',
     'error-bad-request-unknown-record-key',
+    'error-bad-request-whole-deleted-without-include-deleted',
     'error-validation-query-versioned-base-id',
   ])('%s — refused before anything is read', async (name) => {
     const fixture = find(name);
