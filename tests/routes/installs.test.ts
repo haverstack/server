@@ -34,6 +34,16 @@ describe('installs', () => {
     return (data as { requests: RequestSummary[] }).requests;
   }
 
+  /** The fingerprint the owner's review of a request returns. */
+  async function reviewed(id: string): Promise<string> {
+    const { data } = await req(t.app, 'GET', `/installs/requests/${id}`, { token: TEST_TOKEN });
+    return (data as { plan: { fingerprint: string } }).plan.fingerprint;
+  }
+
+  function approve(id: string, body: unknown) {
+    return req(t.app, 'POST', `/installs/requests/${id}/approve`, { token: TEST_TOKEN, body });
+  }
+
   it('queues one request per key, keeping its id while the manifest is unchanged', async () => {
     await ask();
     await ask();
@@ -61,14 +71,13 @@ describe('installs', () => {
     expect(plan.existing).toBeNull();
     expect(plan.newFamilies).toEqual(['com.example.notes/note']);
     expect(plan.newKey).toBe(true);
+    expect(typeof plan.fingerprint).toBe('string');
   });
 
   it('installs on approval, after which the key is answered as installed', async () => {
     await ask();
     const [request] = await pending();
-    const approved = await req(t.app, 'POST', `/installs/requests/${request!.id}/approve`, {
-      token: TEST_TOKEN,
-    });
+    const approved = await approve(request!.id, { fingerprint: await reviewed(request!.id) });
     expect(approved.status).toBe(200);
     // The same body POST /installs answers once the plan is empty.
     const approvedBody = approved.data as { status: string; install: { typeId: string } };
@@ -85,6 +94,31 @@ describe('installs', () => {
       body: { typeId: 'com.example.notes/note@1', content: { text: 'hi' } },
     });
     expect(created.status).toBe(200);
+  });
+
+  it('refuses an approval once the plan is no longer the one reviewed', async () => {
+    await ask();
+    const [request] = await pending();
+    const fingerprint = await reviewed(request!.id);
+    await t.ctx.stack.defineType(MANIFEST.types[0]!);
+    const refused = await approve(request!.id, { fingerprint });
+    expect(refused.status).toBe(409);
+    expect((refused.data as { error: { code: string } }).error.code).toBe('conflict');
+    expect(await pending()).toHaveLength(1);
+    // Reviewing again names the plan as it now stands, which approves.
+    expect((await approve(request!.id, { fingerprint: await reviewed(request!.id) })).status).toBe(
+      200,
+    );
+  });
+
+  it('refuses an approval that names no fingerprint, installing nothing', async () => {
+    await ask();
+    const [request] = await pending();
+    expect((await approve(request!.id, {})).status).toBe(422);
+    expect((await approve(request!.id, { fingerprint: 5 })).status).toBe(422);
+    expect((await approve(request!.id, { fingerprint: 'x', did: APP_KEY })).status).toBe(400);
+    expect(await pending()).toHaveLength(1);
+    expect(await t.ctx.stack.getType('com.example.notes/note@1')).toBeNull();
   });
 
   it('drops a declined request without writing anything', async () => {

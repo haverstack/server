@@ -447,7 +447,7 @@ describe('POST /attachments', () => {
     expect(second.id).not.toBe(first.id);
   });
 
-  it('rejects a second upload with a conflicting mimeType with 422', async () => {
+  it('rejects a second upload with a conflicting mimeType with 409', async () => {
     const bytes = new TextEncoder().encode('same content');
     await t.app.request('/attachments', {
       method: 'POST',
@@ -460,12 +460,9 @@ describe('POST /attachments', () => {
       headers: { Authorization: `Bearer ${TEST_TOKEN}`, 'Content-Type': 'image/png' },
       body: bytes,
     });
-    expect(res.status).toBe(422);
-    const body = (await res.json()) as {
-      error: { code: string; details: Array<{ path: string }> };
-    };
-    expect(body.error.code).toBe('validation');
-    expect(body.error.details.some((d) => d.path === 'mimeType')).toBe(true);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('conflict');
     // Anti-oracle: the established mimeType must never be named in the error.
     expect(JSON.stringify(body)).not.toContain('text/plain');
   });

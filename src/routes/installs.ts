@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { StackNotFoundError, isPlanEmpty } from '@haverstack/core';
+import { StackNotFoundError, StackValidationError, isPlanEmpty } from '@haverstack/core';
 import type { InstallPlan } from '@haverstack/core';
 import { parseInstallBody } from '@haverstack/core/wire';
 import { serializeRecord } from '@haverstack/wire-types';
@@ -58,11 +58,16 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json({ ...serializeRequest(entry), plan: serializePlan(plan) });
   });
 
-  // Applies the manifest the id names, planned afresh at approval.
+  // Applies the manifest the id names, only while it still plans to the
+  // fingerprint the owner's review returned; core refuses it otherwise.
+  // See docs/spec/apps.md § Plan, then apply.
   app.post('/requests/:id/approve', knownParams(), requireOwner(ownerEntityId), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
-    const plan = await stack.planInstall(entry.manifest, { did: entry.did });
-    const install = await stack.installApp(plan);
+    const { fingerprint } = await readJson<{ fingerprint?: unknown }>(c, ['fingerprint']);
+    if (typeof fingerprint !== 'string') {
+      throw new StackValidationError([{ path: 'fingerprint', message: 'Must be a string' }]);
+    }
+    const install = await stack.installApp(entry.manifest, { did: entry.did, fingerprint });
     installRequests.remove(entry.id);
     const body: WireInstallResponse = { status: 'installed', install: serializeRecord(install) };
     return c.json(body);
@@ -111,5 +116,6 @@ function serializePlan(
     typeChanges: plan.typeChanges,
     newKey: plan.newKey,
     linkedKeys: plan.linkedKeys,
+    fingerprint: plan.fingerprint,
   };
 }

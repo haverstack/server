@@ -16,8 +16,7 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
   app.get('/stack', knownParams(), (c) => {
     const body: DiscoveryResponse = {
       version: WIRE_PROTOCOL_VERSION,
-      entityId: ctx.stack.ownerEntityId,
-      timezone: ctx.stack.timezone,
+      ownerEntityId: ctx.stack.ownerEntityId,
       // The server's own request-size ceilings are authoritative here,
       // overriding the adapter's `null` — nothing at the storage layer
       // imposes a limit, but this server enforces both. See
@@ -50,6 +49,10 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
       },
       // POST /installs is always served, so, like `changes`, always advertised.
       installs: { requests: true },
+      // GET /blobs and GET /head are always served, which is what lets the
+      // owner copy the stack out. See docs/spec/portability.md § Copying a stack.
+      blobs: { list: true },
+      head: { read: true },
     };
     return c.json(body);
   });

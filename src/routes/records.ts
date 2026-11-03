@@ -24,7 +24,7 @@ import {
   parsePermissionsBody,
   parseMigrationBody,
 } from '@haverstack/core/wire';
-import { readHistoryPage } from '../lib/historyPage.js';
+import { readPage } from '../lib/page.js';
 import { ifMatchVersion } from '../lib/ifMatch.js';
 import { serializeRecord, serializeVersion, serializeJournalEntry } from '@haverstack/wire-types';
 import type {
@@ -230,7 +230,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const query = parseJournalParams(new URL(c.req.url));
     const scoped = scopeFor(c.get('auth'));
-    const { rows, cursor } = await readHistoryPage(
+    const { rows, cursor } = await readPage(
       query.limit,
       (limit) => scoped.getJournal(id, { ...query, limit }),
       (entry) => entry.seq,
@@ -248,7 +248,7 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
     const id = c.req.param('id');
     const query = parseVersionsParams(new URL(c.req.url));
     const scoped = scopeFor(c.get('auth'));
-    const { rows, cursor } = await readHistoryPage(
+    const { rows, cursor } = await readPage(
       query.limit,
       (limit) => scoped.getVersions(id, { ...query, limit }),
       (version) => version.version,

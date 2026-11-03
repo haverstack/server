@@ -14,6 +14,8 @@ import { recordRoutes } from './routes/records.js';
 import { changeRoutes } from './routes/changes.js';
 import { typeRoutes } from './routes/types.js';
 import { attachmentRoutes } from './routes/attachments.js';
+import { blobRoutes } from './routes/blobs.js';
+import { headRoutes } from './routes/head.js';
 import { entityRoutes } from './routes/entity.js';
 import { tokenRoutes } from './routes/tokens.js';
 import { authRoutes } from './routes/auth.js';
@@ -77,6 +79,8 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/changes', changeRoutes(ctx, config, logger));
   app.route('/types', typeRoutes(ctx));
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
+  app.route('/blobs', blobRoutes(ctx));
+  app.route('/head', headRoutes(ctx));
   app.route('/entity', entityRoutes(ctx));
   app.route('/tokens', tokenRoutes(ctx));
   app.route('/auth', authRoutes(ctx, config.authOrigin, logger));

@@ -60,7 +60,6 @@ export async function initStack(config: Config, logger: Logger): Promise<StackCo
       }
       return config.entityId;
     },
-    timezone: config.timezone,
   });
 
   if (config.entityId && config.entityId !== adapter.ownerEntityId) {

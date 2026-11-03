@@ -16,8 +16,7 @@ A query param or JSON body key an endpoint doesn't define is refused with `400` 
 ```json
 {
   "version": "1.0",
-  "entityId": "did:key:z6Mk...",
-  "timezone": "America/New_York",
+  "ownerEntityId": "did:key:z6Mk...",
   "capabilities": {
     "filter": { "content": "path", "contentPresent": true, "contentByType": true, "search": true },
     "sort": {
@@ -29,15 +28,17 @@ A query param or JSON body key an endpoint doesn't define is refused with `400` 
   },
   "auth": { "methods": ["did-challenge"] },
   "changes": { "transports": ["sse"], "resume": true, "records": true },
-  "installs": { "requests": true }
+  "installs": { "requests": true },
+  "blobs": { "list": true },
+  "head": { "read": true }
 }
 ```
 
-`version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `timezone` is present only when the stack was configured with one — there is no default. `capabilities.limits.attachmentBytes` and `contentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
+`version` is the wire protocol's own `MAJOR.MINOR` version (from `@haverstack/wire-types`' `WIRE_PROTOCOL_VERSION`), not this server's software version — a client refuses to `open()` a server whose major differs from its own; a minor difference is never a refusal in either direction. `capabilities.limits.attachmentBytes` and `contentBytes` are this server's own enforced ceilings (413 past either), letting a client pre-check and get a typed error instead of burning a round trip. `auth: { methods: ["did-challenge"] }` is always present — this server always implements the DID challenge-response handshake described below.
 
 `changes` is a top-level field, not part of `capabilities` — a client checks it and fails locally at `open()` rather than discovering a missing feed as a 404 partway through a connection. `transports` lists what it speaks (`sse` is the only one this version defines); `resume` is `true` — `GET /changes` mints and honors resume cursors; `records` is `true` because `GET /changes` already honors `?include=record` unconditionally. Both `resume` and `records` false is also a fully conformant response for a server that doesn't implement either — see [Change feed](#change-feed) below.
 
-`installs: { requests: true }` is always present — this server always takes [install requests](#installs).
+`installs: { requests: true }` is always present — this server always takes [install requests](#installs). So are `blobs: { list: true }` and `head: { read: true }`: this server always serves [`GET /blobs` and `GET /head`](#copying-a-stack-out), which is what lets the owner copy the stack out.
 
 `capabilities.filter.content` is `"path"`, spread through from the underlying sqlite adapter: a `content` filter key may be a dot-separated path (`"profile.email"`), not just a top-level field — see [Content filter keys](#content-filter-keys) below. `capabilities` and its shape are defined by `@haverstack/core`'s `StackCapabilities`; see core's `wire-format.md` § Discovery for the normative reach ladder and field-by-field meaning.
 
@@ -322,6 +323,21 @@ This server is single-process: `GET /changes` reports only writes made through t
 
 An `attachment` association (`{ kind: "attachment", label, fileId }`, added through `POST /records/:id/associations`) may carry an optional `attachmentRecordId`, naming the `_attachment` record whose upload established that particular reference — useful when several records share one `fileId` but each wants its own uploader's filename. The pointer annotates the reference rather than identifying it: association identity stays `(kind, label, fileId)`, so a `remove` edit matches without it, and re-associating with a different (or absent) `attachmentRecordId` re-points the existing association in place rather than adding a second one. `GET /attachments/:fileId` itself never resolves this pointer — a plain download names a fileId, not a reference — so a client holding the association resolves the filename itself (via `resolveReferencedAttachment()` from `@haverstack/core/wire`) and passes it as `?filename`.
 
+## Copying a stack out
+
+| Method | Path     | Auth       | Description                              |
+| ------ | -------- | ---------- | ---------------------------------------- |
+| GET    | `/blobs` | Owner only | List every blob the store holds          |
+| GET    | `/head`  | Owner only | Where the store's writes currently stand |
+
+Together with the record, history and type reads, these let the owner copy the whole stack out with `copyStack()` through `APIAdapter`, as from any other adapter. See core's [Portability § Copying a stack](https://github.com/haverstack/core/blob/main/docs/spec/portability.md#copying-a-stack).
+
+`GET /blobs` answers `{ "blobs": [{ fileId, size, modifiedAt }], "cursor": ... }`, `fileId` ascending, every blob whether a Record names it or not. It takes `?afterFileId=` (exclusive) and `?limit=`. `cursor` is the `fileId` to send back as `afterFileId`, and `null` once nothing follows. This server caps a page at 500 blobs, announced through `cursor`, as on the [journal](#journal).
+
+`GET /head` answers `{ "head": "..." }`, opaque and compared only for equality: two equal heads mean nothing was written between them. It is the head of the adapter every write goes through, so it moves on every Record, Type and blob write by any requester, and a restart starts a new one. Query workers only read, so they never move it.
+
+Both are served to the owner acting alone — undelegated, as `POST /types` is — and `403` otherwise.
+
 ## Installs
 
 | Method | Path                             | Auth       | Description                              |
@@ -334,7 +350,7 @@ An `attachment` association (`{ kind: "attachment", label, fileId }`, added thro
 
 An install has two halves. **The app's half** is `POST /installs`, pinned by core's wire contract: a key presents `{ "manifest": { appId, name, version?, types, requests } }` and answers `202 { "status": "pending" }` until the owner approves it for that key, then `200 { "status": "installed", "install": <_install record> }` once applying it would change nothing. Re-sending the same manifest is how an app checks; a changed manifest — an upgrade — is pending again. The key being installed is the session's principal, never named in the body, and a delegated session is `403`. A manifest defining a type outside the app's own namespace and the commons is `422`; a key whose `_app` card names a different `appId` is `409`.
 
-**The owner's half** is this server's own: `/installs/requests`. A request is not an approval, so it lives beside the stack file rather than in it (`<DB_PATH>.installs`) and writes nothing into the owner's data. Each key holds at most one request; a request keeps its `id` while the key re-sends the same manifest and gets a new one when the manifest changes, so the id the owner reviewed always names what they reviewed. `GET /installs/requests/:id` returns the request with its current `plan` — the families it would claim, the type versions and grants it would add or remove, requests on families other apps own, and whether the key is new — computed afresh on each read, since it depends on the stack as it stands. Approving plans the stored manifest again and applies it (`Stack.planInstall()` then `installApp()`), answering `200` with `{ "status": "installed", "install": <_install record> }`, the body `POST /installs` answers the key with once the plan is empty. Declining drops the request (`204`). Approving or declining acts only on the request its id names: once the key sends a different manifest, the old id answers `404`. Manifests are compared as canonical JSON, so re-sending the same one with its keys in another order keeps the request's id. A request no one re-sends for 7 days is dropped.
+**The owner's half** is this server's own: `/installs/requests`. A request is not an approval, so it lives beside the stack file rather than in it (`<DB_PATH>.installs`) and writes nothing into the owner's data. Each key holds at most one request; a request keeps its `id` while the key re-sends the same manifest and gets a new one when the manifest changes, so the id the owner reviewed always names what they reviewed. `GET /installs/requests/:id` returns the request with its current `plan` — the families it would claim, the type versions and grants it would add or remove, requests on families other apps own, and whether the key is new — computed afresh on each read, since it depends on the stack as it stands. Approving plans the stored manifest again and applies it (`Stack.planInstall()` then `installApp()`), answering `200` with `{ "status": "installed", "install": <_install record> }`, the body `POST /installs` answers the key with once the plan is empty. The review's `plan` carries a `fingerprint`, and approving takes it back as `{ "fingerprint": "..." }`: the manifest is applied only while it still plans to that fingerprint, so the owner approves exactly what they reviewed. A plan that has changed since — the install changing, a type being defined, the key being linked — is `409` with code `conflict` and installs nothing; review it again. A missing or non-string `fingerprint` is `422`. Declining drops the request (`204`). Approving or declining acts only on the request its id names: once the key sends a different manifest, the old id answers `404`. Manifests are compared as canonical JSON, so re-sending the same one with its keys in another order keeps the request's id. A request no one re-sends for 7 days is dropped.
 
 ## Entity & Tokens
 

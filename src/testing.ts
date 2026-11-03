@@ -51,25 +51,11 @@ export function tempDbPath(): string {
   return join(dir, 'stack.db');
 }
 
-export type TestContextOpts = {
-  /**
-   * IANA timezone string, or `undefined` to opt out of one. Note: a plain
-   * default parameter can't tell "omitted" from "explicitly undefined"
-   * (both trigger the default), so this must be an options bag — pass
-   * `{ timezone: undefined }` deliberately, not the bare value.
-   */
-  timezone?: string;
-};
-
-export async function createTestContext(
-  dbPath: string,
-  opts: TestContextOpts = { timezone: 'UTC' },
-): Promise<StackContext> {
+export async function createTestContext(dbPath: string): Promise<StackContext> {
   const adapter = await LocalAdapter.open({
     path: dbPath,
     create: 'exclusive',
     ownerEntityId: TEST_ENTITY_ID,
-    ...(opts.timezone !== undefined && { timezone: opts.timezone }),
   });
   const stack = await Stack.open(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
@@ -92,14 +78,13 @@ export async function createTestContext(
   };
 }
 
-export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {
+export function testConfig(dbPath: string): Config {
   return {
     port: 3000,
     dbPath,
     entityId: TEST_ENTITY_ID,
     ownerName: null,
     ownerHandle: null,
-    timezone: opts.timezone,
     ownerToken: TEST_TOKEN,
     corsOrigins: '*',
     baseUrl: TEST_BASE_URL,
@@ -145,15 +130,13 @@ export type TestServer = {
  * client against the actual wire protocol rather than a mocked fetch.
  * Owner auth: `Authorization: Bearer ${TEST_TOKEN}`.
  */
-export async function startTestServer(
-  opts: TestContextOpts = { timezone: 'UTC' },
-): Promise<TestServer> {
+export async function startTestServer(): Promise<TestServer> {
   const dbPath = tempDbPath();
-  const ctx = await createTestContext(dbPath, opts);
+  const ctx = await createTestContext(dbPath);
   const port = await getFreePort();
   const url = `http://127.0.0.1:${port}`;
   const config: Config = {
-    ...testConfig(dbPath, opts),
+    ...testConfig(dbPath),
     port,
     baseUrl: url,
     authOrigin: authOriginFromUrl(url),

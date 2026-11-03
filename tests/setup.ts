@@ -14,7 +14,6 @@ import {
   tempDbPath,
   createTestContext,
   testConfig,
-  type TestContextOpts,
 } from '../src/testing.js';
 
 export {
@@ -26,7 +25,6 @@ export {
   tempDbPath,
   createTestContext,
   testConfig,
-  type TestContextOpts,
 };
 
 export type TestApp = {
@@ -36,10 +34,10 @@ export type TestApp = {
   cleanup: () => Promise<void>;
 };
 
-export async function buildTestApp(opts: TestContextOpts = { timezone: 'UTC' }): Promise<TestApp> {
+export async function buildTestApp(): Promise<TestApp> {
   const dbPath = tempDbPath();
-  const ctx = await createTestContext(dbPath, opts);
-  const config = testConfig(dbPath, opts);
+  const ctx = await createTestContext(dbPath);
+  const config = testConfig(dbPath);
   const app = createApp(ctx, config, logger);
 
   const cleanup = async () => {
