@@ -144,6 +144,9 @@ export async function startTestServer(seed?: StoreSeed): Promise<TestServer> {
   const url = `http://127.0.0.1:${port}`;
   const config: Config = {
     ...testConfig(dbPath),
+    // The store's owner, which a seed may name: ENTITY_ID only seeds a new
+    // store, so the store is the authority once it exists.
+    entityId: ctx.stack.ownerEntityId,
     port,
     baseUrl: url,
     authOrigin: authOriginFromUrl(url),

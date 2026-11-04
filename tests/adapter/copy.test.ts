@@ -85,7 +85,11 @@ describe('copying a hosted stack out through APIAdapter', () => {
       name: 'Note',
       schema: { n: { kind: 'number' } },
     });
-    source = await APIAdapter.open({ url: server.url, token: TEST_TOKEN });
+    source = await APIAdapter.open({
+      url: server.url,
+      token: TEST_TOKEN,
+      ownerEntityId: server.ctx.stack.ownerEntityId,
+    });
   });
   afterEach(async () => {
     await server.close();
@@ -93,10 +97,10 @@ describe('copying a hosted stack out through APIAdapter', () => {
     dirs.clear();
   });
 
-  // A member writing over the wire while the copy reads moves the head
-  // between the copy's first read and its last, so the copy matches no
-  // moment of the stack and is refused. See core's docs/spec/portability.md
-  // § Copying a stack.
+  // A copy reads the head before its first read and after its last. A
+  // member writing over the wire between the two moves it, so the copy
+  // matches no moment of the stack and is refused. See core's
+  // docs/spec/portability.md § Copying a stack.
   it('refuses with StackConflictError when the stack is written mid-copy', async () => {
     const { token: memberToken } = await server.ctx.adapter.createToken({
       subjectId: OTHER_ENTITY_ID,
@@ -107,20 +111,29 @@ describe('copying a hosted stack out through APIAdapter', () => {
     });
     await server.ctx.stack.create(NOTE, { n: 1 });
 
-    // After the copy's first head read, before its last: listing Types is
-    // one of the reads between them.
-    const listTypes = source.listTypes.bind(source);
-    source.listTypes = async () => {
+    // Lands just before the copy's closing head read, after every other.
+    const head = source.head!.bind(source);
+    let reads = 0;
+    const writtenAtTheEnd = async () => {
+      if (++reads === 1) return head();
       const written = await fetch(`${server.url}/records`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${memberToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ typeId: NOTE, content: { n: 2 } }),
       });
       expect(written.status).toBe(200);
-      return listTypes();
+      return head();
     };
+    // Every other member is the adapter's own, bound to it.
+    const watched = new Proxy(source, {
+      get: (target, key) => {
+        if (key === 'head') return writtenAtTheEnd;
+        const value: unknown = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
 
-    await expect(copyStack(source, local)).rejects.toThrow(StackConflictError);
+    await expect(copyStack(watched, local)).rejects.toThrow(StackConflictError);
   });
 
   // Larger than every page a copy reads through: the copy's own Record and

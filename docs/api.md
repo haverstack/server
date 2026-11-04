@@ -336,7 +336,7 @@ Together with the record, history and type reads, these let the owner copy the w
 
 `GET /head` answers `{ "head": "..." }`, opaque and compared only for equality: two equal heads mean nothing was written between them. It is the head of the adapter every write goes through, so it moves on every Record, Type and blob write by any requester, and a restart starts a new one. Query workers only read, so they never move it.
 
-Both are served to the owner acting alone — undelegated, as `POST /types` is — and `403` otherwise.
+Both are served to the owner acting alone — undelegated, as `POST /types` is — answering `401` without a token and `403` otherwise.
 
 ## Installs
 
