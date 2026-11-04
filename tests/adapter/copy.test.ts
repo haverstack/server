@@ -88,7 +88,6 @@ describe('copying a hosted stack out through APIAdapter', () => {
     source = await APIAdapter.open({ url: server.url, token: TEST_TOKEN });
   });
   afterEach(async () => {
-    await source.close?.();
     await server.close();
     for (const dir of dirs.values()) rmSync(dir, { recursive: true, force: true });
     dirs.clear();
