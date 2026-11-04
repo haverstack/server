@@ -33,7 +33,6 @@ import {
   discoveryFixtures,
   createRecordFixtures,
   queryRecordsFixtures,
-  queryWholeDeletedFixtures,
   patchContentFixtures,
   deleteRecordFixtures,
   deleteRecordSequenceFixtures,
@@ -966,10 +965,38 @@ describe('getRecord sequence fixtures', () => {
       (f) => f.name === 'get-record-after-soft-delete',
     )!;
     handled.add(sequence.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    // A reader other than the owner, who may read and write the record.
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'x' },
+      {
+        permissions: (['read', 'write'] as const).map((label) => ({
+          kind: 'permission' as const,
+          label,
+          grantee: { kind: 'entity' as const, entityId: CONTRIBUTOR_ID },
+        })),
+      },
+    );
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     for (const step of sequence.steps) {
-      const { status } = await dispatchAt(step, record.id);
+      const { status, data } = await dispatchAt(step, record.id, { token });
       expect(status).toBe(step.responseStatus);
+      if (status === 200) expect((data as WireRecord).content, step.name).toEqual({});
+    }
+  });
+
+  test('get-record-after-soft-delete-owner', async () => {
+    const sequence = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete-owner',
+    )!;
+    handled.add(sequence.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    for (const step of sequence.steps) {
+      const { status, data } = await dispatchAt(step, record.id, { token: TEST_TOKEN });
+      expect(status).toBe(step.responseStatus);
+      const d = data as WireRecord;
+      expect(d.content, step.name).toEqual((step.responseBody as WireRecord).content);
+      expect(d.deletedAt).toBeDefined();
     }
   });
 
@@ -1008,9 +1035,9 @@ describe('deleteRecord fixtures', () => {
     const d = data as WireRecord;
     expect(d.version).toBe(fixture.responseBody!.version);
     expect(d.deletedAt).toBeDefined();
-    // The tombstone projection: content is what a soft delete removes. See
+    // Whole, as the owner acting alone reads it. See
     // docs/spec/versioning.md § The tombstone is literal.
-    expect(d.content).toEqual({});
+    expect(d.content).toEqual(fixture.responseBody!.content);
   });
 
   test('delete-record-purge', async () => {
@@ -1638,67 +1665,6 @@ describe('journal fixtures', () => {
   test('coverage', () => {
     assertCoverage(
       getJournalFixtures.map((f) => f.name),
-      handled,
-      new Set(),
-    );
-  });
-});
-
-// -------------------------------------------------------
-// wholeDeleted — the owner reading a soft-deleted Record as stored, which a
-// copy of the stack needs.
-// -------------------------------------------------------
-
-describe('query wholeDeleted fixtures', () => {
-  const handled = new Set<string>();
-  const fixture = (name: string) => queryWholeDeletedFixtures.find((f) => f.name === name)!;
-
-  test('query-whole-deleted-reads-a-soft-deleted-record-as-stored', async () => {
-    const f = fixture('query-whole-deleted-reads-a-soft-deleted-record-as-stored');
-    handled.add(f.name);
-    const expected = (f.responseBody as { records: WireRecord[] }).records[0]!;
-    const record = await t.ctx.stack.create(NOTE_TYPE, expected.content, {
-      createdBy: { subjectId: TEST_ENTITY_ID },
-    });
-    await t.ctx.stack.editAssociations(record.id, [
-      { op: 'add', association: { kind: 'tag', label: 'kept' } },
-    ]);
-    await t.ctx.stack.delete(record.id);
-
-    const { status, data } = await req(t.app, f.method, f.path, {
-      token: TEST_TOKEN,
-      body: f.requestBody,
-    });
-    expect(status).toBe(f.responseStatus);
-    const found = (data as { records: WireRecord[] }).records.find((r) => r.id === record.id)!;
-    expect(found.content).toEqual(expected.content);
-    expect(found.associations).toEqual(expected.associations);
-    expect(found.createdBy).toEqual({ subjectId: TEST_ENTITY_ID });
-    expect(typeof found.deletedAt).toBe('string');
-  });
-
-  test.each(['query-whole-deleted-non-owner', 'query-whole-deleted-delegated-session'])(
-    '%s',
-    async (name) => {
-      const f = fixture(name);
-      handled.add(f.name);
-      const { token } = await t.ctx.adapter.createToken(
-        name.endsWith('delegated-session')
-          ? { subjectId: TEST_ENTITY_ID, principalId: OTHER_ENTITY_ID }
-          : { subjectId: OTHER_ENTITY_ID },
-      );
-      const { status, data } = await req(t.app, f.method, f.path, {
-        token,
-        body: f.requestBody,
-      });
-      expect(status).toBe(f.responseStatus);
-      expect((data as WireError).error.code).toBe((f.responseBody as WireError).error.code);
-    },
-  );
-
-  test('coverage', () => {
-    assertCoverage(
-      queryWholeDeletedFixtures.map((f) => f.name),
       handled,
       new Set(),
     );
@@ -2660,7 +2626,6 @@ describe('error response fixtures', () => {
     'error-bad-request-unknown-query-body-key',
     'error-bad-request-unknown-query-param',
     'error-bad-request-unknown-record-key',
-    'error-bad-request-whole-deleted-without-include-deleted',
     'error-validation-query-versioned-base-id',
   ])('%s — refused before anything is read', async (name) => {
     const fixture = find(name);
@@ -2948,7 +2913,12 @@ describe('changeFeed fixtures', () => {
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+      const deleted = await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+      // The owner acting alone is answered with the record whole.
+      const mutation = fixture.activity![0]!.mutation!;
+      expect((deleted.data as WireRecord).content).toEqual(
+        (mutation.responseBody as WireRecord).content,
+      );
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('removed');
