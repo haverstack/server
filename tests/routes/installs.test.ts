@@ -163,13 +163,17 @@ describe('installs', () => {
     expect(replacement!.manifest.version).toBe('1.1.0');
   });
 
-  it('refuses a delegated session before reading its body', async () => {
+  it('refuses a delegated session, as ScopedStack.answerInstall() does', async () => {
     const { token } = await t.ctx.adapter.createToken({
       subjectId: OTHER_ENTITY_ID,
       principalId: APP_KEY,
     });
-    const { status } = await req(t.app, 'POST', '/installs', { token, body: { manifest: 5 } });
+    const { status } = await req(t.app, 'POST', '/installs', {
+      token,
+      body: { manifest: MANIFEST },
+    });
     expect(status).toBe(403);
+    expect(await pending()).toEqual([]);
   });
 
   it('answers 404 for a request id it does not hold', async () => {

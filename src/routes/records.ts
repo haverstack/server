@@ -25,6 +25,7 @@ import {
   parseMigrationBody,
 } from '@haverstack/core/wire';
 import { readPage } from '../lib/page.js';
+import { scopeFor as scopeOf } from '../lib/scope.js';
 import { ifMatchVersion } from '../lib/ifMatch.js';
 import { serializeRecord, serializeVersion, serializeJournalEntry } from '@haverstack/wire-types';
 import type {
@@ -47,12 +48,9 @@ import { StackNotFoundError } from '@haverstack/core';
 export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack, queryWorker } = ctx;
-  const ownerEntityId = stack.ownerEntityId;
 
   /** Scope to a session if authenticated, else the anonymous view. */
-  function scopeFor(auth: TokenSession | null): ScopedStack {
-    return auth ? stack.asActor(auth) : stack.asEntity(null);
-  }
+  const scopeFor = (auth: TokenSession | null): ScopedStack => scopeOf(stack, auth);
 
   // POST /records/query — full query with content-field filters. Optional
   // auth, like GET /records: a superset of the same query surface, so an
@@ -92,8 +90,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.post('/', knownParams(), requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = await readJson(c);
-    const { typeId, content, options } = createOptionsFromWireRecord(body, auth, ownerEntityId);
-    const created = await stack.asActor(auth).create(typeId, content, options);
+    const scoped = scopeFor(auth);
+    const { typeId, content, options } = createOptionsFromWireRecord(body, scoped);
+    const created = await scoped.create(typeId, content, options);
     return c.json(serializeRecord(created), 200);
   });
 
@@ -114,25 +113,31 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // See docs/spec/wire-format.md § Records and § Optimistic concurrency.
   app.patch('/:id/content', knownParams(), requireAuth(), async (c) => {
     const patch = parseContentPatchBody(await readJson(c));
-    const updated = await stack
-      .asActor(c.get('auth')!)
-      .patchContent(c.req.param('id'), patch, ifMatchVersion(c));
+    const updated = await scopeFor(c.get('auth')).patchContent(
+      c.req.param('id'),
+      patch,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(updated));
   });
 
   app.put('/:id/parent', knownParams(), requireAuth(), async (c) => {
     const { parentId } = parseParentBody(await readJson(c));
-    const updated = await stack
-      .asActor(c.get('auth')!)
-      .setParent(c.req.param('id'), parentId, ifMatchVersion(c));
+    const updated = await scopeFor(c.get('auth')).setParent(
+      c.req.param('id'),
+      parentId,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(updated));
   });
 
   app.put('/:id/unlisted', knownParams(), requireAuth(), async (c) => {
     const { unlisted } = parseUnlistedBody(await readJson(c));
-    const updated = await stack
-      .asActor(c.get('auth')!)
-      .setUnlisted(c.req.param('id'), unlisted, ifMatchVersion(c));
+    const updated = await scopeFor(c.get('auth')).setUnlisted(
+      c.req.param('id'),
+      unlisted,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(updated));
   });
 
@@ -144,18 +149,17 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // See docs/spec/attachments.md § A purge strands the bytes it referenced.
   app.delete('/:id', requireAuth(), async (c) => {
     const { purge } = parseDeleteParams(new URL(c.req.url));
-    const { record } = await stack
-      .asActor(c.get('auth')!)
-      .delete(c.req.param('id'), { purge, ...ifMatchVersion(c) });
+    const { record } = await scopeFor(c.get('auth')).delete(c.req.param('id'), {
+      purge,
+      ...ifMatchVersion(c),
+    });
     if (!record) throw new StackNotFoundError('Record not found');
     return c.json(serializeRecord(record));
   });
 
   // POST /records/:id/undelete — reverses a soft delete; idempotent
   app.post('/:id/undelete', knownParams(), requireAuth(), async (c) => {
-    const restored = await stack
-      .asActor(c.get('auth')!)
-      .undelete(c.req.param('id'), ifMatchVersion(c));
+    const restored = await scopeFor(c.get('auth')).undelete(c.req.param('id'), ifMatchVersion(c));
     return c.json(serializeRecord(restored));
   });
 
@@ -176,17 +180,21 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   app.post('/:id/permissions', knownParams(), requireAuth(), async (c) => {
     const edits = parseAssociationEditsBody(await readJson(c));
-    const updated = await stack
-      .asActor(c.get('auth')!)
-      .editAccess(c.req.param('id'), edits, ifMatchVersion(c));
+    const updated = await scopeFor(c.get('auth')).editAccess(
+      c.req.param('id'),
+      edits,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(updated));
   });
 
   app.put('/:id/permissions', knownParams(), requireAuth(), async (c) => {
     const permissions = parsePermissionsBody(await readJson(c));
-    const updated = await stack
-      .asActor(c.get('auth')!)
-      .setAccess(c.req.param('id'), permissions, ifMatchVersion(c));
+    const updated = await scopeFor(c.get('auth')).setAccess(
+      c.req.param('id'),
+      permissions,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(updated));
   });
 
@@ -202,17 +210,21 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   app.post('/:id/associations', knownParams(), requireAuth(), async (c) => {
     const edits = parseAssociationEditsBody(await readJson(c));
-    const updated = await stack
-      .asActor(c.get('auth')!)
-      .editAssociations(c.req.param('id'), edits, ifMatchVersion(c));
+    const updated = await scopeFor(c.get('auth')).editAssociations(
+      c.req.param('id'),
+      edits,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(updated));
   });
 
   app.put('/:id/associations', knownParams(), requireAuth(), async (c) => {
     const associations = parseAssociationsBody(await readJson(c));
-    const updated = await stack
-      .asActor(c.get('auth')!)
-      .setAssociations(c.req.param('id'), associations, ifMatchVersion(c));
+    const updated = await scopeFor(c.get('auth')).setAssociations(
+      c.req.param('id'),
+      associations,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(updated));
   });
 
@@ -268,13 +280,11 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
 
   // POST /records/:id/restore/:version — creates new version, does not rewrite history
   app.post('/:id/restore/:version', knownParams(), requireAuth(), async (c) => {
-    const restored = await stack
-      .asActor(c.get('auth')!)
-      .restoreVersion(
-        c.req.param('id'),
-        parseUnsignedInt(c.req.param('version'), 'version number'),
-        ifMatchVersion(c),
-      );
+    const restored = await scopeFor(c.get('auth')).restoreVersion(
+      c.req.param('id'),
+      parseUnsignedInt(c.req.param('version'), 'version number'),
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(restored));
   });
 
@@ -285,9 +295,12 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // See docs/spec/wire-format.md § Migration commit.
   app.post('/:id/migrate', knownParams(), requireAuth(), async (c) => {
     const { toTypeId, content } = parseMigrationBody(await readJson(c));
-    const migrated = await stack
-      .asActor(c.get('auth')!)
-      .commitMigration(c.req.param('id'), toTypeId, content, ifMatchVersion(c));
+    const migrated = await scopeFor(c.get('auth')).commitMigration(
+      c.req.param('id'),
+      toTypeId,
+      content,
+      ifMatchVersion(c),
+    );
     return c.json(serializeRecord(migrated));
   });
 

@@ -79,8 +79,10 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/changes', changeRoutes(ctx, config, logger));
   app.route('/types', typeRoutes(ctx));
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
-  app.route('/blobs', blobRoutes(ctx));
-  app.route('/head', headRoutes(ctx));
+  // Offered exactly when the stack has the method each one calls, as
+  // discovery advertises them. See docs/spec/access-control.md § Serving requests.
+  if (ctx.stack.listBlobs) app.route('/blobs', blobRoutes(ctx));
+  if (ctx.stack.head) app.route('/head', headRoutes(ctx));
   app.route('/entity', entityRoutes(ctx));
   app.route('/tokens', tokenRoutes(ctx));
   app.route('/auth', authRoutes(ctx, config.authOrigin, logger));

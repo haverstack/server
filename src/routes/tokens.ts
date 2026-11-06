@@ -19,7 +19,7 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   // owner), and `subjectId` asserts a delegation out of band — the subject
   // that principal acts for (default: the principal itself), per
   // docs/spec/wire-format.md § The session a token names.
-  app.post('/', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  app.post('/', knownParams(), requireOwner(stack), async (c) => {
     const body = await readJson<{
       principalId?: string;
       subjectId?: string;
@@ -66,13 +66,13 @@ export function tokenRoutes(ctx: StackContext): Hono<AppEnv> {
   });
 
   // GET /tokens — list all DB-managed tokens; never returns token values
-  app.get('/', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  app.get('/', knownParams(), requireOwner(stack), async (c) => {
     const list = await tokens.listTokens();
     return c.json({ tokens: list.map(serializeToken) });
   });
 
   // DELETE /tokens/:id — revoke a token by its ID
-  app.delete('/:id', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  app.delete('/:id', knownParams(), requireOwner(stack), async (c) => {
     await tokens.revokeToken(c.req.param('id'));
     return c.body(null, 204);
   });

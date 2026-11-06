@@ -61,7 +61,7 @@ There is **no install base**. Nothing depends on this server's current behavior.
 
 ## Architecture rules
 
-- **The server is a thin, enforcing layer over `Stack`.** Validation, ID rules, and permission logic belong to `@haverstack/core`. Don't reimplement a model invariant in a route handler.
+- **The server is a thin, enforcing layer over `Stack`.** Validation, ID rules, and permission logic belong to `@haverstack/core`. Don't reimplement a model invariant in a route handler. A route reaches the stack through `scopeFor()` in `src/lib/scope.ts` and lets `ScopedStack` refuse; it makes no ownership or permission determination of its own. The one exception is a surface no `StackClient` verb serves, such as tokens and install review: `requireOwner()` gates those on `ScopedStack.ownerActingAlone`, core's answer.
 - **Routes are sub-apps.** One file per URL prefix in `src/routes/`, mounted in `src/app.ts`. Handlers parse, call `Stack`, serialize. Mechanism goes in `src/lib/`, cross-cutting concerns in `src/middleware/`.
 - **Errors take one of two paths, never a hand-rolled body.** A thrown core `StackError` is mapped by `errorMiddleware` via `serializeError()`. Failures with no core class use `wireError()`. Never `c.json()` an error directly; never let an engine error or a stack trace reach the client.
 - **Compare secrets with `safeCompare()`** from `src/middleware/auth.ts`. Every owner-token comparison goes through it.

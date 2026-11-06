@@ -132,14 +132,29 @@ describe('PATCH /entity/content', () => {
     expect(content.did).toBe(TEST_ENTITY_ID);
   });
 
-  it('returns 403 for a non-owner authenticated entity', async () => {
+  // The alias is gated as PATCH /records/:id/content is, by ScopedStack:
+  // a card the requester cannot read is not found, and one it reads but
+  // cannot write is refused.
+  it('answers a non-owner who cannot read the card with 404, as a missing one', async () => {
     await seedEntityRecord(t.ctx);
     const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
     const { status } = await req(t.app, 'PATCH', '/entity/content', {
       token,
       body: { name: 'Hacked' },
     });
+    expect(status).toBe(404);
+  });
+
+  it('refuses a non-owner who reads the card but cannot write it with 403', async () => {
+    const card = await seedEntityRecord(t.ctx);
+    await t.ctx.stack.setAccess(card.id, [{ kind: 'anyone', label: 'read' }]);
+    const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
+    const { status } = await req(t.app, 'PATCH', '/entity/content', {
+      token,
+      body: { name: 'Hacked' },
+    });
     expect(status).toBe(403);
+    expect((await t.ctx.stack.get(card.id))!.content).toMatchObject({ name: 'Test Entity' });
   });
 
   it('returns 401 for an unauthenticated request', async () => {

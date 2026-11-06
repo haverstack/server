@@ -17,14 +17,14 @@ import { serializeRecord } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
+import { scopeFor } from '../lib/scope.js';
 import { readJson } from '../lib/json.js';
 import { wireError } from '../wireError.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack } = ctx;
-  const { ownerEntityId } = stack;
 
   // Aborts while reading the body, the moment the byte count passes the
   // limit — no full-body buffer for an oversized upload, chunked or not.
@@ -50,7 +50,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     const appId = c.req.query('appId') || undefined;
 
     const data = new Uint8Array(await c.req.arrayBuffer());
-    const record = await stack.asActor(auth).putAttachment(data, { mimeType, filename, appId });
+    const record = await scopeFor(stack, auth).putAttachment(data, { mimeType, filename, appId });
     return c.json(serializeRecord(record), 200);
   });
 
@@ -62,7 +62,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     let data: Uint8Array;
     try {
-      data = await (auth ? stack.asActor(auth) : stack.asEntity(null)).getAttachment(fileId);
+      data = await scopeFor(stack, auth).getAttachment(fileId);
     } catch (e) {
       // Anonymous and denied is a transport-auth failure, distinct from an
       // authenticated requester lacking access; everything else belongs to
@@ -110,18 +110,20 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     });
   });
 
-  // DELETE /attachments/:fileId
-  app.delete('/:fileId', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  // DELETE /attachments/:fileId — ScopedStack refuses all but the owner
+  // acting alone.
+  app.delete('/:fileId', knownParams(), requireAuth(), async (c) => {
     const fileId = c.req.param('fileId');
-    await stack.deleteAttachment(fileId);
+    await scopeFor(stack, c.get('auth')).deleteAttachment(fileId);
     return c.body(null, 204);
   });
 
   // POST /attachments/gc — sweep and delete orphaned attachment bytes.
-  // Owner-only, invoke-only (no built-in scheduling): dryRun makes a
-  // cron-from-outside workflow safe. Body is entirely optional — every
-  // field defaults inside ScopedStack.collectAttachmentGarbage().
-  app.post('/gc', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  // Owner-only, which ScopedStack decides; invoke-only (no built-in
+  // scheduling): dryRun makes a cron-from-outside workflow safe. Body is
+  // entirely optional — every field defaults inside
+  // ScopedStack.collectAttachmentGarbage().
+  app.post('/gc', knownParams(), requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const body = (await c.req.text())
       ? await readJson<{ graceMs?: unknown; dryRun?: unknown }>(c, ['graceMs', 'dryRun'])
@@ -135,7 +137,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       ]);
     if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean')
       throw new StackValidationError([{ path: 'dryRun', message: 'Must be a boolean' }]);
-    const result = await stack.asActor(auth).collectAttachmentGarbage({
+    const result = await scopeFor(stack, auth).collectAttachmentGarbage({
       ...(body.graceMs !== undefined && { graceMs: body.graceMs }),
       ...(body.dryRun === true && { dryRun: true }),
     });

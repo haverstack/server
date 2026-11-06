@@ -4,6 +4,8 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 
 A query param or JSON body key an endpoint doesn't define is refused with `400` rather than ignored, and a boolean param takes only `true` or `false`.
 
+Authentication is this server's: a route that needs a session answers `401` without one. Permission is core's: every request is served through the session's `ScopedStack`, whose refusals are the `403`s and `404`s below. Token management and the owner's review of install requests are this server's own surfaces, and ask core whether the session is the owner acting alone.
+
 ## Discovery
 
 | Method | Path                 | Auth | Description                     |
@@ -357,12 +359,12 @@ An install has two halves. **The app's half** is `POST /installs`, pinned by cor
 | Method | Path              | Auth       | Description                           |
 | ------ | ----------------- | ---------- | ------------------------------------- |
 | GET    | `/entity`         | Required   | Get the owner entity record           |
-| PATCH  | `/entity/content` | Owner only | Merge a content patch into the record |
+| PATCH  | `/entity/content` | Required   | Merge a content patch into the record |
 | GET    | `/tokens`         | Owner only | List API tokens                       |
 | POST   | `/tokens`         | Owner only | Create an API token                   |
 | DELETE | `/tokens/:id`     | Owner only | Revoke an API token                   |
 
-`PATCH /entity/content` is an alias for `PATCH /records/:id/content` on the owner's entity record: the same bare patch, the same `If-Match`.
+`PATCH /entity/content` is an alias for `PATCH /records/:id/content` on the owner's entity record: the same bare patch, the same `If-Match` and the same write gate. A requester who cannot read the card gets `404`, as for a missing one, and one who reads it without write access gets `403`.
 
 `POST /tokens` accepts `{ principalId?, subjectId?, label?, expiresAt? }` — the same `Actor` names the response and `GET /tokens` report. `principalId` is the token's principal (who authenticates), defaulting to the owner; `subjectId` optionally asserts a delegation — the subject the principal acts for. Both, when given, must be DIDs (`422` otherwise). The response always reports both: `{ id, token, principalId, subjectId, label, createdAt, expiresAt }`. Omitting `subjectId` issues an undelegated token, where `subjectId` equals `principalId`.
 

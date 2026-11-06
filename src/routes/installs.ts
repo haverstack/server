@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { StackNotFoundError, StackValidationError, isPlanEmpty } from '@haverstack/core';
+import { StackNotFoundError, StackValidationError } from '@haverstack/core';
 import type { InstallPlan } from '@haverstack/core';
 import { parseInstallBody } from '@haverstack/core/wire';
 import { serializeRecord } from '@haverstack/wire-types';
@@ -7,7 +7,8 @@ import type { WireInstallResponse } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import { requireActingAlone, requireOwner } from '../middleware/auth.js';
+import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { scopeFor } from '../lib/scope.js';
 import { readJson } from '../lib/json.js';
 import type { InstallRequestEntry } from '../lib/installRequestStore.js';
 
@@ -22,22 +23,21 @@ import type { InstallRequestEntry } from '../lib/installRequestStore.js';
 export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack, installRequests } = ctx;
-  const ownerEntityId = stack.ownerEntityId;
 
-  // The key being installed is the session's principal, never named in
-  // the body, so no app can ask on behalf of a key it does not hold.
-  // Planning writes nothing; only an empty plan is answered as installed.
+  // ScopedStack.answerInstall() answers for the session's own key, which is
+  // never named in the body, and refuses a delegated session. Planning
+  // writes nothing; this route only queues a pending answer for the owner.
   // See docs/spec/wire-format.md § Installs.
-  app.post('/', knownParams(), requireActingAlone(), async (c) => {
+  app.post('/', knownParams(), requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const manifest = parseInstallBody(await readJson(c));
-    const plan = await stack.planInstall(manifest, { did: auth.principalId });
-    if (isPlanEmpty(plan)) {
+    const answer = await scopeFor(stack, auth).answerInstall(manifest);
+    if (answer.status === 'installed') {
       const pending = installRequests.forKey(auth.principalId);
       if (pending) installRequests.remove(pending.id);
       const body: WireInstallResponse = {
         status: 'installed',
-        install: serializeRecord(plan.existing!),
+        install: serializeRecord(answer.install),
       };
       return c.json(body, 200);
     }
@@ -46,13 +46,13 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(body, 202);
   });
 
-  app.get('/requests', knownParams(), requireOwner(ownerEntityId), (c) => {
+  app.get('/requests', knownParams(), requireOwner(stack), (c) => {
     return c.json({ requests: installRequests.list().map(serializeRequest) });
   });
 
   // Planned on every read rather than stored, since what a manifest would
   // change depends on the stack as it stands now.
-  app.get('/requests/:id', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  app.get('/requests/:id', knownParams(), requireOwner(stack), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
     const plan = await stack.planInstall(entry.manifest, { did: entry.did });
     return c.json({ ...serializeRequest(entry), plan: serializePlan(plan) });
@@ -61,7 +61,7 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   // Applies the manifest the id names, only while it still plans to the
   // fingerprint the owner's review returned; core refuses it otherwise.
   // See docs/spec/apps.md § Plan, then apply.
-  app.post('/requests/:id/approve', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  app.post('/requests/:id/approve', knownParams(), requireOwner(stack), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
     const { fingerprint } = await readJson<{ fingerprint?: unknown }>(c, ['fingerprint']);
     if (typeof fingerprint !== 'string') {
@@ -73,7 +73,7 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(body);
   });
 
-  app.delete('/requests/:id', knownParams(), requireOwner(ownerEntityId), (c) => {
+  app.delete('/requests/:id', knownParams(), requireOwner(stack), (c) => {
     installRequests.remove(requestOrNotFound(c.req.param('id')).id);
     return c.body(null, 204);
   });

@@ -7,7 +7,8 @@ import type { Config } from '../config.js';
 import type { ScopedStack, RecordChange } from '@haverstack/core';
 import type { TokenSession } from '@haverstack/core/wire';
 import { StackBadRequestError, StackPermissionError } from '@haverstack/core';
-import { parseChangeParams, isOwnerActingAlone } from '@haverstack/core/wire';
+import { parseChangeParams } from '@haverstack/core/wire';
+import { scopeFor as scopeOf } from '../lib/scope.js';
 import { serializeChange, isValidCursor } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
@@ -76,9 +77,7 @@ export function changeRoutes(
   });
 
   /** Scope to a session if authenticated, else the anonymous (public-only) view. */
-  function scopeFor(auth: TokenSession | null): ScopedStack {
-    return auth ? ctx.stack.asActor(auth) : ctx.stack.asEntity(null);
-  }
+  const scopeFor = (auth: TokenSession | null): ScopedStack => scopeOf(ctx.stack, auth);
 
   // Single-process only: events exist only in the process owning the
   // stack's storage (docs/spec/change-feed.md § Feed implementation
@@ -94,8 +93,9 @@ export function changeRoutes(
     // Refused before the stream opens: a throw from subscribe() after
     // streaming starts is caught below and merely closes the connection,
     // silently, having already answered 200. includeUnlisted owes a real
-    // 403, the same one GET /records answers with.
-    if (filter.includeUnlisted && !(auth && isOwnerActingAlone(auth, ctx.stack.ownerEntityId))) {
+    // 403, the same one GET /records answers with, so the route acts on
+    // core's answer to the standing ScopedStack.subscribe() asks.
+    if (filter.includeUnlisted && !scopeFor(auth).ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
 

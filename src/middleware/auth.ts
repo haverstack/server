@@ -1,7 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { StackPermissionError } from '@haverstack/core';
-import { isOwnerActingAlone } from '@haverstack/core/wire';
+import type { Stack } from '@haverstack/core';
+import { scopeFor } from '../lib/scope.js';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
@@ -53,33 +54,19 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
 }
 
 /**
- * Gates a route to the owner acting alone: undelegated, and authenticated
- * as the owner rather than merely delegated for it — the same test
- * `ScopedStack`'s own owner-only gates apply. See
- * docs/spec/access-control.md § Delegation: principal and subject.
+ * Gates one of this server's own surfaces — token management, the owner's
+ * review of install requests — to the owner acting alone. No StackClient
+ * verb serves these, so the route acts on core's answer to the standing,
+ * ScopedStack.ownerActingAlone, rather than being refused by it. Routes
+ * that serve a StackClient verb leave the refusal to ScopedStack.
+ * See docs/spec/access-control.md § Serving requests.
  */
-export function requireOwner(ownerEntityId: string): MiddlewareHandler<AppEnv> {
+export function requireOwner(stack: Stack): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const auth = c.get('auth');
     if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    if (!isOwnerActingAlone(auth, ownerEntityId)) {
+    if (!scopeFor(stack, auth).ownerActingAlone) {
       throw new StackPermissionError('Owner access required');
-    }
-    await next();
-  };
-}
-
-/**
- * Gates a route to a session acting as itself — not a principal acting
- * for someone else. Checked before the body is read, like requireOwner(),
- * so a refused identity is refused whatever it sent.
- */
-export function requireActingAlone(): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    const auth = c.get('auth');
-    if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    if (auth.principalId !== auth.subjectId) {
-      throw new StackPermissionError('This request must come from the key acting as itself');
     }
     await next();
   };
