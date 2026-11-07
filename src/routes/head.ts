@@ -9,14 +9,14 @@ import { requireAuth } from '../middleware/auth.js';
  * full learns whether anything was written meanwhile. Answered from the
  * adapter every write goes through; query workers only read.
  * ScopedStack.head() refuses all but the owner acting alone: a head moves
- * on writes to Records the requester cannot read. createApp() checks the
- * stack has head(). See docs/spec/wire-format.md § Head.
+ * on writes to Records the requester cannot read.
+ * See docs/spec/wire-format.md § Head.
  */
 export function headRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
   app.get('/', knownParams(), requireAuth(), async (c) => {
-    const body: WireHeadResponse = { head: await c.get('scope').head!() };
+    const body: WireHeadResponse = { head: await c.get('scope').head() };
     return c.json(body);
   });
 

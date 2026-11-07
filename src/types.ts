@@ -1,5 +1,5 @@
-import type { ScopedStack } from '@haverstack/core';
 import type { TokenSession } from '@haverstack/core/wire';
+import type { RequestScope } from './lib/scope.js';
 
 /** Hono context variable map shared across all route files. */
 export type AppEnv = {
@@ -12,7 +12,7 @@ export type AppEnv = {
      * ownership or permission itself. See docs/spec/access-control.md
      * § Serving requests.
      */
-    scope: ScopedStack;
+    scope: RequestScope;
     requestId: string;
   };
 };

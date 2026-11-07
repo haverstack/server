@@ -12,6 +12,7 @@ import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
 import { safeCompare } from '../middleware/auth.js';
 import { FrameGate } from '../lib/frameGate.js';
+import { Held } from '../lib/held.js';
 import { decodeCursor } from '../lib/resumeCursor.js';
 import { ResumeBufferRegistry, resumeBufferKey, type ResumeEntry } from '../lib/resumeBuffer.js';
 
@@ -82,7 +83,7 @@ export function changeRoutes(
   app.get('/', async (c) => {
     const url = new URL(c.req.url);
     const auth = c.get('auth');
-    const scoped = c.get('scope');
+    const scope = c.get('scope');
     const { filter, includeRecords } = parseChangeParams(url);
     const presentedRaw = presentedCursorRaw(c, url);
 
@@ -106,14 +107,13 @@ export function changeRoutes(
 
     // `resume: false` — a discovery-conformant server that mints no cursors
     // at all, reachable only through WellknownRouteOptions' matching test
-    // toggle. Changes arriving before the stream opens wait for it.
+    // toggle. Changes arriving before the stream opens are held for it.
     const plainFeed = async (): Promise<Feed> => {
-      const early: RecordChange[] = [];
-      let deliver: ((change: RecordChange) => void) | undefined;
-      const unsubscribe = await scoped.subscribe(
-        (change: RecordChange) => (deliver ? deliver(change) : early.push(change)),
-        { filter, includeRecords },
-      );
+      const held = new Held<RecordChange>();
+      const unsubscribe = await scope.subscribe((change: RecordChange) => held.push(change), {
+        filter,
+        includeRecords,
+      });
       return {
         unsubscribe,
         run: async (send) => {
@@ -122,35 +122,29 @@ export function changeRoutes(
             const reason: ChangeResetReason = 'not_supported';
             send('reset', { reason });
           }
-          deliver = (change) => send('record', serializeChange(change));
-          for (const change of early) deliver(change);
+          held.open((change) => send('record', serializeChange(change)));
         },
       };
     };
 
     const resumableFeed = async (): Promise<Feed> => {
       const key = resumeBufferKey({
-        principalId: scoped.principalId,
-        subjectId: scoped.subjectId,
+        principalId: scope.principalId,
+        subjectId: scope.subjectId,
         filter,
         includeRecords,
       });
       const buffer = await resumeBuffers.acquire(key, (onChange) =>
-        scoped.subscribe(onChange, { filter, includeRecords }),
+        scope.subscribe(onChange, { filter, includeRecords }),
       );
 
       // Attached before anything below awaits, so there is no gap
       // between what the backlog snapshot covers and what the live
-      // buffer reports. `replaying` holds live arrivals until the
+      // buffer reports. Live arrivals are held until the
       // permission-rechecking replay finishes, so a change appended
       // mid-replay can't overtake an older, still-pending backlog frame.
-      let replaying = true;
-      let sendLive: Send | undefined;
-      const queued: ResumeEntry[] = [];
-      const detachLive = buffer.subscribeLive((entry) => {
-        if (replaying) queued.push(entry);
-        else sendLive!('record', entry.frame, entry.frame.cursor);
-      });
+      const live = new Held<ResumeEntry>();
+      const detachLive = buffer.subscribeLive((entry) => live.push(entry));
 
       return {
         unsubscribe: () => {
@@ -185,7 +179,7 @@ export function changeRoutes(
               // (docs/spec/events.md). Everything else still has its record
               // ID, so a grant revoked during the gap is caught here.
               if (!entry.isPurge) {
-                const stillReadable = await scoped.get(entry.recordId);
+                const stillReadable = await scope.get(entry.recordId);
                 if (!stillReadable) continue;
               }
               // Once the gate trips this connection is closing, so the
@@ -194,11 +188,7 @@ export function changeRoutes(
             }
           }
 
-          replaying = false;
-          sendLive = send;
-          for (const entry of queued) {
-            if (!send('record', entry.frame, entry.frame.cursor)) break;
-          }
+          live.open((entry) => send('record', entry.frame, entry.frame.cursor));
         },
       };
     };

@@ -24,12 +24,14 @@ export function errorMiddleware(logger: Logger, stack: Stack): ErrorHandler<AppE
       // grant, which docs/spec/identity.md asks be logged. Anonymous
       // denials are bodyless 401s from wireError() and never reach here.
       const auth = c.get('auth');
-      if (err instanceof StackPermissionError && auth) {
+      // Unset when the failure came from authMiddleware itself.
+      const scope = c.get('scope') as AppEnv['Variables']['scope'] | undefined;
+      if (err instanceof StackPermissionError && scope?.principalId) {
         logger.warn(
           {
             requestId: c.get('requestId'),
-            principalId: auth.principalId,
-            subjectId: auth.subjectId,
+            principalId: scope.principalId,
+            subjectId: scope.subjectId,
           },
           'Denied a verified requester',
         );
@@ -41,15 +43,15 @@ export function errorMiddleware(logger: Logger, stack: Stack): ErrorHandler<AppE
       // already failing, recovers it for the log alone. Debug rather than
       // warn — this is the sharing graph, which the spec asks stay out of a
       // general-purpose aggregator by default.
-      if (err instanceof StackNotFoundError && auth) {
+      if (err instanceof StackNotFoundError && scope?.principalId) {
         const recordId = c.req.param('id');
         if (recordId) {
           const existing = await stack.get(recordId, { includeDeleted: true });
           logger.debug(
             {
               requestId: c.get('requestId'),
-              principalId: auth.principalId,
-              subjectId: auth.subjectId,
+              principalId: scope.principalId,
+              subjectId: scope.subjectId,
               recordId,
               existed: existing !== null,
               // Always 'read': ScopedStack collapses to StackNotFoundError

@@ -10,7 +10,7 @@ import { readPage } from '../lib/page.js';
  * GET /blobs — every blob the store holds, fileId ascending, so the owner
  * can read a hosted stack in full. ScopedStack.listBlobs() refuses all
  * but the owner acting alone: a listing names files no Record the
- * requester reaches names. createApp() checks the stack has listBlobs().
+ * requester reaches names.
  * See docs/spec/wire-format.md § Blobs.
  */
 export function blobRoutes(): Hono<AppEnv> {
@@ -18,10 +18,10 @@ export function blobRoutes(): Hono<AppEnv> {
 
   app.get('/', requireAuth(), async (c) => {
     const query = parseBlobsParams(new URL(c.req.url));
-    const scoped = c.get('scope');
+    const scope = c.get('scope');
     const { rows, cursor } = await readPage(
       query.limit,
-      (limit) => scoped.listBlobs!({ ...query, limit }),
+      (limit) => scope.listBlobs({ ...query, limit }),
       (blob) => blob.fileId,
     );
     const body: WireBlobsResponse = { blobs: rows.map(serializeBlobInfo), cursor };

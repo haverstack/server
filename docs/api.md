@@ -4,7 +4,11 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 
 A query param or JSON body key an endpoint doesn't define is refused with `400` rather than ignored, and a boolean param takes only `true` or `false`.
 
-Authentication is this server's: a route that needs a session answers `401` without one. Permission is core's: every request is served through the session's `ScopedStack`, whose refusals are the `403`s and `404`s below, so a body is validated before permission is decided and a malformed one is `400` or `422` whoever sends it. `GET /changes` subscribes before its stream opens, so a refused subscription is an ordinary error response. This server's own surfaces, token management and the owner's review of install requests, are the one exception: no `StackClient` verb serves them, so they ask core whether the session is the owner acting alone, and refuse before reading a body.
+**Authentication is this server's; permission is core's.** A route that needs a session answers `401` without one. Every request is then served through the session's `ScopedStack`, whose refusals are the `403`s and `404`s below.
+
+- **A body is validated before permission is decided**, so a malformed one is `400` or `422` whoever sends it.
+- **`GET /changes` subscribes before its stream opens**, so a refused subscription is an ordinary error response.
+- **This server's own surfaces are the one exception**: token management and the owner's review of install requests. No `StackClient` verb serves them, so they ask core whether the session is the owner acting alone, and refuse before reading a body.
 
 ## Discovery
 

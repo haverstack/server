@@ -21,11 +21,11 @@ export function entityRoutes(): Hono<AppEnv> {
   // so it takes the same bare patch, the same If-Match and the same write
   // gate, which ScopedStack decides. See docs/spec/wire-format.md § Entity.
   app.patch('/content', knownParams(), requireAuth(), async (c) => {
-    const scoped = c.get('scope');
+    const scope = c.get('scope');
     const patch = parseContentPatchBody(await readJson(c));
-    const record = await scoped.getOwnerEntity();
+    const record = await scope.getOwnerEntity();
     if (!record) throw new StackNotFoundError('Entity record not found');
-    const updated = await scoped.patchContent(record.id, patch, ifMatchVersion(c));
+    const updated = await scope.patchContent(record.id, patch, ifMatchVersion(c));
     return c.json(serializeRecord(updated));
   });
 

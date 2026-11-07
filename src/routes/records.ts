@@ -83,9 +83,9 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   // docs/spec/wire-format.md § Records.
   app.post('/', knownParams(), requireAuth(), async (c) => {
     const body = await readJson(c);
-    const scoped = c.get('scope');
-    const { typeId, content, options } = createOptionsFromWireRecord(body, scoped);
-    const created = await scoped.create(typeId, content, options);
+    const scope = c.get('scope');
+    const { typeId, content, options } = createOptionsFromWireRecord(body, scope);
+    const created = await scope.create(typeId, content, options);
     return c.json(serializeRecord(created), 200);
   });
 
@@ -214,10 +214,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.get('/:id/journal', async (c) => {
     const id = c.req.param('id');
     const query = parseJournalParams(new URL(c.req.url));
-    const scoped = c.get('scope');
+    const scope = c.get('scope');
     const { rows, cursor } = await readPage(
       query.limit,
-      (limit) => scoped.getJournal(id, { ...query, limit }),
+      (limit) => scope.getJournal(id, { ...query, limit }),
       (entry) => entry.seq,
     );
     const body: WireJournalResponse = { entries: rows.map(serializeJournalEntry), cursor };
@@ -232,10 +232,10 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   app.get('/:id/versions', async (c) => {
     const id = c.req.param('id');
     const query = parseVersionsParams(new URL(c.req.url));
-    const scoped = c.get('scope');
+    const scope = c.get('scope');
     const { rows, cursor } = await readPage(
       query.limit,
-      (limit) => scoped.getVersions(id, { ...query, limit }),
+      (limit) => scope.getVersions(id, { ...query, limit }),
       (version) => version.version,
     );
     const body: WireVersionsResponse = { versions: rows.map(serializeVersion), cursor };

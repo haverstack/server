@@ -5,6 +5,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
 import { scopeForSession } from '../lib/scope.js';
+import type { RequestScope } from '../lib/scope.js';
 
 /**
  * Constant-time string equality, for comparing a presented credential
@@ -51,12 +52,22 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
   };
 }
 
-/** A session is required; what it may do is ScopedStack's to decide. */
-export function requireAuth(): MiddlewareHandler<AppEnv> {
+/**
+ * A route that needs a session: 401 without one, and then `check`, if
+ * any, of the session's scope. The one place this server refuses on
+ * authentication.
+ */
+function sessionGate(check?: (scope: RequestScope) => void): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (!c.get('auth')) return unauthorized(c);
+    check?.(c.get('scope'));
     await next();
   };
+}
+
+/** A session is required; what it may do is ScopedStack's to decide. */
+export function requireAuth(): MiddlewareHandler<AppEnv> {
+  return sessionGate();
 }
 
 /**
@@ -68,9 +79,7 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
  * See docs/spec/access-control.md § Serving requests.
  */
 export function requireOwner(): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    if (!c.get('auth')) return unauthorized(c);
-    if (!c.get('scope').ownerActingAlone) throw new StackPermissionError('Owner access required');
-    await next();
-  };
+  return sessionGate((scope) => {
+    if (!scope.ownerActingAlone) throw new StackPermissionError('Owner access required');
+  });
 }
