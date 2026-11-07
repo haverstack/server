@@ -62,7 +62,11 @@ There is **no install base**. Nothing depends on this server's current behavior.
 ## Architecture rules
 
 - **The server is a thin, enforcing layer over `Stack`.** Validation, ID rules, and permission logic belong to `@haverstack/core`. Don't reimplement a model invariant in a route handler.
-- **Routes are sub-apps.** One file per URL prefix in `src/routes/`, mounted in `src/app.ts`. Handlers parse, call `Stack`, serialize. Mechanism goes in `src/lib/`, cross-cutting concerns in `src/middleware/`.
+- **Every request is served through its scope.** A route reaches the stack through `c.get('scope')`, the session's `ScopedStack`, and lets it refuse; it makes no ownership or permission determination of its own. Identity comes from the scope; `c.get('auth')` only says whether a session is present.
+- **`scopeForSession()` is the one builder of a scope.** `authMiddleware` calls it once per request, and a query worker calls it too, since a session reaches the worker only as data.
+- **A stream subscribes before it opens**, so `ScopedStack`'s refusal is an ordinary error response, never a `200` that closes.
+- **This server's own surfaces are the one exception.** A surface no `StackClient` verb serves, such as tokens and install review, is gated with `requireOwner()` on core's answer, `ScopedStack.ownerActingAlone`.
+- **Routes are sub-apps.** One file per URL prefix in `src/routes/`, mounted in `src/app.ts`. Handlers parse, call `ScopedStack`, serialize. Mechanism goes in `src/lib/`, cross-cutting concerns in `src/middleware/`.
 - **Errors take one of two paths, never a hand-rolled body.** A thrown core `StackError` is mapped by `errorMiddleware` via `serializeError()`. Failures with no core class use `wireError()`. Never `c.json()` an error directly; never let an engine error or a stack trace reach the client.
 - **Compare secrets with `safeCompare()`** from `src/middleware/auth.ts`. Every owner-token comparison goes through it.
 - **Anything that can scan the whole store runs on `QueryWorkerPool`**, because `node:sqlite` is synchronous and uncancellable. Point lookups and writes stay on the request thread.

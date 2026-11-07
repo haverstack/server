@@ -13,9 +13,9 @@ import type { WireError } from '@haverstack/wire-types';
 
 /**
  * Passed as `workerData` when a query worker is spawned. dbPath is the
- * whole of it: a worker calls LocalAdapter.open(), which reads timezone
- * (and the rest of the stack config) out of the database itself — only
- * creating a store takes one as input, and workers never create one.
+ * whole of it: a worker calls LocalAdapter.open(), which reads the
+ * stack's config out of the database itself — only creating a store takes
+ * one as input, and workers never create one.
  */
 export type QueryWorkerInit = {
   dbPath: string;
@@ -23,7 +23,7 @@ export type QueryWorkerInit = {
 
 export type QueryRequest = {
   id: number;
-  /** null = anonymous (Stack.asEntity(null)), matching records.ts's scopeFor(). */
+  /** The request's session, or null for anonymous; the worker rebuilds its scope with scopeForSession(). */
   session: TokenSession | null;
   query: StackQuery;
 };

@@ -19,6 +19,7 @@ import { LocalAdapter } from '@haverstack/adapter-local';
 import { Stack } from '@haverstack/core';
 import { serializeError } from '@haverstack/wire-types';
 import type { QueryRequest, QueryResponse, QueryWorkerInit } from './protocol.js';
+import { scopeForSession } from '../scope.js';
 
 if (!parentPort) {
   throw new Error('query worker must be run as a worker_thread, not the main thread');
@@ -36,7 +37,7 @@ const stack = await Stack.open(adapter);
 parentPort.on('message', async (req: QueryRequest) => {
   const port = parentPort!;
   try {
-    const scoped = req.session ? stack.asActor(req.session) : stack.asEntity(null);
+    const scoped = scopeForSession(stack, req.session);
     const result = await scoped.query(req.query);
     port.postMessage({ id: req.id, ok: true, result } satisfies QueryResponse);
   } catch (err) {

@@ -707,53 +707,34 @@ describe('Records', () => {
       return { fileId: (record.content as { fileId: string }).fileId, record };
     }
 
-    function detailPaths(data: unknown): string[] {
-      return (data as { error: { details: Array<{ path: string }> } }).error.details.map(
-        (d) => d.path,
-      );
+    /** Refused as a conflict naming the field, and the record left as it was. */
+    async function expectImmutable(body: Record<string, unknown>, field: string) {
+      const { record } = await seedAttachment(t.ctx);
+      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}/content`, {
+        token: TEST_TOKEN,
+        body,
+      });
+      expect(status).toBe(409);
+      const { error } = data as { error: { code: string; message: string } };
+      expect(error.code).toBe('conflict');
+      expect(error.message).toBe(`Cannot change _attachment.${field}: it is immutable once set.`);
+      expect((await t.ctx.stack.get(record.id))?.content).toEqual(record.content);
     }
 
-    it('returns 422 when PATCH attempts to change fileId', async () => {
-      const { record } = await seedAttachment(t.ctx);
-      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}/content`, {
-        token: TEST_TOKEN,
-        body: { fileId: 'tampered-id' },
-      });
-      expect(status).toBe(422);
-      expect(detailPaths(data)).toContain('fileId');
+    it('returns 409 when PATCH attempts to change fileId', async () => {
+      await expectImmutable({ fileId: 'tampered-id' }, 'fileId');
     });
 
-    it('returns 422 when PATCH attempts to change size', async () => {
-      const { record } = await seedAttachment(t.ctx);
-      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}/content`, {
-        token: TEST_TOKEN,
-        body: { size: 9999 },
-      });
-      expect(status).toBe(422);
-      expect(detailPaths(data)).toContain('size');
+    it('returns 409 when PATCH attempts to change size', async () => {
+      await expectImmutable({ size: 9999 }, 'size');
     });
 
-    it('returns 422 when PATCH attempts to change mimeType', async () => {
-      const { record } = await seedAttachment(t.ctx);
-      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}/content`, {
-        token: TEST_TOKEN,
-        body: { mimeType: 'text/html' },
-      });
-      expect(status).toBe(422);
-      expect(detailPaths(data)).toContain('mimeType');
+    it('returns 409 when PATCH attempts to change mimeType', async () => {
+      await expectImmutable({ mimeType: 'text/html' }, 'mimeType');
     });
 
-    it('reports all attempted immutable fields', async () => {
-      const { record } = await seedAttachment(t.ctx);
-      const { status, data } = await req(t.app, 'PATCH', `/records/${record.id}/content`, {
-        token: TEST_TOKEN,
-        body: { fileId: 'x', size: 0, mimeType: 'text/html' },
-      });
-      expect(status).toBe(422);
-      const paths = detailPaths(data);
-      expect(paths).toContain('fileId');
-      expect(paths).toContain('size');
-      expect(paths).toContain('mimeType');
+    it('refuses a PATCH changing several immutable fields, naming the first', async () => {
+      await expectImmutable({ fileId: 'x', size: 0, mimeType: 'text/html' }, 'fileId');
     });
 
     it('allows PATCH to change filename', async () => {
@@ -940,10 +921,10 @@ describe('Records', () => {
       expect(purged).toBe(409);
     });
 
-    it('refuses to change _config.entityId', async () => {
+    it('refuses to change _config.ownerEntityId', async () => {
       const { status } = await req(t.app, 'PATCH', '/records/_config/content', {
         token: TEST_TOKEN,
-        body: { entityId: 'someone-else' },
+        body: { ownerEntityId: OTHER_ENTITY_ID },
       });
       expect(status).toBe(409);
     });
@@ -1022,13 +1003,13 @@ describe('Records', () => {
         token: TEST_TOKEN,
         body: { did: 'did:key:zChanged' },
       });
-      expect(didChange).toBe(422);
+      expect(didChange).toBe(409);
 
       const { status: appIdChange } = await req(t.app, 'PATCH', `/records/${id}/content`, {
         token: TEST_TOKEN,
         body: { appId: 'changed' },
       });
-      expect(appIdChange).toBe(422);
+      expect(appIdChange).toBe(409);
 
       const { status: nameChange, data: renamed } = await req(
         t.app,
@@ -1386,6 +1367,23 @@ describe('Records', () => {
       expect((data as { unlistedAt?: string }).unlistedAt).toBeDefined();
     });
 
+    it('refuses unlistedAt from a contributor who cannot read what it creates', async () => {
+      await t.ctx.stack.grantType(familyOf(NOTE_TYPE_ID), {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
+      const { status } = await req(t.app, 'POST', '/records', {
+        token,
+        body: {
+          typeId: NOTE_TYPE_ID,
+          content: { body: 'into the box' },
+          unlistedAt: new Date().toISOString(),
+        },
+      });
+      expect(status).toBe(403);
+    });
+
     it('an unlisted create is absent from an unfiltered GET /records', async () => {
       const { data: created } = await req(t.app, 'POST', '/records', {
         token: TEST_TOKEN,
@@ -1408,9 +1406,9 @@ describe('Records', () => {
       expect(getStatus).toBe(200);
     });
 
-    it('a non-owner grantee with a plain create grant may create unlisted — not owner-only', async () => {
+    it('a non-owner grantee who can read what it creates may create unlisted — not owner-only', async () => {
       await t.ctx.stack.grantType(familyOf(NOTE_TYPE_ID), {
-        actions: ['create'],
+        actions: ['create', 'read-own'],
         grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
       });
       const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
@@ -1424,6 +1422,23 @@ describe('Records', () => {
       });
       expect(status).toBe(200);
       expect((data as { unlistedAt?: string }).unlistedAt).toBeDefined();
+    });
+
+    it('refuses unlistedAt from a contributor who cannot read what it creates', async () => {
+      await t.ctx.stack.grantType(familyOf(NOTE_TYPE_ID), {
+        actions: ['create'],
+        grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+      });
+      const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
+      const { status } = await req(t.app, 'POST', '/records', {
+        token,
+        body: {
+          typeId: NOTE_TYPE_ID,
+          content: { body: 'into the box' },
+          unlistedAt: new Date().toISOString(),
+        },
+      });
+      expect(status).toBe(403);
     });
 
     it('refuses unlistedAt from a delegated app acting for a non-owner subject', async () => {
@@ -1624,13 +1639,22 @@ describe('Records', () => {
     });
 
     it("returns the record even when the change revokes the caller's own read access", async () => {
-      // The permissions endpoints are gated on mayReshare(), owner-or-creator
-      // rather than plain write access — OTHER_ENTITY_ID must be the record's
-      // author, not merely a grantee, to reach it as a non-owner.
+      // The permissions endpoints are gated on mayReshare(): the owner, or a
+      // creator who can read the record. OTHER_ENTITY_ID authored it and
+      // reads it only through the element this change removes.
       const record = await t.ctx.stack.create(
         NOTE_TYPE_ID,
         { body: 'x' },
-        { createdBy: { subjectId: OTHER_ENTITY_ID } },
+        {
+          createdBy: { subjectId: OTHER_ENTITY_ID },
+          permissions: [
+            {
+              kind: 'permission',
+              label: 'read',
+              grantee: { kind: 'entity', entityId: OTHER_ENTITY_ID },
+            },
+          ],
+        },
       );
       const { token } = await t.ctx.adapter.createToken({ subjectId: OTHER_ENTITY_ID });
       const { status, data } = await req(t.app, 'PUT', `/records/${record.id}/permissions`, {

@@ -7,8 +7,8 @@ describe('startTestServer', () => {
     try {
       const discovery = await fetch(`${server.url}/.well-known/stack`);
       expect(discovery.status).toBe(200);
-      const body = (await discovery.json()) as { entityId: string };
-      expect(body.entityId).toBe(server.ctx.stack.ownerEntityId);
+      const body = (await discovery.json()) as { ownerEntityId: string };
+      expect(body.ownerEntityId).toBe(server.ctx.stack.ownerEntityId);
 
       const created = await fetch(`${server.url}/types`, {
         method: 'GET',

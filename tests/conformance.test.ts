@@ -45,6 +45,8 @@ import {
   setParentFixtures,
   setUnlistedFixtures,
   getJournalFixtures,
+  listBlobsFixtures,
+  getHeadFixtures,
   getVersionsFixtures,
   getVersionFixtures,
   getVersionsSequenceFixtures,
@@ -64,7 +66,13 @@ import {
 } from '@haverstack/conformance-fixtures';
 import * as conformanceFixtures from '@haverstack/conformance-fixtures';
 import type { ConformanceFixture } from '@haverstack/conformance-fixtures';
-import type { WireRecord, WireJournalResponse } from '@haverstack/wire-types';
+import type {
+  WireBlobsResponse,
+  WireError,
+  WireHeadResponse,
+  WireJournalResponse,
+  WireRecord,
+} from '@haverstack/wire-types';
 import { generateId, hashSchema } from '@haverstack/core';
 import type { AuthorityAssociation } from '@haverstack/core';
 import {
@@ -73,6 +81,7 @@ import {
   testConfig,
   TEST_TOKEN,
   TEST_ENTITY_ID,
+  OTHER_ENTITY_ID,
   logger,
   type TestApp,
   familyOf,
@@ -209,24 +218,11 @@ describe('discovery fixtures', () => {
     expect((d.version as string).split('.')[0]).toBe(
       (fixture.responseBody!.version as string).split('.')[0],
     );
-    expect(typeof d.entityId).toBe('string');
+    expect(typeof d.ownerEntityId).toBe('string');
     const capabilities = d.capabilities as { sort: { fields: unknown } };
     expect(Array.isArray(capabilities.sort.fields)).toBe(true);
     for (const field of fixture.responseBody!.capabilities!.sort!.fields!) {
       expect(capabilities.sort.fields).toContain(field);
-    }
-  });
-
-  test('discovery-omits-absent-timezone', async () => {
-    const fixture = discoveryFixtures.find((f) => f.name === 'discovery-omits-absent-timezone')!;
-    handled.add(fixture.name);
-    const noTzApp = await buildTestApp({ timezone: undefined });
-    try {
-      const { status, data } = await req(noTzApp.app, fixture.method, fixture.path);
-      expect(status).toBe(fixture.responseStatus);
-      expect('timezone' in (data as Record<string, unknown>)).toBe(false);
-    } finally {
-      await noTzApp.cleanup();
     }
   });
 
@@ -262,6 +258,18 @@ describe('discovery fixtures', () => {
     const { status, data } = await req(t.app, fixture.method, fixture.path);
     expect(status).toBe(fixture.responseStatus);
     expect((data as { installs?: unknown }).installs).toEqual(fixture.responseBody!.installs);
+  });
+
+  test('discovery-advertises-what-a-copy-reads', async () => {
+    const fixture = discoveryFixtures.find(
+      (f) => f.name === 'discovery-advertises-what-a-copy-reads',
+    )!;
+    handled.add(fixture.name);
+    const { status, data } = await req(t.app, fixture.method, fixture.path);
+    expect(status).toBe(fixture.responseStatus);
+    const d = data as { blobs?: unknown; head?: unknown };
+    expect(d.blobs).toEqual(fixture.responseBody!.blobs);
+    expect(d.head).toEqual(fixture.responseBody!.head);
   });
 
   test('coverage', () => {
@@ -957,10 +965,38 @@ describe('getRecord sequence fixtures', () => {
       (f) => f.name === 'get-record-after-soft-delete',
     )!;
     handled.add(sequence.name);
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    // A reader other than the owner, who may read and write the record.
+    const record = await t.ctx.stack.create(
+      NOTE_TYPE,
+      { title: 'x' },
+      {
+        permissions: (['read', 'write'] as const).map((label) => ({
+          kind: 'permission' as const,
+          label,
+          grantee: { kind: 'entity' as const, entityId: CONTRIBUTOR_ID },
+        })),
+      },
+    );
+    const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
     for (const step of sequence.steps) {
-      const { status } = await dispatchAt(step, record.id);
+      const { status, data } = await dispatchAt(step, record.id, { token });
       expect(status).toBe(step.responseStatus);
+      if (status === 200) expect((data as WireRecord).content, step.name).toEqual({});
+    }
+  });
+
+  test('get-record-after-soft-delete-owner', async () => {
+    const sequence = getRecordSequenceFixtures.find(
+      (f) => f.name === 'get-record-after-soft-delete-owner',
+    )!;
+    handled.add(sequence.name);
+    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'Hello' });
+    for (const step of sequence.steps) {
+      const { status, data } = await dispatchAt(step, record.id, { token: TEST_TOKEN });
+      expect(status).toBe(step.responseStatus);
+      const d = data as WireRecord;
+      expect(d.content, step.name).toEqual((step.responseBody as WireRecord).content);
+      expect(d.deletedAt).toBeDefined();
     }
   });
 
@@ -999,9 +1035,9 @@ describe('deleteRecord fixtures', () => {
     const d = data as WireRecord;
     expect(d.version).toBe(fixture.responseBody!.version);
     expect(d.deletedAt).toBeDefined();
-    // The tombstone projection: content is what a soft delete removes. See
+    // Whole, as the owner acting alone reads it. See
     // docs/spec/versioning.md § The tombstone is literal.
-    expect(d.content).toEqual({});
+    expect(d.content).toEqual(fixture.responseBody!.content);
   });
 
   test('delete-record-purge', async () => {
@@ -1636,6 +1672,100 @@ describe('journal fixtures', () => {
 });
 
 // -------------------------------------------------------
+// Blobs and head — what lets the owner read a hosted stack in full, as one
+// moment. Both are served to the owner acting alone.
+// -------------------------------------------------------
+
+describe('blob listing and head fixtures', () => {
+  const handled = new Set<string>();
+  const fixture = (name: string) =>
+    [...listBlobsFixtures, ...getHeadFixtures].find((f) => f.name === name)!;
+
+  /** One blob a Record names and one no Record names, the fixture's bytes. */
+  async function holdFixtureBlobs() {
+    await t.ctx.stack.putAttachment(new Uint8Array([1, 2, 3]), { mimeType: 'image/png' });
+    await t.ctx.adapter.putBlob(new Uint8Array([9, 9]));
+  }
+
+  const blobIds = (body: unknown) =>
+    (body as WireBlobsResponse).blobs.map(({ fileId, size }) => ({ fileId, size }));
+
+  test('list-blobs-reads-every-blob-in-fileId-order', async () => {
+    const f = fixture('list-blobs-reads-every-blob-in-fileId-order');
+    handled.add(f.name);
+    await holdFixtureBlobs();
+    const { status, data } = await req(t.app, f.method, f.path, { token: TEST_TOKEN });
+    expect(status).toBe(f.responseStatus);
+    expect(blobIds(data)).toEqual(blobIds(f.responseBody));
+    for (const blob of (data as WireBlobsResponse).blobs) {
+      expect(new Date(blob.modifiedAt).toISOString()).toBe(blob.modifiedAt);
+    }
+    expect((data as WireBlobsResponse).cursor).toBeNull();
+  });
+
+  test('list-blobs-page-reports-a-cursor-to-resume-from', async () => {
+    const f = fixture('list-blobs-page-reports-a-cursor-to-resume-from');
+    handled.add(f.name);
+    await holdFixtureBlobs();
+    const page = await req(t.app, f.method, f.path, { token: TEST_TOKEN });
+    expect(page.status).toBe(f.responseStatus);
+    expect(blobIds(page.data)).toEqual(blobIds(f.responseBody));
+    const { cursor } = page.data as WireBlobsResponse;
+    expect(cursor).toBe((f.responseBody as WireBlobsResponse).cursor);
+
+    const rest = await req(t.app, 'GET', `/blobs?afterFileId=${cursor}`, { token: TEST_TOKEN });
+    expect((rest.data as WireBlobsResponse).blobs).toHaveLength(1);
+    expect((rest.data as WireBlobsResponse).cursor).toBeNull();
+  });
+
+  test('get-head-reports-where-writes-stand', async () => {
+    const f = fixture('get-head-reports-where-writes-stand');
+    handled.add(f.name);
+    const read = async () => {
+      const { status, data } = await req(t.app, f.method, f.path, { token: TEST_TOKEN });
+      expect(status).toBe(f.responseStatus);
+      return (data as WireHeadResponse).head;
+    };
+    const before = await read();
+    expect(typeof before).toBe('string');
+    // Reads leave it standing, and every kind of write moves it.
+    await req(t.app, 'GET', '/blobs', { token: TEST_TOKEN });
+    expect(await read()).toBe(before);
+    await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+    const afterRecord = await read();
+    expect(afterRecord).not.toBe(before);
+    await t.ctx.adapter.putBlob(new Uint8Array([7]));
+    expect(await read()).not.toBe(afterRecord);
+  });
+
+  test.each([
+    'list-blobs-non-owner',
+    'list-blobs-delegated-session',
+    'get-head-non-owner',
+    'get-head-delegated-session',
+  ])('%s', async (name) => {
+    const f = fixture(name);
+    handled.add(f.name);
+    const { token } = await t.ctx.adapter.createToken(
+      name.endsWith('delegated-session')
+        ? { subjectId: TEST_ENTITY_ID, principalId: OTHER_ENTITY_ID }
+        : { subjectId: OTHER_ENTITY_ID },
+    );
+    const { status, data } = await req(t.app, f.method, f.path, { token });
+    expect(status).toBe(f.responseStatus);
+    expect((data as WireError).error.code).toBe((f.responseBody as WireError).error.code);
+  });
+
+  test('coverage', () => {
+    assertCoverage(
+      [...listBlobsFixtures, ...getHeadFixtures].map((f) => f.name),
+      handled,
+      new Set(),
+    );
+  });
+});
+
+// -------------------------------------------------------
 // Versions: a coordinated lifecycle matching the fixtures' own designed
 // story — get-versions-after-restore/migrate explicitly assume the paired
 // mutating fixture (restore-version / commit-migration) already ran, so
@@ -1858,7 +1988,8 @@ describe('installRequest fixtures', () => {
   test('install-request-already-installed', async () => {
     const f = fixture('install-request-already-installed');
     const manifest = f.requestBody!.manifest;
-    await t.ctx.stack.installApp(await t.ctx.stack.planInstall(manifest, { did: APP_KEY }));
+    const plan = await t.ctx.stack.planInstall(manifest, { did: APP_KEY });
+    await t.ctx.stack.installApp(manifest, { did: APP_KEY, fingerprint: plan.fingerprint });
     const { token } = await t.ctx.adapter.createToken({ subjectId: APP_KEY });
     const { status, data } = await req(t.app, f.method, f.path, { token, body: f.requestBody });
     expect(status).toBe(f.responseStatus);
@@ -2159,22 +2290,22 @@ describe('error response fixtures', () => {
 
   test('error-validation-failed-restore', async () => {
     const fixture = find('error-validation-failed-restore');
-    const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'original' });
     // Drift can't be reached through the write API — defineType() refuses
     // any in-place schema change that would invalidate stored content, and
-    // create()/update() validate everything they write. So the corrupted
-    // snapshot is written straight to the adapter, the way core's own
-    // restoreVersion test produces one, and the assertion is that restore
-    // validates the snapshot against its own stored typeId rather than
-    // trusting it. A create leaves no v1 snapshot of its own, so this adds
-    // one rather than overwriting — the SQLite adapter refuses to replace
-    // an existing version row.
-    await t.ctx.adapter.saveVersion(record.id, {
-      version: 1,
-      typeId: NOTE_TYPE,
-      content: { title: 42 },
-      updatedAt: new Date(),
-    });
+    // create()/update() validate everything they write. So the record is
+    // imported with its corrupted v1 snapshot, through the adapter's one
+    // write of a whole history, and the assertion is that restore validates
+    // the snapshot against its own stored typeId rather than trusting it.
+    const shape = await t.ctx.stack.create(NOTE_TYPE, { title: 'original' });
+    const record = await t.ctx.adapter.importRecord(
+      { ...shape, id: generateId(), version: 2 },
+      {
+        versions: [
+          { version: 1, typeId: NOTE_TYPE, content: { title: 42 }, updatedAt: new Date() },
+        ],
+        journal: [],
+      },
+    );
     const { status, data } = await dispatch(fixture, TEST_TOKEN, record.id);
     expectError(status, data, fixture);
     // Nothing was applied: the record still holds its pre-restore content.
@@ -2379,8 +2510,8 @@ describe('error response fixtures', () => {
     expectError(status, data, fixture);
   });
 
-  test('error-validation-attachment-mimetype-conflict-on-create', async () => {
-    const fixture = find('error-validation-attachment-mimetype-conflict-on-create');
+  test('error-conflict-attachment-mimetype-on-create', async () => {
+    const fixture = find('error-conflict-attachment-mimetype-on-create');
     const body = withFreshId(fixture.requestBody as WireRecord & { content: { fileId: string } });
     await t.ctx.stack.create(ATTACHMENT_TYPE, {
       fileId: body.content.fileId,
@@ -2391,8 +2522,8 @@ describe('error response fixtures', () => {
     expectError(status, data, fixture);
   });
 
-  test('error-validation-attachment-mimetype-immutable-on-update', async () => {
-    const fixture = find('error-validation-attachment-mimetype-immutable-on-update');
+  test('error-conflict-attachment-mimetype-change', async () => {
+    const fixture = find('error-conflict-attachment-mimetype-change');
     const id = fixture.path.split('/')[2]!;
     await t.ctx.stack.create(
       ATTACHMENT_TYPE,
@@ -2473,7 +2604,7 @@ describe('error response fixtures', () => {
     expectError(status, data, fixture);
   });
 
-  test.each(['error-conflict-delete-config', 'error-conflict-config-entityid-change'])(
+  test.each(['error-conflict-delete-config', 'error-conflict-config-owner-change'])(
     '%s',
     async (name) => {
       const fixture = find(name);
@@ -2782,7 +2913,12 @@ describe('changeFeed fixtures', () => {
     const conn = await openChangeFeed(t.app, '/changes', { token: TEST_TOKEN });
     try {
       await conn.waitForFrames(1); // ready
-      await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+      const deleted = await req(t.app, 'DELETE', `/records/${record.id}`, { token: TEST_TOKEN });
+      // The owner acting alone is answered with the record whole.
+      const mutation = fixture.activity![0]!.mutation!;
+      expect((deleted.data as WireRecord).content).toEqual(
+        (mutation.responseBody as WireRecord).content,
+      );
       const [, frame] = await conn.waitForFrames(2);
       const data = frameData(frame);
       expect(data.kind).toBe('removed');

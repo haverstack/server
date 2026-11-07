@@ -17,14 +17,12 @@ import { serializeRecord } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth, requireOwner } from '../middleware/auth.js';
+import { requireAuth, unauthorized } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
-import { wireError } from '../wireError.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack } = ctx;
-  const { ownerEntityId } = stack;
 
   // Aborts while reading the body, the moment the byte count passes the
   // limit — no full-body buffer for an oversized upload, chunked or not.
@@ -44,13 +42,12 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   // requester with no grant is refused, not merely denied a metadata
   // record afterward. See docs/spec/wire-format.md § Upload.
   app.post('/', knownParams('appId'), attachmentBodyLimit, requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
     const mimeType = c.req.header('Content-Type') || 'application/octet-stream';
     const filename = parseUploadFilename(c.req.header('Content-Disposition'));
     const appId = c.req.query('appId') || undefined;
 
     const data = new Uint8Array(await c.req.arrayBuffer());
-    const record = await stack.asActor(auth).putAttachment(data, { mimeType, filename, appId });
+    const record = await c.get('scope').putAttachment(data, { mimeType, filename, appId });
     return c.json(serializeRecord(record), 200);
   });
 
@@ -62,7 +59,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     let data: Uint8Array;
     try {
-      data = await (auth ? stack.asActor(auth) : stack.asEntity(null)).getAttachment(fileId);
+      data = await c.get('scope').getAttachment(fileId);
     } catch (e) {
       // Anonymous and denied is a transport-auth failure, distinct from an
       // authenticated requester lacking access; everything else belongs to
@@ -70,7 +67,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       // for missing and forbidden, so this handler owes no anti-oracle
       // logic of its own — only to leave that answer intact.
       if (!auth && e instanceof StackPermissionError) {
-        return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+        return unauthorized(c);
       }
       throw e;
     }
@@ -84,7 +81,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     // and passes the result as ?filename. This falls back to the
     // requester's own upload, then the first-recorded record.
     const referenced = resolveReferencedAttachment(metaRecords, {
-      requesterEntityId: auth?.subjectId,
+      requesterEntityId: c.get('scope').subjectId ?? undefined,
     });
 
     const { contentType, forced } = resolveAttachmentDownloadContentType({
@@ -110,19 +107,20 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     });
   });
 
-  // DELETE /attachments/:fileId
-  app.delete('/:fileId', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  // DELETE /attachments/:fileId — ScopedStack refuses all but the owner
+  // acting alone.
+  app.delete('/:fileId', knownParams(), requireAuth(), async (c) => {
     const fileId = c.req.param('fileId');
-    await stack.deleteAttachment(fileId);
+    await c.get('scope').deleteAttachment(fileId);
     return c.body(null, 204);
   });
 
   // POST /attachments/gc — sweep and delete orphaned attachment bytes.
-  // Owner-only, invoke-only (no built-in scheduling): dryRun makes a
-  // cron-from-outside workflow safe. Body is entirely optional — every
-  // field defaults inside ScopedStack.collectAttachmentGarbage().
-  app.post('/gc', knownParams(), requireOwner(ownerEntityId), async (c) => {
-    const auth = c.get('auth')!;
+  // Owner-only, which ScopedStack decides; invoke-only (no built-in
+  // scheduling): dryRun makes a cron-from-outside workflow safe. Body is
+  // entirely optional — every field defaults inside
+  // ScopedStack.collectAttachmentGarbage().
+  app.post('/gc', knownParams(), requireAuth(), async (c) => {
     const body = (await c.req.text())
       ? await readJson<{ graceMs?: unknown; dryRun?: unknown }>(c, ['graceMs', 'dryRun'])
       : {};
@@ -135,7 +133,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       ]);
     if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean')
       throw new StackValidationError([{ path: 'dryRun', message: 'Must be a boolean' }]);
-    const result = await stack.asActor(auth).collectAttachmentGarbage({
+    const result = await c.get('scope').collectAttachmentGarbage({
       ...(body.graceMs !== undefined && { graceMs: body.graceMs }),
       ...(body.dryRun === true && { dryRun: true }),
     });

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { StackNotFoundError, isPlanEmpty } from '@haverstack/core';
+import { StackNotFoundError, StackValidationError } from '@haverstack/core';
 import type { InstallPlan } from '@haverstack/core';
 import { parseInstallBody } from '@haverstack/core/wire';
 import { serializeRecord } from '@haverstack/wire-types';
@@ -7,7 +7,7 @@ import type { WireInstallResponse } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import { requireActingAlone, requireOwner } from '../middleware/auth.js';
+import { requireAuth, requireOwner } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
 import type { InstallRequestEntry } from '../lib/installRequestStore.js';
 
@@ -22,53 +22,59 @@ import type { InstallRequestEntry } from '../lib/installRequestStore.js';
 export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { stack, installRequests } = ctx;
-  const ownerEntityId = stack.ownerEntityId;
 
-  // The key being installed is the session's principal, never named in
-  // the body, so no app can ask on behalf of a key it does not hold.
-  // Planning writes nothing; only an empty plan is answered as installed.
+  // ScopedStack.answerInstall() answers for the session's own key, which is
+  // never named in the body, and refuses a delegated session. Planning
+  // writes nothing; this route only queues a pending answer for the owner.
   // See docs/spec/wire-format.md § Installs.
-  app.post('/', knownParams(), requireActingAlone(), async (c) => {
-    const auth = c.get('auth')!;
+  app.post('/', knownParams(), requireAuth(), async (c) => {
+    const scope = c.get('scope');
     const manifest = parseInstallBody(await readJson(c));
-    const plan = await stack.planInstall(manifest, { did: auth.principalId });
-    if (isPlanEmpty(plan)) {
-      const pending = installRequests.forKey(auth.principalId);
+    const answer = await scope.answerInstall(manifest);
+    // A key acting as itself, or answerInstall() would have refused.
+    const key = scope.principalId!;
+    if (answer.status === 'installed') {
+      const pending = installRequests.forKey(key);
       if (pending) installRequests.remove(pending.id);
       const body: WireInstallResponse = {
         status: 'installed',
-        install: serializeRecord(plan.existing!),
+        install: serializeRecord(answer.install),
       };
       return c.json(body, 200);
     }
-    installRequests.put(auth.principalId, manifest);
+    installRequests.put(key, manifest);
     const body: WireInstallResponse = { status: 'pending' };
     return c.json(body, 202);
   });
 
-  app.get('/requests', knownParams(), requireOwner(ownerEntityId), (c) => {
+  app.get('/requests', knownParams(), requireOwner(), (c) => {
     return c.json({ requests: installRequests.list().map(serializeRequest) });
   });
 
   // Planned on every read rather than stored, since what a manifest would
   // change depends on the stack as it stands now.
-  app.get('/requests/:id', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  app.get('/requests/:id', knownParams(), requireOwner(), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
     const plan = await stack.planInstall(entry.manifest, { did: entry.did });
     return c.json({ ...serializeRequest(entry), plan: serializePlan(plan) });
   });
 
-  // Applies the manifest the id names, planned afresh at approval.
-  app.post('/requests/:id/approve', knownParams(), requireOwner(ownerEntityId), async (c) => {
+  // Applies the manifest the id names, only while it still plans to the
+  // fingerprint the owner's review returned; core refuses it otherwise.
+  // See docs/spec/apps.md § Plan, then apply.
+  app.post('/requests/:id/approve', knownParams(), requireOwner(), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
-    const plan = await stack.planInstall(entry.manifest, { did: entry.did });
-    const install = await stack.installApp(plan);
+    const { fingerprint } = await readJson<{ fingerprint?: unknown }>(c, ['fingerprint']);
+    if (typeof fingerprint !== 'string') {
+      throw new StackValidationError([{ path: 'fingerprint', message: 'Must be a string' }]);
+    }
+    const install = await stack.installApp(entry.manifest, { did: entry.did, fingerprint });
     installRequests.remove(entry.id);
     const body: WireInstallResponse = { status: 'installed', install: serializeRecord(install) };
     return c.json(body);
   });
 
-  app.delete('/requests/:id', knownParams(), requireOwner(ownerEntityId), (c) => {
+  app.delete('/requests/:id', knownParams(), requireOwner(), (c) => {
     installRequests.remove(requestOrNotFound(c.req.param('id')).id);
     return c.body(null, 204);
   });
@@ -111,5 +117,6 @@ function serializePlan(
     typeChanges: plan.typeChanges,
     newKey: plan.newKey,
     linkedKeys: plan.linkedKeys,
+    fingerprint: plan.fingerprint,
   };
 }

@@ -204,7 +204,7 @@ Read access is unaffected either way: `GET /records`, `POST /records/query`, `GE
 
 ## Public endpoints
 
-`GET /.well-known/stack` is intentionally public and unauthenticated. It exposes the owner entity ID, configured timezone, and capability list. This information is required by `@haverstack/adapter-api` to bootstrap a client connection. If your stack is private, ensure the endpoint is only reachable by intended clients (e.g. by network policy) rather than by auth-gating it.
+`GET /.well-known/stack` is intentionally public and unauthenticated. It exposes the owner entity ID and capability list. This information is required by `@haverstack/adapter-api` to bootstrap a client connection. If your stack is private, ensure the endpoint is only reachable by intended clients (e.g. by network policy) rather than by auth-gating it.
 
 ## Schema Commons seeding
 

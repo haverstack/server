@@ -14,15 +14,23 @@ import { recordRoutes } from './routes/records.js';
 import { changeRoutes } from './routes/changes.js';
 import { typeRoutes } from './routes/types.js';
 import { attachmentRoutes } from './routes/attachments.js';
+import { blobRoutes } from './routes/blobs.js';
+import { headRoutes } from './routes/head.js';
 import { entityRoutes } from './routes/entity.js';
 import { tokenRoutes } from './routes/tokens.js';
 import { authRoutes } from './routes/auth.js';
 import { installRoutes } from './routes/installs.js';
 import { wireError } from './wireError.js';
+import { scopeForSession } from './lib/scope.js';
 
 export type { AppEnv };
 
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
+  // GET /blobs and GET /head are always served and advertised, as installs
+  // and the change feed are. Building a scope checks the stack has the
+  // methods they call, so a stack without them refuses to boot here.
+  // See docs/spec/wire-format.md § Blobs and § Head.
+  scopeForSession(ctx.stack, null);
   const app = new Hono<AppEnv>();
 
   // Assign a unique request ID to every request and expose it on the response.
@@ -75,9 +83,11 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/health', healthRoutes());
   app.route('/records', recordRoutes(ctx, config.queryTimeoutMs));
   app.route('/changes', changeRoutes(ctx, config, logger));
-  app.route('/types', typeRoutes(ctx));
+  app.route('/types', typeRoutes());
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
-  app.route('/entity', entityRoutes(ctx));
+  app.route('/blobs', blobRoutes());
+  app.route('/head', headRoutes());
+  app.route('/entity', entityRoutes());
   app.route('/tokens', tokenRoutes(ctx));
   app.route('/auth', authRoutes(ctx, config.authOrigin, logger));
   app.route('/installs', installRoutes(ctx));

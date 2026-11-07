@@ -16,8 +16,7 @@ describe('GET /.well-known/stack', () => {
     expect(status).toBe(200);
     const d = data as Record<string, unknown>;
     expect(d.version).toBe(WIRE_PROTOCOL_VERSION);
-    expect(d.entityId).toBe(TEST_ENTITY_ID);
-    expect(d.timezone).toBe('UTC');
+    expect(d.ownerEntityId).toBe(TEST_ENTITY_ID);
     expect(d.capabilities).toBeDefined();
   });
 
@@ -39,16 +38,6 @@ describe('GET /.well-known/stack', () => {
     const capabilities = (data as { capabilities: { filter: Record<string, unknown> } })
       .capabilities;
     expect(capabilities.filter.content).toBe('path');
-  });
-
-  it('omits timezone entirely when the stack has none configured', async () => {
-    const noTzApp = await buildTestApp({ timezone: undefined });
-    try {
-      const { data } = await req(noTzApp.app, 'GET', '/.well-known/stack');
-      expect('timezone' in (data as Record<string, unknown>)).toBe(false);
-    } finally {
-      await noTzApp.cleanup();
-    }
   });
 
   it('advertises the DID challenge-response handshake', async () => {

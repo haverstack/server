@@ -1,10 +1,11 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import { StackPermissionError } from '@haverstack/core';
-import { isOwnerActingAlone } from '@haverstack/core/wire';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
+import { scopeForSession } from '../lib/scope.js';
+import type { RequestScope } from '../lib/scope.js';
 
 /**
  * Constant-time string equality, for comparing a presented credential
@@ -18,8 +19,13 @@ export function safeCompare(a: string, b: string): boolean {
   return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
+/** The one 401 this server answers, for a missing or unusable credential. */
+export const unauthorized = (c: Context<AppEnv>) =>
+  wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+
 export function authMiddleware(ownerToken: string, ctx: StackContext): MiddlewareHandler<AppEnv> {
-  const ownerEntityId = ctx.stack.ownerEntityId;
+  const { stack } = ctx;
+  const ownerEntityId = stack.ownerEntityId;
 
   return async (c, next) => {
     const header = c.req.header('Authorization');
@@ -28,7 +34,7 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
     } else if (!header.startsWith('Bearer ')) {
       // A credential that isn't a bearer token (`Basic ...`, a missing
       // space) is a 401, never a silent downgrade to anonymous.
-      return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+      return unauthorized(c);
     } else {
       const token = header.slice(7);
       if (safeCompare(token, ownerToken)) {
@@ -37,50 +43,43 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
         const session = await ctx.tokens.lookupToken(token);
         // Unknown, expired, or revoked is distinct from "none offered",
         // and must not read as anonymous on optional-auth routes.
-        if (!session) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+        if (!session) return unauthorized(c);
         c.set('auth', session);
       }
     }
+    c.set('scope', scopeForSession(stack, c.get('auth')));
     await next();
   };
 }
 
+/**
+ * A route that needs a session: 401 without one, and then `check`, if
+ * any, of the session's scope. The one place this server refuses on
+ * authentication.
+ */
+function sessionGate(check?: (scope: RequestScope) => void): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    if (!c.get('auth')) return unauthorized(c);
+    check?.(c.get('scope'));
+    await next();
+  };
+}
+
+/** A session is required; what it may do is ScopedStack's to decide. */
 export function requireAuth(): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    if (!c.get('auth')) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    await next();
-  };
+  return sessionGate();
 }
 
 /**
- * Gates a route to the owner acting alone: undelegated, and authenticated
- * as the owner rather than merely delegated for it — the same test
- * `ScopedStack`'s own owner-only gates apply. See
- * docs/spec/access-control.md § Delegation: principal and subject.
+ * Gates one of this server's own surfaces — token management, the owner's
+ * review of install requests — to the owner acting alone. No StackClient
+ * verb serves these, so the route acts on core's answer to the standing,
+ * ScopedStack.ownerActingAlone, rather than being refused by it. Routes
+ * that serve a StackClient verb leave the refusal to ScopedStack.
+ * See docs/spec/access-control.md § Serving requests.
  */
-export function requireOwner(ownerEntityId: string): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    const auth = c.get('auth');
-    if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    if (!isOwnerActingAlone(auth, ownerEntityId)) {
-      throw new StackPermissionError('Owner access required');
-    }
-    await next();
-  };
-}
-
-/**
- * Gates a route to a session acting as itself — not a principal acting
- * for someone else. Checked before the body is read, like requireOwner(),
- * so a refused identity is refused whatever it sent.
- */
-export function requireActingAlone(): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    const auth = c.get('auth');
-    if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    if (auth.principalId !== auth.subjectId) {
-      throw new StackPermissionError('This request must come from the key acting as itself');
-    }
-    await next();
-  };
+export function requireOwner(): MiddlewareHandler<AppEnv> {
+  return sessionGate((scope) => {
+    if (!scope.ownerActingAlone) throw new StackPermissionError('Owner access required');
+  });
 }

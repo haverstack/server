@@ -17,6 +17,8 @@ import { createServer } from 'node:net';
 import { serve } from '@hono/node-server';
 import { LocalAdapter, NativeTokenStore, defaultTokenStorePath } from '@haverstack/adapter-local';
 import { Stack } from '@haverstack/core';
+import { newStoreSeed } from '@haverstack/core/adapter';
+import type { StoreSeed } from '@haverstack/core/adapter';
 import { authOriginFromUrl } from '@haverstack/core/wire';
 import pino from 'pino';
 import type { Logger } from 'pino';
@@ -51,26 +53,16 @@ export function tempDbPath(): string {
   return join(dir, 'stack.db');
 }
 
-export type TestContextOpts = {
-  /**
-   * IANA timezone string, or `undefined` to opt out of one. Note: a plain
-   * default parameter can't tell "omitted" from "explicitly undefined"
-   * (both trigger the default), so this must be an options bag — pass
-   * `{ timezone: undefined }` deliberately, not the bare value.
-   */
-  timezone?: string;
-};
-
+/**
+ * A context over a new store created from `seed`, as every adapter creates
+ * one. The default seed's owner is TEST_ENTITY_ID; OWNER_TOKEN authenticates
+ * as whoever the seed names.
+ */
 export async function createTestContext(
   dbPath: string,
-  opts: TestContextOpts = { timezone: 'UTC' },
+  seed: StoreSeed = newStoreSeed({ ownerEntityId: TEST_ENTITY_ID }),
 ): Promise<StackContext> {
-  const adapter = await LocalAdapter.open({
-    path: dbPath,
-    create: 'exclusive',
-    ownerEntityId: TEST_ENTITY_ID,
-    ...(opts.timezone !== undefined && { timezone: opts.timezone }),
-  });
+  const adapter = await LocalAdapter.open({ path: dbPath, seed });
   const stack = await Stack.open(adapter);
   const tokens = await NativeTokenStore.open({ path: defaultTokenStorePath(dbPath) });
   const nonces = AuthNonceStore.open(defaultNonceStorePath(dbPath));
@@ -92,14 +84,13 @@ export async function createTestContext(
   };
 }
 
-export function testConfig(dbPath: string, opts: TestContextOpts = { timezone: 'UTC' }): Config {
+export function testConfig(dbPath: string): Config {
   return {
     port: 3000,
     dbPath,
     entityId: TEST_ENTITY_ID,
     ownerName: null,
     ownerHandle: null,
-    timezone: opts.timezone,
     ownerToken: TEST_TOKEN,
     corsOrigins: '*',
     baseUrl: TEST_BASE_URL,
@@ -143,17 +134,19 @@ export type TestServer = {
  * Spins up a real, listening @haverstack/server on an ephemeral localhost
  * port, backed by a throwaway LocalAdapter file — for exercising an HTTP
  * client against the actual wire protocol rather than a mocked fetch.
+ * Its store is created from `seed`, as createTestContext() creates one.
  * Owner auth: `Authorization: Bearer ${TEST_TOKEN}`.
  */
-export async function startTestServer(
-  opts: TestContextOpts = { timezone: 'UTC' },
-): Promise<TestServer> {
+export async function startTestServer(seed?: StoreSeed): Promise<TestServer> {
   const dbPath = tempDbPath();
-  const ctx = await createTestContext(dbPath, opts);
+  const ctx = await createTestContext(dbPath, seed);
   const port = await getFreePort();
   const url = `http://127.0.0.1:${port}`;
   const config: Config = {
-    ...testConfig(dbPath, opts),
+    ...testConfig(dbPath),
+    // The store's owner, which a seed may name: ENTITY_ID only seeds a new
+    // store, so the store is the authority once it exists.
+    entityId: ctx.stack.ownerEntityId,
     port,
     baseUrl: url,
     authOrigin: authOriginFromUrl(url),

@@ -13,6 +13,7 @@ import {
 } from '../setup.js';
 import { changeRoutes, type ChangeRouteOptions } from '../../src/routes/changes.js';
 import { authMiddleware } from '../../src/middleware/auth.js';
+import { errorMiddleware } from '../../src/middleware/errors.js';
 import { openChangeFeed } from '../changeFeedClient.js';
 import type { StackContext } from '../../src/stack.js';
 import type { Config } from '../../src/config.js';
@@ -22,8 +23,8 @@ const NOTE_TYPE = 'com.example/note@1';
 const CONTRIBUTOR_ID = 'entity-contributor-789';
 
 /**
- * changeRoutes() alone doesn't run authMiddleware — that's wired up by
- * createApp(), which these tests bypass so they can pass ChangeRouteOptions
+ * changeRoutes() alone doesn't run authMiddleware or answer errors — both
+ * are wired up by createApp(), which these tests bypass so they can pass ChangeRouteOptions
  * (keepaliveMs, sessionCheckMs, maxPendingFrames) that createApp() has no
  * way to thread through. Without it, c.get('auth') would stay undefined
  * for every request here regardless of the header sent, silently falling
@@ -31,6 +32,7 @@ const CONTRIBUTOR_ID = 'entity-contributor-789';
  */
 function testChangesApp(ctx: StackContext, config: Config, opts: ChangeRouteOptions = {}) {
   const app = new Hono<AppEnv>();
+  app.onError(errorMiddleware(logger, ctx.stack));
   app.use(authMiddleware(config.ownerToken, ctx));
   app.route('/', changeRoutes(ctx, config, logger, opts));
   return app;
@@ -443,6 +445,32 @@ describe('GET /changes', () => {
       await ctx.tokens.close();
       ctx.nonces.close();
     }
+  });
+
+  // With resume off there is no shared buffer: the connection subscribes
+  // for itself, still before the stream opens, and changes arriving before
+  // it does wait for it.
+  describe('without resume', () => {
+    const plainApp = () => testChangesApp(t.ctx, testConfig(t.dbPath), { resume: false });
+
+    it('refuses a non-owner includeUnlisted with 403, as core refuses it', async () => {
+      const { token } = await t.ctx.adapter.createToken({ subjectId: CONTRIBUTOR_ID });
+      const { status } = await req(plainApp(), 'GET', '/?includeUnlisted=true', { token });
+      expect(status).toBe(403);
+    });
+
+    it('delivers a change after ready', async () => {
+      const conn = await openChangeFeed(plainApp(), '/', { token: TEST_TOKEN });
+      try {
+        await conn.waitForFrames(1); // ready
+        const record = await t.ctx.stack.create(NOTE_TYPE, { title: 'x' });
+        const [ready, frame] = await conn.waitForFrames(2);
+        expect(ready.event).toBe('ready');
+        expect((frame.data as { recordId: string }).recordId).toBe(record.id);
+      } finally {
+        await conn.close();
+      }
+    });
   });
 
   describe('includeUnlisted', () => {

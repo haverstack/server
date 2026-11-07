@@ -174,7 +174,7 @@ One thing does not get this freedom: **stored data**. A change to what lives in 
 
 **One module per concern**, following the layout in [Where things live](#where-things-live):
 
-- `src/routes/*` — one file per URL prefix, each exporting a `Hono` sub-app mounted in `src/app.ts`. Handlers parse, call `Stack`, and serialize; anything longer than that usually belongs in `src/lib/`.
+- `src/routes/*` — one file per URL prefix, each exporting a `Hono` sub-app mounted in `src/app.ts`. Handlers parse, call `ScopedStack`, and serialize; anything longer than that usually belongs in `src/lib/`.
 - `src/middleware/*` — cross-cutting: `auth.ts` resolves a credential to a principal/subject pair (or anonymous), `errors.ts` maps thrown `StackError`s to wire responses.
 - `src/lib/*` — mechanism with no HTTP in it: the query worker pool, change streams, resume cursors, the nonce store, token sweeping.
 

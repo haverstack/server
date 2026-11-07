@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_HISTORY_PAGE, readHistoryPage } from '../../src/lib/historyPage.js';
+import { MAX_PAGE, readPage } from '../../src/lib/page.js';
 
-/** A history of `n` rows numbered from 1, read the way a Stack read takes a limit. */
+/** `n` rows numbered from 1, read the way a Stack read takes a limit. */
 function history(n: number) {
   const rows = Array.from({ length: n }, (_, i) => i + 1);
   const limits: number[] = [];
@@ -14,20 +14,20 @@ function history(n: number) {
 
 const page = (n: number, limit: number | undefined) => {
   const h = history(n);
-  return readHistoryPage(limit, h.read, (row) => row).then((r) => ({ ...r, limits: h.limits }));
+  return readPage(limit, h.read, (row) => row).then((r) => ({ ...r, limits: h.limits }));
 };
 
-describe('readHistoryPage', () => {
+describe('readPage', () => {
   it('bounds a page no limit was given for, and says so in cursor', async () => {
-    const { rows, cursor } = await page(MAX_HISTORY_PAGE + 1, undefined);
-    expect(rows).toHaveLength(MAX_HISTORY_PAGE);
-    expect(cursor).toBe(MAX_HISTORY_PAGE);
+    const { rows, cursor } = await page(MAX_PAGE + 1, undefined);
+    expect(rows).toHaveLength(MAX_PAGE);
+    expect(cursor).toBe(MAX_PAGE);
   });
 
   it('caps a limit above the ceiling', async () => {
-    const { rows, limits } = await page(MAX_HISTORY_PAGE * 2, MAX_HISTORY_PAGE * 2);
-    expect(rows).toHaveLength(MAX_HISTORY_PAGE);
-    expect(limits).toEqual([MAX_HISTORY_PAGE + 1]);
+    const { rows, limits } = await page(MAX_PAGE * 2, MAX_PAGE * 2);
+    expect(rows).toHaveLength(MAX_PAGE);
+    expect(limits).toEqual([MAX_PAGE + 1]);
   });
 
   it('answers a null cursor for a page exactly as long as what is left', async () => {

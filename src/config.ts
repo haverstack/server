@@ -29,7 +29,6 @@ export type Config = {
   entityId: string | null;
   ownerName: string | null;
   ownerHandle: string | null;
-  timezone: string | undefined;
   ownerToken: string;
   corsOrigins: string;
   baseUrl: string;
@@ -55,10 +54,6 @@ export function loadConfig(): Config {
   }
   const ownerName = process.env['OWNER_NAME'] ?? null;
   const ownerHandle = process.env['OWNER_HANDLE'] ?? null;
-  // No default: an absent timezone stays undefined end to end rather than
-  // asserting knowledge the stack was never actually given. See
-  // docs/spec/wire-format.md § Discovery.
-  const timezone = process.env['TIMEZONE'] ?? undefined;
 
   const port = parseInt(optional('PORT', '3000'), 10);
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -160,7 +155,6 @@ export function loadConfig(): Config {
     entityId,
     ownerName,
     ownerHandle,
-    timezone,
     ownerToken: required('OWNER_TOKEN'),
     corsOrigins: optional('CORS_ORIGINS', ''),
     baseUrl,

@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createApp } from '../src/app.js';
-import { buildTestApp, testConfig, logger, req, TEST_TOKEN, type TestApp } from './setup.js';
+import { Stack } from '@haverstack/core';
+import { MemoryAdapter } from '@haverstack/core/testing';
+import {
+  buildTestApp,
+  testConfig,
+  logger,
+  req,
+  TEST_ENTITY_ID,
+  TEST_TOKEN,
+  type TestApp,
+} from './setup.js';
 
 const NOTE_TYPE_ID = 'com.example.test/note@1';
 
@@ -86,5 +96,24 @@ describe('request body size limit', () => {
       body: 'x'.repeat(1000), // well over the 10-byte content limit, under maxAttachmentBytes
     });
     expect(res.status).toBe(200);
+  });
+});
+
+// The one place the copy-out surface is checked: GET /blobs and GET /head
+// are always served and advertised, so a stack missing either method is
+// refused when the app is built rather than served a route it cannot answer.
+describe('createApp', () => {
+  it('refuses a stack without listBlobs() and head()', async () => {
+    const adapter = await MemoryAdapter.open({ ownerEntityId: TEST_ENTITY_ID });
+    delete adapter.head;
+    const t = await buildTestApp();
+    try {
+      const ctx = { ...t.ctx, stack: await Stack.open(adapter) };
+      expect(() => createApp(ctx, testConfig(t.dbPath), logger)).toThrow(
+        /listBlobs\(\) and head\(\)/,
+      );
+    } finally {
+      await t.cleanup();
+    }
   });
 });

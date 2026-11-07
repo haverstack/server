@@ -50,17 +50,6 @@ describe('loadConfig', () => {
     expect(config.ownerHandle).toBeNull();
   });
 
-  it('leaves timezone undefined when TIMEZONE is unset', () => {
-    const config = loadConfig();
-    expect(config.timezone).toBeUndefined();
-  });
-
-  it('reads TIMEZONE when set', () => {
-    process.env['TIMEZONE'] = 'America/New_York';
-    const config = loadConfig();
-    expect(config.timezone).toBe('America/New_York');
-  });
-
   it('defaults maxContentBytes to 1 MB', () => {
     const config = loadConfig();
     expect(config.maxContentBytes).toBe(1 * 1024 * 1024);
