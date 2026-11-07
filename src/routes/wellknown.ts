@@ -49,11 +49,11 @@ export function wellknownRoutes(ctx: StackContext, config: Config): Hono<AppEnv>
       },
       // POST /installs is always served, so, like `changes`, always advertised.
       installs: { requests: true },
-      // Advertised exactly when served: when the stack has the method each
-      // route calls. Together they let the owner copy the stack out.
-      // See docs/spec/portability.md § Copying a stack.
-      ...(ctx.stack.listBlobs && { blobs: { list: true } }),
-      ...(ctx.stack.head && { head: { read: true } }),
+      // GET /blobs and GET /head are always served (see createApp()), so,
+      // like `installs`, always advertised. Together they let the owner copy
+      // the stack out. See docs/spec/portability.md § Copying a stack.
+      blobs: { list: true },
+      head: { read: true },
     };
     return c.json(body);
   });

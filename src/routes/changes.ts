@@ -4,11 +4,9 @@ import { streamSSE } from 'hono/streaming';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { Config } from '../config.js';
-import type { ScopedStack, RecordChange } from '@haverstack/core';
-import type { TokenSession } from '@haverstack/core/wire';
+import type { RecordChange } from '@haverstack/core';
 import { StackBadRequestError, StackPermissionError } from '@haverstack/core';
 import { parseChangeParams } from '@haverstack/core/wire';
-import { scopeFor as scopeOf } from '../lib/scope.js';
 import { serializeChange, isValidCursor } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
 import type { Logger } from 'pino';
@@ -77,7 +75,6 @@ export function changeRoutes(
   });
 
   /** Scope to a session if authenticated, else the anonymous (public-only) view. */
-  const scopeFor = (auth: TokenSession | null): ScopedStack => scopeOf(ctx.stack, auth);
 
   // Single-process only: events exist only in the process owning the
   // stack's storage (docs/spec/change-feed.md § Feed implementation
@@ -87,15 +84,16 @@ export function changeRoutes(
   app.get('/', async (c) => {
     const url = new URL(c.req.url);
     const auth = c.get('auth');
+    const scoped = c.get('scope');
     const { filter, includeRecords } = parseChangeParams(url);
     const presentedRaw = presentedCursorRaw(c, url);
 
     // Refused before the stream opens: a throw from subscribe() after
     // streaming starts is caught below and merely closes the connection,
     // silently, having already answered 200. includeUnlisted owes a real
-    // 403, the same one GET /records answers with, so the route acts on
-    // core's answer to the standing ScopedStack.subscribe() asks.
-    if (filter.includeUnlisted && !scopeFor(auth).ownerActingAlone) {
+    // 403, as GET /records answers, so this asks core whether the session
+    // is the owner acting alone, the standing subscribe() would refuse on.
+    if (filter.includeUnlisted && !scoped.ownerActingAlone) {
       throw new StackPermissionError('includeUnlisted is owner-only');
     }
 
@@ -147,7 +145,7 @@ export function changeRoutes(
             const reason: ChangeResetReason = 'not_supported';
             send('reset', { reason });
           }
-          unsubscribe = await scopeFor(auth).subscribe(
+          unsubscribe = await scoped.subscribe(
             (change: RecordChange) => {
               send('record', serializeChange(change));
             },
@@ -160,7 +158,6 @@ export function changeRoutes(
             filter,
             includeRecords,
           });
-          const scoped = scopeFor(auth);
           const buffer = await resumeBuffers.acquire(key, (onChange) =>
             scoped.subscribe(onChange, { filter, includeRecords }),
           );

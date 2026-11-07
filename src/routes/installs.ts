@@ -8,7 +8,6 @@ import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth, requireOwner } from '../middleware/auth.js';
-import { scopeFor } from '../lib/scope.js';
 import { readJson } from '../lib/json.js';
 import type { InstallRequestEntry } from '../lib/installRequestStore.js';
 
@@ -31,7 +30,7 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   app.post('/', knownParams(), requireAuth(), async (c) => {
     const auth = c.get('auth')!;
     const manifest = parseInstallBody(await readJson(c));
-    const answer = await scopeFor(stack, auth).answerInstall(manifest);
+    const answer = await c.get('scope').answerInstall(manifest);
     if (answer.status === 'installed') {
       const pending = installRequests.forKey(auth.principalId);
       if (pending) installRequests.remove(pending.id);
@@ -46,13 +45,13 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(body, 202);
   });
 
-  app.get('/requests', knownParams(), requireOwner(stack), (c) => {
+  app.get('/requests', knownParams(), requireOwner(), (c) => {
     return c.json({ requests: installRequests.list().map(serializeRequest) });
   });
 
   // Planned on every read rather than stored, since what a manifest would
   // change depends on the stack as it stands now.
-  app.get('/requests/:id', knownParams(), requireOwner(stack), async (c) => {
+  app.get('/requests/:id', knownParams(), requireOwner(), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
     const plan = await stack.planInstall(entry.manifest, { did: entry.did });
     return c.json({ ...serializeRequest(entry), plan: serializePlan(plan) });
@@ -61,7 +60,7 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   // Applies the manifest the id names, only while it still plans to the
   // fingerprint the owner's review returned; core refuses it otherwise.
   // See docs/spec/apps.md § Plan, then apply.
-  app.post('/requests/:id/approve', knownParams(), requireOwner(stack), async (c) => {
+  app.post('/requests/:id/approve', knownParams(), requireOwner(), async (c) => {
     const entry = requestOrNotFound(c.req.param('id'));
     const { fingerprint } = await readJson<{ fingerprint?: unknown }>(c, ['fingerprint']);
     if (typeof fingerprint !== 'string') {
@@ -73,7 +72,7 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
     return c.json(body);
   });
 
-  app.delete('/requests/:id', knownParams(), requireOwner(stack), (c) => {
+  app.delete('/requests/:id', knownParams(), requireOwner(), (c) => {
     installRequests.remove(requestOrNotFound(c.req.param('id')).id);
     return c.body(null, 204);
   });

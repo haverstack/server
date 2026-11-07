@@ -18,7 +18,6 @@ import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
-import { scopeFor } from '../lib/scope.js';
 import { readJson } from '../lib/json.js';
 import { wireError } from '../wireError.js';
 
@@ -44,13 +43,12 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   // requester with no grant is refused, not merely denied a metadata
   // record afterward. See docs/spec/wire-format.md § Upload.
   app.post('/', knownParams('appId'), attachmentBodyLimit, requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
     const mimeType = c.req.header('Content-Type') || 'application/octet-stream';
     const filename = parseUploadFilename(c.req.header('Content-Disposition'));
     const appId = c.req.query('appId') || undefined;
 
     const data = new Uint8Array(await c.req.arrayBuffer());
-    const record = await scopeFor(stack, auth).putAttachment(data, { mimeType, filename, appId });
+    const record = await c.get('scope').putAttachment(data, { mimeType, filename, appId });
     return c.json(serializeRecord(record), 200);
   });
 
@@ -62,7 +60,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
 
     let data: Uint8Array;
     try {
-      data = await scopeFor(stack, auth).getAttachment(fileId);
+      data = await c.get('scope').getAttachment(fileId);
     } catch (e) {
       // Anonymous and denied is a transport-auth failure, distinct from an
       // authenticated requester lacking access; everything else belongs to
@@ -114,7 +112,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   // acting alone.
   app.delete('/:fileId', knownParams(), requireAuth(), async (c) => {
     const fileId = c.req.param('fileId');
-    await scopeFor(stack, c.get('auth')).deleteAttachment(fileId);
+    await c.get('scope').deleteAttachment(fileId);
     return c.body(null, 204);
   });
 
@@ -124,7 +122,6 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
   // entirely optional — every field defaults inside
   // ScopedStack.collectAttachmentGarbage().
   app.post('/gc', knownParams(), requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
     const body = (await c.req.text())
       ? await readJson<{ graceMs?: unknown; dryRun?: unknown }>(c, ['graceMs', 'dryRun'])
       : {};
@@ -137,7 +134,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       ]);
     if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean')
       throw new StackValidationError([{ path: 'dryRun', message: 'Must be a boolean' }]);
-    const result = await scopeFor(stack, auth).collectAttachmentGarbage({
+    const result = await c.get('scope').collectAttachmentGarbage({
       ...(body.graceMs !== undefined && { graceMs: body.graceMs }),
       ...(body.dryRun === true && { dryRun: true }),
     });

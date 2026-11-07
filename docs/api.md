@@ -4,7 +4,7 @@ All routes are prefixed by the base URL. Requests are authenticated with a `Bear
 
 A query param or JSON body key an endpoint doesn't define is refused with `400` rather than ignored, and a boolean param takes only `true` or `false`.
 
-Authentication is this server's: a route that needs a session answers `401` without one. Permission is core's: every request is served through the session's `ScopedStack`, whose refusals are the `403`s and `404`s below. Token management and the owner's review of install requests are this server's own surfaces, and ask core whether the session is the owner acting alone.
+Authentication is this server's: a route that needs a session answers `401` without one. Permission is core's: every request is served through the session's `ScopedStack`, whose refusals are the `403`s and `404`s below, so a body is validated before permission is decided and a malformed one is `400` or `422` whoever sends it. Two kinds of route ask core whether the session is the owner acting alone and refuse before reading a body: this server's own surfaces, token management and the owner's review of install requests; and `GET /changes` with `includeUnlisted`, whose `403` must be answered before the stream opens.
 
 ## Discovery
 

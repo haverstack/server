@@ -25,6 +25,13 @@ import { wireError } from './wireError.js';
 export type { AppEnv };
 
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
+  // GET /blobs and GET /head are always served, and advertised, as installs
+  // and the change feed are: the stack this server builds has both methods,
+  // and this is the one place that is checked.
+  // See docs/spec/access-control.md § Serving requests.
+  if (!ctx.stack.listBlobs || !ctx.stack.head) {
+    throw new Error('This server needs a stack with listBlobs() and head() to serve a copy out');
+  }
   const app = new Hono<AppEnv>();
 
   // Assign a unique request ID to every request and expose it on the response.
@@ -77,13 +84,11 @@ export function createApp(ctx: StackContext, config: Config, logger: Logger): Ho
   app.route('/health', healthRoutes());
   app.route('/records', recordRoutes(ctx, config.queryTimeoutMs));
   app.route('/changes', changeRoutes(ctx, config, logger));
-  app.route('/types', typeRoutes(ctx));
+  app.route('/types', typeRoutes());
   app.route('/attachments', attachmentRoutes(ctx, config.maxAttachmentBytes));
-  // Offered exactly when the stack has the method each one calls, as
-  // discovery advertises them. See docs/spec/access-control.md § Serving requests.
-  if (ctx.stack.listBlobs) app.route('/blobs', blobRoutes(ctx));
-  if (ctx.stack.head) app.route('/head', headRoutes(ctx));
-  app.route('/entity', entityRoutes(ctx));
+  app.route('/blobs', blobRoutes());
+  app.route('/head', headRoutes());
+  app.route('/entity', entityRoutes());
   app.route('/tokens', tokenRoutes(ctx));
   app.route('/auth', authRoutes(ctx, config.authOrigin, logger));
   app.route('/installs', installRoutes(ctx));

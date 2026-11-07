@@ -3,25 +3,22 @@ import { parseBlobsParams } from '@haverstack/core/wire';
 import { serializeBlobInfo } from '@haverstack/wire-types';
 import type { WireBlobsResponse } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
-import type { StackContext } from '../stack.js';
 import { requireAuth } from '../middleware/auth.js';
-import { scopeFor } from '../lib/scope.js';
 import { readPage } from '../lib/page.js';
 
 /**
  * GET /blobs — every blob the store holds, fileId ascending, so the owner
  * can read a hosted stack in full. ScopedStack.listBlobs() refuses all
  * but the owner acting alone: a listing names files no Record the
- * requester reaches names. Mounted only when the stack has listBlobs().
+ * requester reaches names. createApp() checks the stack has listBlobs().
  * See docs/spec/wire-format.md § Blobs.
  */
-export function blobRoutes(ctx: StackContext): Hono<AppEnv> {
+export function blobRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { stack } = ctx;
 
   app.get('/', requireAuth(), async (c) => {
     const query = parseBlobsParams(new URL(c.req.url));
-    const scoped = scopeFor(stack, c.get('auth'));
+    const scoped = c.get('scope');
     const { rows, cursor } = await readPage(
       query.limit,
       (limit) => scoped.listBlobs!({ ...query, limit }),

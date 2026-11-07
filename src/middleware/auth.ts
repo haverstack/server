@@ -1,8 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { MiddlewareHandler } from 'hono';
 import { StackPermissionError } from '@haverstack/core';
-import type { Stack } from '@haverstack/core';
-import { scopeFor } from '../lib/scope.js';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
@@ -20,7 +18,8 @@ export function safeCompare(a: string, b: string): boolean {
 }
 
 export function authMiddleware(ownerToken: string, ctx: StackContext): MiddlewareHandler<AppEnv> {
-  const ownerEntityId = ctx.stack.ownerEntityId;
+  const { stack } = ctx;
+  const ownerEntityId = stack.ownerEntityId;
 
   return async (c, next) => {
     const header = c.req.header('Authorization');
@@ -42,15 +41,20 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
         c.set('auth', session);
       }
     }
+    const auth = c.get('auth');
+    c.set('scope', auth ? stack.asActor(auth) : stack.asEntity(null));
     await next();
   };
 }
 
+const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (!c.get('auth')) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+  await next();
+};
+
+/** A session is required; what it may do is ScopedStack's to decide. */
 export function requireAuth(): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    if (!c.get('auth')) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    await next();
-  };
+  return requireSession;
 }
 
 /**
@@ -61,13 +65,12 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
  * that serve a StackClient verb leave the refusal to ScopedStack.
  * See docs/spec/access-control.md § Serving requests.
  */
-export function requireOwner(stack: Stack): MiddlewareHandler<AppEnv> {
-  return async (c, next) => {
-    const auth = c.get('auth');
-    if (!auth) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-    if (!scopeFor(stack, auth).ownerActingAlone) {
-      throw new StackPermissionError('Owner access required');
-    }
-    await next();
-  };
+export function requireOwner(): MiddlewareHandler<AppEnv> {
+  return (c, next) =>
+    requireSession(c, async () => {
+      if (!c.get('scope').ownerActingAlone) {
+        throw new StackPermissionError('Owner access required');
+      }
+      await next();
+    });
 }
