@@ -1,9 +1,10 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import { StackPermissionError } from '@haverstack/core';
 import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import { wireError } from '../wireError.js';
+import { scopeForSession } from '../lib/scope.js';
 
 /**
  * Constant-time string equality, for comparing a presented credential
@@ -17,6 +18,10 @@ export function safeCompare(a: string, b: string): boolean {
   return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
+/** The one 401 this server answers, for a missing or unusable credential. */
+export const unauthorized = (c: Context<AppEnv>) =>
+  wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+
 export function authMiddleware(ownerToken: string, ctx: StackContext): MiddlewareHandler<AppEnv> {
   const { stack } = ctx;
   const ownerEntityId = stack.ownerEntityId;
@@ -28,7 +33,7 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
     } else if (!header.startsWith('Bearer ')) {
       // A credential that isn't a bearer token (`Basic ...`, a missing
       // space) is a 401, never a silent downgrade to anonymous.
-      return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+      return unauthorized(c);
     } else {
       const token = header.slice(7);
       if (safeCompare(token, ownerToken)) {
@@ -37,24 +42,21 @@ export function authMiddleware(ownerToken: string, ctx: StackContext): Middlewar
         const session = await ctx.tokens.lookupToken(token);
         // Unknown, expired, or revoked is distinct from "none offered",
         // and must not read as anonymous on optional-auth routes.
-        if (!session) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+        if (!session) return unauthorized(c);
         c.set('auth', session);
       }
     }
-    const auth = c.get('auth');
-    c.set('scope', auth ? stack.asActor(auth) : stack.asEntity(null));
+    c.set('scope', scopeForSession(stack, c.get('auth')));
     await next();
   };
 }
 
-const requireSession: MiddlewareHandler<AppEnv> = async (c, next) => {
-  if (!c.get('auth')) return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
-  await next();
-};
-
 /** A session is required; what it may do is ScopedStack's to decide. */
 export function requireAuth(): MiddlewareHandler<AppEnv> {
-  return requireSession;
+  return async (c, next) => {
+    if (!c.get('auth')) return unauthorized(c);
+    await next();
+  };
 }
 
 /**
@@ -66,11 +68,9 @@ export function requireAuth(): MiddlewareHandler<AppEnv> {
  * See docs/spec/access-control.md § Serving requests.
  */
 export function requireOwner(): MiddlewareHandler<AppEnv> {
-  return (c, next) =>
-    requireSession(c, async () => {
-      if (!c.get('scope').ownerActingAlone) {
-        throw new StackPermissionError('Owner access required');
-      }
-      await next();
-    });
+  return async (c, next) => {
+    if (!c.get('auth')) return unauthorized(c);
+    if (!c.get('scope').ownerActingAlone) throw new StackPermissionError('Owner access required');
+    await next();
+  };
 }

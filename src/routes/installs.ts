@@ -28,11 +28,13 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
   // writes nothing; this route only queues a pending answer for the owner.
   // See docs/spec/wire-format.md § Installs.
   app.post('/', knownParams(), requireAuth(), async (c) => {
-    const auth = c.get('auth')!;
+    const scope = c.get('scope');
     const manifest = parseInstallBody(await readJson(c));
-    const answer = await c.get('scope').answerInstall(manifest);
+    const answer = await scope.answerInstall(manifest);
+    // A key acting as itself, or answerInstall() would have refused.
+    const key = scope.principalId!;
     if (answer.status === 'installed') {
-      const pending = installRequests.forKey(auth.principalId);
+      const pending = installRequests.forKey(key);
       if (pending) installRequests.remove(pending.id);
       const body: WireInstallResponse = {
         status: 'installed',
@@ -40,7 +42,7 @@ export function installRoutes(ctx: StackContext): Hono<AppEnv> {
       };
       return c.json(body, 200);
     }
-    installRequests.put(auth.principalId, manifest);
+    installRequests.put(key, manifest);
     const body: WireInstallResponse = { status: 'pending' };
     return c.json(body, 202);
   });

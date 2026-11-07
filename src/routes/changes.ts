@@ -5,7 +5,7 @@ import type { AppEnv } from '../types.js';
 import type { StackContext } from '../stack.js';
 import type { Config } from '../config.js';
 import type { RecordChange } from '@haverstack/core';
-import { StackBadRequestError, StackPermissionError } from '@haverstack/core';
+import { StackBadRequestError } from '@haverstack/core';
 import { parseChangeParams } from '@haverstack/core/wire';
 import { serializeChange, isValidCursor } from '@haverstack/wire-types';
 import type { ChangeResetReason } from '@haverstack/wire-types';
@@ -74,8 +74,6 @@ export function changeRoutes(
     retentionMs: opts.resumeRetentionMs ?? DEFAULT_RESUME_RETENTION_MS,
   });
 
-  /** Scope to a session if authenticated, else the anonymous (public-only) view. */
-
   // Single-process only: events exist only in the process owning the
   // stack's storage (docs/spec/change-feed.md § Feed implementation
   // checklist), and query workers only read. A second process subscribing
@@ -87,15 +85,6 @@ export function changeRoutes(
     const scoped = c.get('scope');
     const { filter, includeRecords } = parseChangeParams(url);
     const presentedRaw = presentedCursorRaw(c, url);
-
-    // Refused before the stream opens: a throw from subscribe() after
-    // streaming starts is caught below and merely closes the connection,
-    // silently, having already answered 200. includeUnlisted owes a real
-    // 403, as GET /records answers, so this asks core whether the session
-    // is the owner acting alone, the standing subscribe() would refuse on.
-    if (filter.includeUnlisted && !scoped.ownerActingAlone) {
-      throw new StackPermissionError('includeUnlisted is owner-only');
-    }
 
     // A charset-invalid cursor is refused rather than treated as a cache
     // miss: no conformant server could have minted it, so there is nothing
@@ -111,76 +100,64 @@ export function changeRoutes(
     // needs to put a credential somewhere a browser might log or cache it.
     const bearerToken = c.req.header('Authorization')?.slice('Bearer '.length);
 
-    return streamSSE(c, async (stream) => {
-      let resolveDone!: () => void;
-      const done = new Promise<void>((resolve) => {
-        resolveDone = resolve;
-      });
-      stream.onAbort(() => resolveDone());
-      const unregister = ctx.changeStreams.add(() => resolveDone());
+    /** Writes one frame; false once the gate has tripped and the connection is closing. */
+    type Send = (event: string, data: unknown, id?: string) => boolean;
+    type Feed = { run: (send: Send) => Promise<void>; unsubscribe: () => void };
 
-      const gate = new FrameGate(maxPendingFrames, () => resolveDone());
-      /** Returns false once the gate has tripped — this connection is closing. */
-      function send(event: string, data: unknown, id?: string): boolean {
-        return gate.send(() =>
-          stream.writeSSE({ event, data: JSON.stringify(data), ...(id !== undefined && { id }) }),
-        );
-      }
-
-      // Assigned inside the try below; torn down in the finally whether the
-      // connection ended by abort, by a revoked session, or by a throw. A
-      // throw is caught rather than left to hono, which would answer it by
-      // writing the raw error message to the client as an `error` frame.
-      let unsubscribe: (() => void) | undefined;
-      let keepalive: NodeJS.Timeout | undefined;
-      let sessionCheck: NodeJS.Timeout | undefined;
-
-      try {
-        if (!resumeEnabled) {
-          // `resume: false` — a discovery-conformant server that mints no
-          // cursors at all, reachable only through WellknownRouteOptions'
-          // matching test toggle.
+    // `resume: false` — a discovery-conformant server that mints no cursors
+    // at all, reachable only through WellknownRouteOptions' matching test
+    // toggle. Changes arriving before the stream opens wait for it.
+    const plainFeed = async (): Promise<Feed> => {
+      const early: RecordChange[] = [];
+      let deliver: ((change: RecordChange) => void) | undefined;
+      const unsubscribe = await scoped.subscribe(
+        (change: RecordChange) => (deliver ? deliver(change) : early.push(change)),
+        { filter, includeRecords },
+      );
+      return {
+        unsubscribe,
+        run: async (send) => {
           send('ready', {});
           if (presentedRaw !== undefined) {
             const reason: ChangeResetReason = 'not_supported';
             send('reset', { reason });
           }
-          unsubscribe = await scoped.subscribe(
-            (change: RecordChange) => {
-              send('record', serializeChange(change));
-            },
-            { filter, includeRecords },
-          );
-        } else {
-          const key = resumeBufferKey({
-            principalId: auth?.principalId ?? null,
-            subjectId: auth?.subjectId ?? null,
-            filter,
-            includeRecords,
-          });
-          const buffer = await resumeBuffers.acquire(key, (onChange) =>
-            scoped.subscribe(onChange, { filter, includeRecords }),
-          );
+          deliver = (change) => send('record', serializeChange(change));
+          for (const change of early) deliver(change);
+        },
+      };
+    };
 
-          // Attached before anything below awaits, so there is no gap
-          // between what the backlog snapshot covers and what the live
-          // buffer reports. `replaying` holds live arrivals until the
-          // permission-rechecking replay finishes, so a change appended
-          // mid-replay can't overtake an older, still-pending backlog frame.
-          let replaying = true;
-          const queued: ResumeEntry[] = [];
-          const detachLive = buffer.subscribeLive((entry) => {
-            if (replaying) queued.push(entry);
-            else send('record', entry.frame, entry.frame.cursor);
-          });
-          // Registered before the first `await` below, so a subscription
-          // opened above is always released — including when that await
-          // throws. Everything after this point runs under the finally.
-          unsubscribe = () => {
-            detachLive();
-            resumeBuffers.release(key);
-          };
+    const resumableFeed = async (): Promise<Feed> => {
+      const key = resumeBufferKey({
+        principalId: scoped.principalId,
+        subjectId: scoped.subjectId,
+        filter,
+        includeRecords,
+      });
+      const buffer = await resumeBuffers.acquire(key, (onChange) =>
+        scoped.subscribe(onChange, { filter, includeRecords }),
+      );
 
+      // Attached before anything below awaits, so there is no gap
+      // between what the backlog snapshot covers and what the live
+      // buffer reports. `replaying` holds live arrivals until the
+      // permission-rechecking replay finishes, so a change appended
+      // mid-replay can't overtake an older, still-pending backlog frame.
+      let replaying = true;
+      let sendLive: Send | undefined;
+      const queued: ResumeEntry[] = [];
+      const detachLive = buffer.subscribeLive((entry) => {
+        if (replaying) queued.push(entry);
+        else sendLive!('record', entry.frame, entry.frame.cursor);
+      });
+
+      return {
+        unsubscribe: () => {
+          detachLive();
+          resumeBuffers.release(key);
+        },
+        run: async (send) => {
           let resetReason: ChangeResetReason | undefined;
           let backlog: ResumeEntry[] = [];
           if (presentedRaw !== undefined) {
@@ -218,10 +195,46 @@ export function changeRoutes(
           }
 
           replaying = false;
+          sendLive = send;
           for (const entry of queued) {
             if (!send('record', entry.frame, entry.frame.cursor)) break;
           }
-        }
+        },
+      };
+    };
+
+    // Subscribed before the stream opens, so whatever subscribe() refuses,
+    // includeUnlisted from anyone but the owner acting alone among it, is
+    // answered as an ordinary error response rather than a 200 that closes
+    // silently. A reused resume buffer was subscribed for this same session
+    // and filter, whose standing cannot differ.
+    const feed = resumeEnabled ? await resumableFeed() : await plainFeed();
+
+    return streamSSE(c, async (stream) => {
+      let resolveDone!: () => void;
+      const done = new Promise<void>((resolve) => {
+        resolveDone = resolve;
+      });
+      stream.onAbort(() => resolveDone());
+      const unregister = ctx.changeStreams.add(() => resolveDone());
+
+      const gate = new FrameGate(maxPendingFrames, () => resolveDone());
+      /** Returns false once the gate has tripped — this connection is closing. */
+      function send(event: string, data: unknown, id?: string): boolean {
+        return gate.send(() =>
+          stream.writeSSE({ event, data: JSON.stringify(data), ...(id !== undefined && { id }) }),
+        );
+      }
+
+      // Torn down in the finally whether the connection ended by abort, by
+      // a revoked session, or by a throw. A throw is caught rather than left
+      // to hono, which would answer it by writing the raw error message to
+      // the client as an `error` frame.
+      let keepalive: NodeJS.Timeout | undefined;
+      let sessionCheck: NodeJS.Timeout | undefined;
+
+      try {
+        await feed.run(send);
 
         // Through the gate like any other write: a client not draining its
         // keepalives isn't draining anything, and counting them is what
@@ -266,7 +279,7 @@ export function changeRoutes(
       } finally {
         if (keepalive) clearInterval(keepalive);
         if (sessionCheck) clearInterval(sessionCheck);
-        unsubscribe?.();
+        feed.unsubscribe();
         unregister();
       }
     });

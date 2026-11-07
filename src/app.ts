@@ -27,8 +27,9 @@ export type { AppEnv };
 export function createApp(ctx: StackContext, config: Config, logger: Logger): Hono<AppEnv> {
   // GET /blobs and GET /head are always served, and advertised, as installs
   // and the change feed are: the stack this server builds has both methods,
-  // and this is the one place that is checked.
-  // See docs/spec/access-control.md § Serving requests.
+  // and this is the one place that is checked. Each request's ScopedStack
+  // has each exactly when this Stack does, so the routes call it with `!`.
+  // See docs/spec/wire-format.md § Blobs and § Head.
   if (!ctx.stack.listBlobs || !ctx.stack.head) {
     throw new Error('This server needs a stack with listBlobs() and head() to serve a copy out');
   }

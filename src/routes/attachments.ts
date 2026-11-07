@@ -17,9 +17,8 @@ import { serializeRecord } from '@haverstack/wire-types';
 import type { AppEnv } from '../types.js';
 import { knownParams } from '../middleware/params.js';
 import type { StackContext } from '../stack.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, unauthorized } from '../middleware/auth.js';
 import { readJson } from '../lib/json.js';
-import { wireError } from '../wireError.js';
 
 export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
@@ -68,7 +67,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
       // for missing and forbidden, so this handler owes no anti-oracle
       // logic of its own — only to leave that answer intact.
       if (!auth && e instanceof StackPermissionError) {
-        return wireError(c, 401, 'unauthorized', 'Missing or invalid bearer token');
+        return unauthorized(c);
       }
       throw e;
     }
@@ -82,7 +81,7 @@ export function attachmentRoutes(ctx: StackContext, maxAttachmentBytes: number):
     // and passes the result as ?filename. This falls back to the
     // requester's own upload, then the first-recorded record.
     const referenced = resolveReferencedAttachment(metaRecords, {
-      requesterEntityId: auth?.subjectId,
+      requesterEntityId: c.get('scope').subjectId ?? undefined,
     });
 
     const { contentType, forced } = resolveAttachmentDownloadContentType({

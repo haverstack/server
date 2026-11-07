@@ -46,8 +46,6 @@ export function recordRoutes(ctx: StackContext, queryTimeoutMs: number): Hono<Ap
   const app = new Hono<AppEnv>();
   const { queryWorker } = ctx;
 
-  /** Scope to a session if authenticated, else the anonymous view. */
-
   // POST /records/query — full query with content-field filters. Optional
   // auth, like GET /records: a superset of the same query surface, so an
   // anonymous caller gets the same public-record subset either way.

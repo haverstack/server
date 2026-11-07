@@ -23,7 +23,7 @@ export type QueryWorkerInit = {
 
 export type QueryRequest = {
   id: number;
-  /** null = anonymous (Stack.asEntity(null)), matching the request's own scope. */
+  /** The request's session, or null for anonymous; the worker rebuilds its scope with scopeForSession(). */
   session: TokenSession | null;
   query: StackQuery;
 };

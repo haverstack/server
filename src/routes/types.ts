@@ -10,8 +10,9 @@ import { StackNotFoundError } from '@haverstack/core';
 export function typeRoutes(): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
-  // Open to every requester: a client needs a schema to read the records it
-  // reaches, and ScopedStack asks nothing here. See docs/spec/wire-format.md § Types.
+  // ScopedStack serves Types to every requester, anonymous included: a
+  // client needs a schema to read the records it reaches.
+  // See docs/spec/wire-format.md § Types.
   app.get('/', knownParams(), async (c) => {
     const types = await c.get('scope').listTypes();
     return c.json(types.map(serializeType));
